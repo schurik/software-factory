@@ -52,6 +52,19 @@ def ensure_dir(path: str | Path) -> Path:
     return p
 
 
+def anchor(root: str | Path, path: str | Path) -> Path:
+    """Resolve `path` against `root` unless it is already absolute.
+
+    With a worktree per run there is no single "here" any more: the run's tree,
+    the engineer's checkout and the session runtime under `data_dir` are three
+    different directories, and a bare relative path means a different file in
+    each. Everything that crosses between them goes through this, so the
+    ambiguity is resolved once, at the point that knows which root it meant.
+    """
+    p = Path(path)
+    return p if p.is_absolute() else (Path(root) / p)
+
+
 def resolve_prompt(arg: str) -> str:
     """CLI prompt arg: a file path resolves to its contents, else inline text."""
     try:
