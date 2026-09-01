@@ -11,7 +11,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from .data_types import AgentConfig, EventRecord, GateReport, Phase
+from .data_types import AgentConfig, EventRecord, GateReport, Phase, Workspace
 from .utils import ensure_dir, new_id, now_iso
 
 SCHEMA = """
@@ -23,7 +23,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   engineer      TEXT,
   started_at    TEXT, ended_at TEXT,
   total_tokens  INTEGER DEFAULT 0, total_cost REAL DEFAULT 0,
-  archived      INTEGER DEFAULT 0   -- review triage, set by the UI; never by a run
+  archived      INTEGER DEFAULT 0,  -- review triage, set by the UI; never by a run
+  -- Where the run actually executed. A worktree is pruned when the run is
+  -- accepted, so the tree it worked in has to be recorded while it still
+  -- exists — and the branch outlives both, which makes these four the answer
+  -- to "where did this run's work go".
+  repo_root     TEXT,
+  branch        TEXT,
+  base_ref      TEXT,
+  base_commit   TEXT
 );
 CREATE TABLE IF NOT EXISTS phases (
   phase_id      TEXT PRIMARY KEY,
@@ -96,7 +104,30 @@ MIGRATIONS = [("agent_sessions", "color", "TEXT"),
               ("sessions", "adw_name", "TEXT"),
               ("agent_sessions", "context_tokens", "INTEGER"),
               ("agent_sessions", "context_window", "INTEGER"),
-              ("sessions", "archived", "INTEGER DEFAULT 0")]
+              ("sessions", "archived", "INTEGER DEFAULT 0"),
+              ("sessions", "repo_root", "TEXT"),
+              ("sessions", "branch", "TEXT"),
+              ("sessions", "base_ref", "TEXT"),
+              ("sessions", "base_commit", "TEXT")]
+
+
+def session_statuses(db_path: str | Path) -> dict[str, str]:
+    """{adw_id: status} for every session, read-only. {} when there is no db.
+
+    Opened read-only and on its own connection: the callers are maintenance
+    tools that must never create a trace db as a side effect of asking a
+    question about one, and must never block a run that is writing.
+    """
+    if not Path(db_path).exists():
+        return {}
+    conn = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
+    try:
+        return {row[0]: row[1] or "unknown"
+                for row in conn.execute("SELECT adw_id, status FROM sessions")}
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
 
 
 class Tracer:
@@ -152,6 +183,20 @@ class Tracer:
             names.append(adw_name)
             self.conn.execute("UPDATE sessions SET adw_name=? WHERE adw_id=?",
                               (" + ".join(names), adw_id))
+
+    def session_workspace(self, adw_id: str, workspace: Workspace) -> None:
+        """Record where the run executes, before any phase opens.
+
+        Written at session start rather than at the end, because a killed run is
+        exactly the one whose worktree you need to find, and it never reaches an
+        end.
+        """
+        self.conn.execute(
+            "UPDATE sessions SET repo_root=?, branch=?, base_ref=?, base_commit=?"
+            " WHERE adw_id=?",
+            (str(workspace.repo_root), workspace.branch, workspace.base_ref,
+             workspace.base_commit, adw_id),
+        )
 
     def session_request(self, adw_id: str, request: str) -> None:
         self.conn.execute("UPDATE sessions SET request=? WHERE adw_id=?",
