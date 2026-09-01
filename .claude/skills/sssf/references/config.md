@@ -19,6 +19,19 @@ observability:
   db: adws/adw_data/sssf.db
   poll_ms: 500
 
+worktree:
+  enabled: true
+  dir: .sssf-worktrees
+  branch_prefix: "sssf/"
+  base_ref: ""
+  keep_on_success: false
+  integration:
+    mode: merge                           # none | merge | pr
+    merge_flags: ["--no-ff"]
+    remote: origin
+    open_pr: false
+    pr_command: ["gh", "pr", "create", "--fill"]
+
 agents:
   - name: planner
     coding_agent: pi
@@ -49,7 +62,7 @@ agents:
 | `harness_engineering` | list[string] | Coding-agent extensions. Pi: extension names. Claude Code: reserved (MCP, hooks). |
 | `tools` | list[string] | Roster-wide tool allowlist. Every agent that omits its own `tools` inherits this. Unset = all tools usable. |
 | `protected_files` | list[string] | Paths **no** agent may modify unless it names them in its own `writes`. Default: `adws/adw_modules/`, `adws/adw_sssf_config/`, `adws/adw_*.py` — an agent must not be able to edit the machinery that decides whether its work passed. |
-| `data_dir` | path | Runtime home. Sessions land at `{data_dir}/sessions/{adw_id}/{agent_name}/`. Default `adws/adw_data`. |
+| `data_dir` | path | Runtime home. Sessions land at `{data_dir}/sessions/{adw_id}/{agent_name}/`. Default `adws/adw_data`. **Resolved against the MAIN checkout, never against a run's worktree** — see [Worktree per run](#worktree-per-run). |
 
 ### `observability`
 
@@ -57,6 +70,39 @@ agents:
 |---|---|---|
 | `db` | path | SQLite trace db. `tracer.py` writes it directly; the visualizer polls it. Default `adws/adw_data/sssf.db`. |
 | `poll_ms` | int | Visualizer live-poll cadence in ms. History uses the same queries, lazy-paged. Default `500`. |
+
+### `worktree`
+
+Every run executes in its own git worktree, on its own branch, cut from a base ref pinned once at run start. See [Worktree per run](#worktree-per-run) below for what that changes.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `enabled` | bool | Default `true`. `false` runs in the main checkout exactly as v1 did. |
+| `dir` | path | Where worktrees live, relative to the main checkout. Default `.sssf-worktrees` — gitignored by `install.py`. |
+| `branch_prefix` | string | The run's branch is `<prefix><adw_id>`. Default `sssf/`. |
+| `base_ref` | ref | What to cut from. Default `""` = whatever the main checkout has checked out when the run starts. Set it to pin every run to one branch. |
+| `keep_on_success` | bool | Default `false`: an accepted run's worktree is removed **if it is clean**, and its branch is always retained. `true` keeps every worktree. |
+
+### `worktree.integration`
+
+How a run's branch gets back to its base. Configuration rather than code, because repositories disagree.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `mode` | `none` \| `merge` \| `pr` | Default `merge`. `none` leaves the branch alone. `pr` pushes it and leaves the merge to a human. |
+| `merge_flags` | list[string] | Flags for the merge. Default `["--no-ff"]`, so a run stays legible as one merge. |
+| `remote` | string | `pr` only: where the branch is pushed. Default `origin`. |
+| `open_pr` | bool | `pr` only: also run `pr_command` after pushing. Default `false` — pushing is safe everywhere, opening a PR needs an authenticated CLI. |
+| `pr_command` | list[string] | The forge CLI, run with `--base <base_ref> --head <branch>` appended. Default `["gh", "pr", "create", "--fill"]`. |
+
+`merge` picks its own path and refuses rather than guessing:
+
+- **Nobody has the base branch checked out** → it is fast-forwarded as a ref update (`git fetch . <branch>:<base>`), touching no working tree.
+- **The main checkout is on the base branch and clean** → a real merge runs there, and aborts cleanly on conflict.
+- **The main checkout is on the base branch and dirty** → refused. The engineer has work in progress; the run's work is safe on its branch, so waiting costs nothing.
+- **Uncommitted work in the run's own worktree** → refused, in every mode. Merging would ship less than the run produced.
+
+A refusal fails the *integration*, not the *run*: the phase ran and reported, the commits exist, the branch is kept, and `just integrate <adw_id>` finishes the job later.
 
 ### `agents[]`
 
@@ -72,6 +118,23 @@ agents:
 | `writes` | no | What this agent may modify **in the repo**, enforced after every call. Omitted = unrestricted (still barred from `protected_files`). `[]` = no repo writes at all. A list = only those paths: a trailing `/` is a directory prefix, `*` matches within one path segment, `**` crosses segments, anything else is an exact path. Naming a `protected_files` path here is what unlocks it. **The session runtime under `data_dir` is always writable** — `writes: []` means read-only with respect to the repo, not unable to write its own report. |
 
 Output types are deliberately absent: config defines who an agent *is*; the ADW call site defines how it's *used*. One agent serves many calls — same system prompt, different user prompt + output type per call.
+
+## Worktree per run
+
+`session.ensure()` creates `<dir>/<adw_id>` on branch `<branch_prefix><adw_id>` before anything else exists, and `run.repo_root` points at it. Agents are spawned there, gates measure there, quality blocks run there, the permission snapshot fingerprints it, and commit phases commit it — the isolation follows from that one assignment rather than from every call site opting in.
+
+**Two roots, and the difference matters.** `run.repo_root` is the run's worktree. `run.main_root` is the engineer's checkout, and it owns `data_dir`: the trace db, session dirs, `context_handoff/`, prompt audit copies and raw agent output all resolve against it. That is deliberate — one db across concurrent runs, one place the visualizer reads, and a record that outlives a pruned worktree. Two consequences to know:
+
+- **`context_handoff_dir` is injected into prompts as an absolute path.** It sits outside the agent's working directory now, and a relative path would resolve inside the worktree where no other agent would look.
+- **`always_writable()` is inert under worktrees.** `data_dir` can no longer appear in the change-set `permissions.py` compares, so there is nothing left for the exemption to exempt. It stays because it is still load-bearing when the two roots are the same directory.
+
+**Lifecycle.** A joined run (a second ADW pinned to the same `--adw-id`) re-attaches to the existing worktree, and re-creates it from its branch if an earlier accepted run already pruned it — the branch is the record, the worktree is a copy of it. A failed or killed run keeps its worktree; that is where you go to see what happened. Anything holding uncommitted work is kept whatever the outcome, because a plan-only chain never commits and its plan lives nowhere else.
+
+**Reclaiming disk** is `just worktrees` / `just worktrees-prune` (`<skill>/scripts/worktrees.py`). Prune takes a worktree only when the run that owns it has ended and its tree is clean; `--force` widens that to uncommitted work, and nothing reclaims a worktree out from under a live run. Branches are always retained.
+
+**It is isolation, not a sandbox.** An agent with `bash` can `cd` anywhere. `permissions.py` remains the boundary, and it measures the tree this creates. Container sandboxing is the next phase, and it slots in behind the same seam.
+
+Worktrees are skipped — both roots become the same directory, and everything behaves as it did in v1 — when `enabled: false`, when the repository is not a git repo, or when it has no commit to branch from.
 
 ## Defaults merging
 

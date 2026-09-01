@@ -113,7 +113,19 @@ just kill <adw_id>       # stop it — children first, then the workflow
 
 `processes` rows with `ended_at IS NULL` are the live ones. If `procs` shows a pi child but the phase has produced no `tool_call` events and its `raw_output.jsonl` is empty, the agent never got started properly — check the model resolves and that nothing is blocking the subprocess, rather than waiting it out. `just kill` verifies each pid still matches the command that was recorded before signalling, because pids get recycled.
 
-A killed run marks itself `fail` and closes its process rows, so the trace never claims work is in flight that is already dead.
+A killed run marks itself `fail` and closes its process rows, so the trace never claims work is in flight that is already dead. **Its worktree survives on purpose** — `sessions.repo_root` and `sessions.branch` say where, and that is where you go to see what it had done so far.
+
+## Where the work went
+
+A run commits to `sssf/<adw_id>` in its own worktree, never to the engineer's branch. So when a chain reports success and `git log` on their branch shows nothing, nothing is wrong — the work is on the run's branch, waiting to be landed:
+
+```bash
+just integrate <adw_id>          # merge it, or push it, per worktree.integration
+just worktrees                   # every run worktree, and the state of the run that owns it
+just worktrees-prune             # reclaim the ones whose run ended cleanly
+```
+
+Integration can decline for a good reason — the engineer's checkout is mid-edit, or the run left uncommitted work in its worktree — and says which in its phase log. That is not a failed run: the commits exist and the branch is kept, so the same command finishes the job once the reason is gone. Report the decline and its reason rather than retrying it.
 
 ## Report
 

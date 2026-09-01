@@ -42,12 +42,23 @@ You run the system, observe the system, and help the user interact with it. **Yo
 - Observe by querying `adws/adw_data/sssf.db` (WAL — reads never block writers) **when observing is the task**. This is a capability, not a startup step: query it to follow a run you launched or one the engineer asked about, never to volunteer a status report nobody requested.
 - Report phase status plainly: name, owner, status, error if any.
 
+## Where a run's work lands
+
+Every run executes in its own git worktree, `<worktrees_dir>/<adw_id>`, on its own branch `sssf/<adw_id>`, cut from a base ref pinned at run start. **The engineer's working tree is never touched**, two runs can execute at once, and a failed run leaves its state somewhere you can open instead of somewhere in the way. Three things follow, and they surprise people who expect v1's behaviour:
+
+- **A chain's commits are on its branch, not on yours.** `just integrate <adw_id>` (or the `integrate` phase at the end of `adw_simple_sdlc`) is what lands them, the way `worktree.integration` in the config says to. A branch that has not landed is not a failed run.
+- **A failed or killed run keeps its worktree.** So does any worktree with uncommitted work in it. `just worktrees` lists them with the state of the run that owns each; `just worktrees-prune` reclaims the ones nothing needs.
+- **The trace does not move.** `data_dir` and the db are anchored to the main checkout, so one db holds every concurrent run and survives a pruned worktree.
+
+It is isolation, not a sandbox — an agent with `bash` can leave the worktree, and `permissions.py` is still the boundary. Details in [references/config.md](references/config.md#worktree-per-run).
+
 ## Request routing (lazy-load the cookbook, then follow it)
 
 | Request | Cookbook |
 |---|---|
 | `/sssf install`, set up the factory in this repo | [cookbooks/install.md](cookbooks/install.md) |
 | create a new ADW / workflow | [cookbooks/create_adw.md](cookbooks/create_adw.md) |
+| land a run's branch, clean up worktrees | [references/config.md](references/config.md#worktreeintegration) |
 | modify an existing ADW chain | [cookbooks/update_adw.md](cookbooks/update_adw.md) |
 | create the config / agent roster | [cookbooks/create_config.md](cookbooks/create_config.md) |
 | add or retune an agent (model, thinking, tools, prompts) | [cookbooks/update_config.md](cookbooks/update_config.md) |
