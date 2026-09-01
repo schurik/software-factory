@@ -62,12 +62,12 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
     run = session.ensure(cfg, adw_id)
-    baseline = git_helper.rev("HEAD")     # pinned before this run commits anything
+    baseline = git_helper.rev(run.repo_root, "HEAD")   # pinned before this run commits anything
 
     def commit(ph, envelope) -> None:
         """Commit what the preceding phase produced, in that agent's own words."""
         message = envelope.commit_message or f"sssf({run.adw_id}): {envelope.summary}"
-        ph.log(sha=git_helper.commit_all(message), message=message)
+        ph.log(sha=git_helper.commit_all(run.repo_root, message), message=message)
 
     def record(ph, result) -> None:
         """Log a deterministic block's verdict — the same shape every ADW uses."""
@@ -77,7 +77,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
 
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:
-        ph.log(input=prompt, baseline=git_helper.short_sha(baseline))
+        ph.log(input=prompt, baseline=git_helper.short_sha(run.repo_root, baseline))
 
     with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
                                description="Turn the request into an implementable plan")) as ph:
