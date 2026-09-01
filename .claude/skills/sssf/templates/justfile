@@ -12,6 +12,7 @@ set positional-arguments
 # swaps the whole roster for one run.
 config := env_var_or_default("SSSF_CONFIG", "adws/adw_sssf_config/sssf.config.yaml")
 db     := "adws/adw_data/sssf.db"
+skill  := ".claude/skills/sssf"
 
 # list every recipe
 default:
@@ -60,6 +61,15 @@ sdlc *ARGS:
 simple-sdlc *ARGS:
     uv run adws/adw_simple_sdlc.py --config {{config}} "$@"
 
+# ── land a run's branch ─────────────────────────────────────────────────────
+# Every run works on its own sssf/<adw_id> branch in its own worktree. Chains
+# stop at a committed branch; this is what brings it back to the base branch,
+# the way worktree.integration in the config says to.
+
+# merge or push a finished run: just integrate <adw_id>
+integrate ADW_ID *ARGS:
+    uv run adws/adw_integrate.py --config {{config}} --adw-id {{ADW_ID}} "$@"
+
 # ── watch it ────────────────────────────────────────────────────────────────
 # Reads never block a running workflow, the db is WAL. Poll as hard as you like.
 
@@ -79,6 +89,22 @@ tail ADW_ID:
 procs ADW_ID:
     @sqlite3 {{db}} "select kind, name, pid, command, started_at from processes where adw_id='{{ADW_ID}}' and ended_at is null order by id;"
 
+# ── worktrees ───────────────────────────────────────────────────────────────
+# A failed or killed run keeps its worktree on purpose — that is where you go to
+# see what happened. These are how you find them again and reclaim the disk.
+
+# every run worktree, with the state of the run that owns it
+worktrees:
+    @uv run {{skill}}/scripts/worktrees.py list
+
+# remove the worktrees of ended runs that have nothing uncommitted in them
+worktrees-prune *ARGS:
+    uv run {{skill}}/scripts/worktrees.py prune "$@"
+
+# drop one run's worktree, branch retained: just worktree-rm <adw_id>
+worktree-rm ADW_ID *ARGS:
+    uv run {{skill}}/scripts/worktrees.py remove {{ADW_ID}} "$@"
+
 # ── observability UI ────────────────────────────────────────────────────────
 
 # Needs bun. The db path is passed explicitly because the server runs from the
@@ -86,4 +112,4 @@ procs ADW_ID:
 
 # boot the trace UI, http://localhost:4601 (api on :4600)
 obs:
-    cd .claude/skills/sssf/apps/visualizer && bun install && (SSSF_DB={{justfile_directory()}}/{{db}} bun run server/index.ts &) && bunx vite
+    cd {{skill}}/apps/visualizer && bun install && (SSSF_DB={{justfile_directory()}}/{{db}} bun run server/index.ts &) && bunx vite

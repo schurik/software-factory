@@ -36,6 +36,7 @@ from .data_types import Workspace, WorktreeConfig, WorktreeInfo, WorktreeRequest
 from .utils import anchor, ensure_dir, now_iso
 
 META_SUFFIX = ".json"          # <worktrees_dir>/<adw_id>.json, beside the worktree
+ENDED = {"success", "fail"}    # session statuses that mean nothing is using the tree
 
 
 def _meta_path(root: Path, adw_id: str) -> Path:
@@ -214,3 +215,15 @@ def inventory(main_root, config: WorktreeConfig, db_path: str = "") -> list[Work
             status=statuses.get(adw_id, "unknown"),
         ))
     return found
+
+
+def reclaimable(info: WorktreeInfo, force: bool = False) -> bool:
+    """Whether cleanup may take this worktree. Conservative on purpose.
+
+    A run that has not ended is still using its tree. A tree holding
+    uncommitted work is the only copy of that work. `force` overrides only the
+    second — nothing reclaims a worktree out from under a live run.
+    """
+    if info.status not in ENDED:
+        return False
+    return force or not info.dirty
