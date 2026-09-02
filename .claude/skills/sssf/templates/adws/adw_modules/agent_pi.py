@@ -1,9 +1,13 @@
-"""Pi coding agent interface — v1's only coding agent.
+"""Pi coding agent backend.
 
 Runs `pi -p --mode json` and tails its JSONL stdout line by line, forwarding
 each event to a callback WHILE the agent works (the streaming crack, solved
 by construction). `--session-id` creates-or-continues, so running and
 continuing an agent are the same call: same session id = same context window.
+
+One of two backends behind the same five names — `NAME`, `resolve_model`,
+`reachable`, `validate_agent`, `ToolCallTracker`, `run` — which is all
+`agents.py` dispatches on. See `agent_cc.py` for the other.
 """
 
 from __future__ import annotations
@@ -11,24 +15,21 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Optional
 
-from .data_types import PiRequest, PiResult
-from .utils import now_iso, operator_env
+from .data_types import AgentConfig, AgentRequest, AgentResult, UsageBreakdown
+from .tool_calls import ToolCallLedger
+from .utils import new_id, operator_env
+
+NAME = "pi"
 
 PI_PATH = os.environ.get("PI_PATH", "pi")
 MODELS_JSON = os.environ.get("PI_MODELS_PATH",
                              str(Path.home() / ".pi" / "agent" / "models.json"))
 
-RESULT_SNIPPET_CHARS = 20_000   # tool output rides along whole; clip only guards pathological cases
-ARG_VALUE_CHARS = 20_000        # args too — the UI scrolls, it must not be handed cut-off data
-LABEL_CHARS = 80                # "bash: <command>" shown as the event name
-
-# The arg that identifies a call at a glance, in the order tools tend to use.
-PRIMARY_ARGS = ("command", "path", "file_path", "pattern", "query", "url")
+THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 
 
 def _count(value: str) -> int:
@@ -90,6 +91,57 @@ def resolve_model(pattern: str) -> tuple[str, str]:
     raise ValueError(f"model pattern {pattern!r} is ambiguous: {matches}")
 
 
+def reachable() -> None:
+    """Raise unless the pi CLI can be executed. Checked once per process."""
+    if not _pi_catalog():
+        raise RuntimeError(
+            f"the pi CLI ({PI_PATH!r}) is not reachable, or `pi --list-models` "
+            f"returned nothing — install it, put it on PATH, or set PI_PATH")
+
+
+def validate_agent(agent: AgentConfig) -> list[str]:
+    """Backend-specific config problems for one agent. Empty list = fine."""
+    problems = []
+    if agent.thinking not in THINKING_LEVELS:
+        problems.append(f"thinking {agent.thinking!r} is not one of "
+                        f"{' | '.join(THINKING_LEVELS)}")
+    for extension in agent.harness_engineering:
+        if not str(extension).endswith(".ts"):
+            problems.append(f"harness_engineering {extension!r}: pi extensions are "
+                            f"TypeScript files passed as `pi -e <file.ts>`")
+    return problems
+
+
+def new_session_id(adw_id: str, agent: AgentConfig) -> str:
+    """A fresh pi session id. Random, because pi's ids are create-or-continue:
+    a deterministic one would silently rejoin a context window from an earlier
+    run whenever the agent map went missing."""
+    return f"sssf-{adw_id}-{agent.name}-{new_id(4)}"
+
+
+def _turn_usage(usage: dict, total_tokens: int) -> UsageBreakdown:
+    """Pi's `message_end` usage object as a UsageBreakdown.
+
+    `total_tokens` is passed in rather than re-derived: the caller already
+    computes it pi's way (totalTokens, else the sum of the parts). Pi is the
+    backend that reports cost per component, so all five cost fields are real.
+    """
+    cost = usage.get("cost") or {}
+    return UsageBreakdown(
+        input_tokens=usage.get("input") or 0,
+        output_tokens=usage.get("output") or 0,
+        cache_read_tokens=usage.get("cacheRead") or 0,
+        cache_write_tokens=usage.get("cacheWrite") or 0,
+        reasoning_tokens=usage.get("reasoning") or 0,
+        total_tokens=total_tokens,
+        input_cost=cost.get("input") or 0.0,
+        output_cost=cost.get("output") or 0.0,
+        cache_read_cost=cost.get("cacheRead") or 0.0,
+        cache_write_cost=cost.get("cacheWrite") or 0.0,
+        total_cost=cost.get("total") or 0.0,
+    )
+
+
 def _context_tokens(usage: dict) -> int:
     """Tokens occupying the window after a turn.
 
@@ -124,20 +176,6 @@ def _text_of(container: dict) -> str:
                    if isinstance(part, dict) and part.get("type") == "text")
 
 
-def _clip(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[:limit].rstrip() + "…"
-
-
-def _label(tool: str, args: dict) -> str:
-    """One-line human name for a tool call: `bash: ls -la src`."""
-    value = next((args[key] for key in PRIMARY_ARGS
-                  if isinstance(args.get(key), str) and args[key].strip()), "")
-    if not value:
-        value = next((v for v in args.values() if isinstance(v, str) and v.strip()), "")
-    value = " ".join(str(value).split())
-    return f"{tool}: {_clip(value, LABEL_CHARS)}" if value else tool
-
-
 class ToolCallTracker:
     """Folds pi's tool stream into ONE normalized record per completed call.
 
@@ -146,68 +184,39 @@ class ToolCallTracker:
     result, so that is where a record is emitted — one trace event per real
     tool call, the moment it returns, instead of three shapeless ones.
 
-    The record carries the call's real span (`started_at`/`ended_at`), which the
-    tracer writes to columns so the UI can lay tool calls on a time axis without
-    parsing every payload.
+    `observe` returns a LIST because the other backend can close several calls
+    in one event; the record shape itself lives in tool_calls.py, which is what
+    keeps the two backends indistinguishable downstream.
     """
 
     def __init__(self) -> None:
-        self._open: dict[str, dict] = {}
+        self._ledger = ToolCallLedger()
 
-    def observe(self, event: dict) -> Optional[dict]:
-        """Returns the record for a finished tool call, else None."""
+    def observe(self, event: dict) -> list[dict]:
+        """Records for whatever tool calls this event finished — usually none."""
         etype = event.get("type", "")
         if etype == "message_end":
             for block in event.get("message", {}).get("content", []) or []:
                 if isinstance(block, dict) and block.get("type") == "toolCall":
-                    self._announce(block.get("id"), block.get("name"),
-                                   block.get("arguments"))
-            return None
+                    self._ledger.announce(block.get("id"), block.get("name"),
+                                          block.get("arguments"))
+            return []
         if etype == "tool_execution_start":
-            self._announce(event.get("toolCallId"), event.get("toolName"),
-                           event.get("args"))
-            return None
+            self._ledger.announce(event.get("toolCallId"), event.get("toolName"),
+                                  event.get("args"))
+            return []
         if etype != "tool_execution_end":
-            return None
-
-        call_id = str(event.get("toolCallId") or "")
-        opened = self._open.pop(call_id, {})
-        tool = str(event.get("toolName") or opened.get("tool") or "tool")
-        args = event.get("args") or opened.get("args") or {}
-        record = {
-            "tool": tool,
-            "tool_call_id": call_id,
-            "args": {key: _clip(value, ARG_VALUE_CHARS) if isinstance(value, str) else value
-                     for key, value in args.items()},
-            "ok": not event.get("isError", False),
-            "label": _label(tool, args),
-        }
-        result_text = _text_of(event.get("result") or {})
-        if result_text:
-            record["result_snippet"] = _clip(result_text, RESULT_SNIPPET_CHARS)
-        record["ended_at"] = now_iso()
-        if opened.get("clock"):
-            record["duration_ms"] = int((time.monotonic() - opened["clock"]) * 1000)
-        if opened.get("started_at"):
-            record["started_at"] = opened["started_at"]
-        return record
-
-    def _announce(self, call_id, tool, args) -> None:
-        """First sighting starts the clock; a later sighting only fills gaps."""
-        if not call_id:
-            return
-        known = self._open.get(str(call_id), {})
-        self._open[str(call_id)] = {
-            "tool": tool or known.get("tool", ""),
-            "args": args or known.get("args", {}),
-            "started_at": known.get("started_at") or now_iso(),   # wall clock, for the row
-            "clock": known.get("clock") or time.monotonic(),      # monotonic, for duration
-        }
+            return []
+        return [self._ledger.close(event.get("toolCallId"),
+                                   tool=str(event.get("toolName") or ""),
+                                   args=event.get("args"),
+                                   ok=not event.get("isError", False),
+                                   result_text=_text_of(event.get("result") or {}))]
 
 
-def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
+def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None,
         on_spawn: Optional[Callable[[int], None]] = None,
-        on_exit: Optional[Callable[[int], None]] = None) -> PiResult:
+        on_exit: Optional[Callable[[int], None]] = None) -> AgentResult:
     """Run one non-interactive pi turn.
 
     `on_spawn(pid)` and `on_exit(pid)` bracket the child process so the caller
@@ -232,8 +241,8 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
     raw_path = Path(request.raw_output_path)
     raw_path.parent.mkdir(parents=True, exist_ok=True)
 
-    result = PiResult(session_id=request.session_id,
-                      context_window=context_window(provider, model_id))
+    result = AgentResult(session_id=request.session_id,
+                         context_window=context_window(provider, model_id))
     # stdin is DEVNULL, deliberately. The prompt travels in argv, so the child
     # never needs stdin — but inheriting the parent's means pi sees a non-TTY
     # and can sit forever waiting for piped input that will never arrive or
@@ -267,7 +276,7 @@ def run(request: PiRequest, on_event: Optional[Callable[[dict], None]] = None,
                     usage = message.get("usage", {}) or {}
                     turn = _context_tokens(usage)
                     result.tokens += turn
-                    result.usage.add_turn(usage, turn)
+                    result.usage.merge(_turn_usage(usage, turn))
                     # Occupancy is read off the last VALID assistant turn, the
                     # way pi does it — an aborted or errored turn reports usage
                     # you can't trust, so it must not overwrite a good reading.

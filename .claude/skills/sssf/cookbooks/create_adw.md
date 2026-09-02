@@ -37,7 +37,7 @@ Answer four questions, in order:
 - `kind="code"` → `owner` is a short actor label (`"git"`, `"db"`); all code phases share the code lane.
 - Phase `name` must be unique within the run (`plan`, `build`, `test_1`, `fix_1`, …) — the UI keys blocks on it.
 - **`description` is required and must earn its place.** The name identifies the phase; the description explains it — what this phase does and why, in one sentence. It rides the `phase_start` event and is the only line of intent the trace, the console, and the phase block ever show. `PhaseParams` raises at construction on a blank description *or* one that merely restates the name (`commit_plan: "Commit the plan"`), so the rule fails before the phase opens rather than leaving an unreadable run in the db. Write `"Put the spec on record before any code exists to blur it"` instead.
-- `retries=N` on an **agent** phase = extra gate-correction rounds re-sent into the same session (pi's `--session-id` creates-or-continues, so context stays intact). Code-phase re-execution is not implemented in v1.
+- `retries=N` on an **agent** phase = extra gate-correction rounds re-sent into the same session, with its context intact on either backend. Code-phase re-execution is not implemented in v1.
 
 ## Step 3 — Generate or write it
 

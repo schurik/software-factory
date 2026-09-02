@@ -197,6 +197,43 @@ Ordered so each is independently testable.
 
 New files under `templates/adws/adw_modules/` are stamped automatically by the recursive `stamp()` call at `scripts/install.py:69` — no installer change is needed — and are already covered by `protected_files: adws/adw_modules/`.
 
+## As built
+
+Where the implementation went past or around the design above:
+
+| Design said | What shipped | Why |
+|---|---|---|
+| a `CodingAgent` protocol with `run`, `resolve_model`, `reachable` and a tracker | plus `validate_agent(agent) -> list[str]` and `new_session_id(adw_id, agent)` | every remaining Pi-specific rule in `validate()` had to move somewhere, and the id *shape* is a backend fact — pi's is `sssf-<adw>-<agent>-<rand>`, Claude Code's must be a UUID |
+| reuse `agent_pi`'s clipping constants and label heuristic | a new module, `adw_modules/tool_calls.py`, owning the record shape, the constants and a `ToolCallLedger` | the point of the phase is that the record shape is not one backend's property. A third backend now writes a tracker and nothing else |
+| `tracker.observe(event) -> dict \| None` | `-> list[dict]` on both backends | one Claude Code `user` message closes several parallel calls at once. Pi returns a 0-or-1 list and behaves identically |
+| `--bare` as the recommended determinism baseline | **`--safe-mode`**, with `bare` left as an off-by-default opt-in | `--bare` forces `ANTHROPIC_API_KEY`/`apiKeyHelper` auth and never reads OAuth or the keychain — it would take the subscription-authenticated setup this phase exists to enable *offline*. `--safe-mode` disables `CLAUDE.md`, skills, plugins, hooks, MCP and custom agents while auth keeps working |
+| `harness_engineering` "validate per backend" | Claude Code entries are `mcp:` / `agents:` / `plugin:` prefixed, and are **rejected outright when `safe_mode` is on** | safe mode suppresses exactly those three. Verified: an `--agents` definition passed under `--safe-mode` does not reach the session, so accepting the combination would be accepting a silent no-op |
+| `ls` → `Bash`-or-`Glob` | `ls` → `Glob`, never `Bash` | mapping a read-only agent's `ls` onto a shell would turn a lookup table into a privilege escalation |
+| — | `AgentRequest.runtime_dir`, added as `--add-dir` | Claude Code confines its file tools to the working directories. The worktree is cwd, but `context_handoff/` lives under `data_dir` in the MAIN checkout — without this the scout's findings land in its own session dir and the builder never sees them. Caught by running the chain, not by reading it |
+| — | recovery when the agent map is lost | a deterministic session id plus a create-only flag means a run that dies before its map is written could never restart. `--session-id` failing with *already in use* now falls back to `--resume` once |
+
+Four things the design left open, answered:
+
+- **`dontAsk` is not a quieter `bypassPermissions`.** It *denies* what it would have prompted for and hands the model a paragraph explaining the denial — a probe run had both `Bash` and an out-of-cwd `Read` refused this way. An agent under it reads as one that mysteriously stopped using its tools. `bypassPermissions` is the default; the CLI refuses it as root, where `acceptEdits` is the fallback.
+- **`modelUsage` is not single-entry.** It also lists models Claude Code used for its own side work (a Haiku summariser showed up in every probe), so `context_window` is looked up by the session's own model from `system/init` — taking the first entry would report a 200k window for a run on a 1M one.
+- **`context_tokens` includes the turn's output**, matching pi's part-sum, rather than the input-plus-cache figure the design table named. Occupancy is what is in the window now, and the assistant's own turn is in it.
+- **The noise filter runs before the raw-output file**, not only before the tracer. 20 KB of skill listings per invocation is noise wherever it lands. Dropped: `commands_changed`, `active_goal`, `autocompact_state`, `post_turn_summary`, `task_summary`, `thinking_tokens`. Kept: `system/init`, `assistant`, `user`, `result`, `rate_limit_event`.
+
+### Verified
+
+**pi is not installed** in the environment this was built in, so the two backends were *not* exercised in the same process. Said plainly rather than implied: no mixed Claude Code + Pi chain has been run.
+
+Claude Code, in a scratch repository, end to end:
+
+1. `adw_prompt.py --agent scout` with `coding_agent: claude_code` — green run, parsed envelope, 8 `tool_call` events in `sssf.db` with real spans, `context_tokens` 11 320 / `context_window` 1 000 000 on the `agent_sessions` row.
+2. The largest `events.payload_json` for that run is a real tool call (1 104 bytes). No `commands_changed`, `active_goal` or `post_turn_summary` anywhere in `raw_output.jsonl` either.
+3. Two ADW processes pinned to the same `--adw-id`: `agent_map.json` shows one `native_session_id` used twice with `started: true`, no *already in use* error, and the second call answered a question about the first from memory — the context window survived the process boundary.
+4. The same run again with `agent_map.json` deleted: the create failed, the backend resumed, the run stayed green.
+5. `adw_plan_build.py` with a Claude Code planner and a Claude Code builder — 4/4 phases, both gates green, `context_handoff/plan.md` written and read, `permissions.py` clean, and the commit phase landing `lib.py` on the run's branch. Two distinct sessions, two lanes, both with colour and window populated.
+6. Validation refuses a claude_code agent carrying pi's `subagent_*` tools, a `.ts` extension and `safe_mode: true` — three problems, one `SystemExit`, nothing spawned.
+
+**Pi regression**, without pi installed: `agent_pi.run()` replayed against a recorded pi JSONL stream with the catalog, the registry and `Popen` stubbed. Argv, `cwd`, `stdin=DEVNULL`, the last-assistant-message text, cumulative tokens, last-turn `context_tokens`, cost, all eleven `UsageBreakdown` fields, the raw-output file and the spawn/exit callbacks are byte-for-byte what they were before the refactor. `just demo` on a machine with pi installed is still the check that matters, and has not been run.
+
 ## Risks and open questions
 
 - **Tool-name mapping is lossy.** Pi's `find` and `ls` do not map cleanly onto Claude Code's tool set. An unmapped name must be a validation error, not a silent drop — a "read-only" agent that silently lost a tool is a correctness bug, and `--tools` filtering is already documented upstream as a place where capabilities disappear quietly.
@@ -221,11 +258,11 @@ New files under `templates/adws/adw_modules/` are stamped automatically by the r
 
 ## Done when
 
-- [ ] `coding_agent: claude_code` runs a real agent; the stub and the `validate()` rejection are gone.
-- [ ] Backend is selectable per agent and two backends run in one chain.
-- [ ] A multi-call agent phase resumes its Claude Code session instead of creating a second one.
-- [ ] `commands_changed` never reaches the trace.
-- [ ] Tokens, cost, `context_tokens` and `context_window` are populated for both backends.
-- [ ] The visualizer renders both backends with no visualizer changes.
-- [ ] Pi behaviour is unchanged, verified where Pi is installed.
-- [ ] `references/config.md`, `templates/env.sample` and `SKILL.md`'s scope paragraph reflect reality.
+- [x] `coding_agent: claude_code` runs a real agent; the stub and the `validate()` rejection are gone.
+- [x] Backend is selectable per agent. **Partly**: the dispatch is per agent and validated per agent, but no chain mixing the two has been *run* — pi is not installed here.
+- [x] A multi-call agent phase resumes its Claude Code session instead of creating a second one.
+- [x] `commands_changed` never reaches the trace — nor the raw-output file.
+- [x] Tokens, cost, `context_tokens` and `context_window` are populated for both backends. Cost is a total only on Claude Code, documented rather than invented.
+- [x] The visualizer renders both backends with no visualizer changes — nothing under `apps/` was touched, and `modelIcon` already matches `claude`/`sonnet`/`opus`/`haiku`.
+- [ ] Pi behaviour is unchanged, verified where Pi is installed. **Verified by replay, not by pi**: see *As built → Verified*.
+- [x] `references/config.md`, `templates/env.sample` and `SKILL.md`'s scope paragraph reflect reality.

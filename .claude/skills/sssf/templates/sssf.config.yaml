@@ -1,14 +1,40 @@
 # sssf.config.yaml — the factory's agent roster. One agent, one prompt, one purpose.
-# v1 runs the Pi coding agent only; coding_agent: claude_code arrives in v2.
+#
+# Two coding-agent backends, selectable PER AGENT, and a chain may mix them:
+#   coding_agent: pi           `pi -p --mode json`   — model is provider/id, needs that
+#                              provider's API key in .env
+#   coding_agent: claude_code  `claude -p`           — model is an alias (opus, sonnet,
+#                              haiku) or a full id, and the CLI brings its own auth, so
+#                              a Claude subscription needs no key at all
+#
+# The keys below that are NOT shared between the two are called out where they appear:
+# `model`, `thinking`, `tools` and `harness_engineering` each mean something
+# backend-specific, and validation applies the right rule per agent rather than one
+# rule to both.
 defaults:
   coding_agent: pi
-  model: google/gemini-3.6-flash   # provider/id — a bare pattern is ambiguous across providers
+  model: google/gemini-3.6-flash   # pi: provider/id — a bare pattern is ambiguous across
+                                   # providers. claude_code: an alias or full model id, and
+                                   # a provider/id pattern is REJECTED at validation, so a
+                                   # claude_code agent must override this.
   thinking: medium                 # off | minimal | low | medium | high | xhigh | max
-  harness_engineering: []          # pi extensions loaded into the harness (-e)
+                                   # claude_code maps this to --effort, where `off` and
+                                   # `minimal` have no equivalent and both collapse to `low`
+                                   # (warned once per run, visible in the trace).
+  harness_engineering: []          # pi: extension file paths, loaded with -e
+                                   # claude_code: `mcp:<file.json>`, `agents:<json-or-file>`
+                                   # or `plugin:<dir-or-zip>`. NOT interchangeable — a pi
+                                   # .ts extension on a claude_code agent fails validation.
   # Roster-wide allowlist; any agent may override with its own list.
   # NOTE: --tools filters extension and custom tools too, not just builtins. An agent
   # whose harness_engineering extension registers a tool MUST name that tool in its own
   # tools list — otherwise the extension loads and its tool is silently filtered out.
+  #
+  # pi's names are the vocabulary; the Claude Code backend maps them (read->Read,
+  # find->Glob, ls->Glob — Claude Code has no `ls`, and mapping it to Bash would hand a
+  # read-only agent a shell). A claude_code agent may name Claude Code tools directly
+  # instead. A name that maps to NEITHER is a validation error, never a silent drop: an
+  # agent that quietly lost a capability looks like a model that gave up.
   tools:
     - read                         # read file contents
     - bash                         # execute bash commands
@@ -31,6 +57,36 @@ defaults:
     - adws/adw_sssf_config/
     - adws/adw_*.py
   data_dir: adws/adw_data          # runtime home: {data_dir}/sessions/{adw_id}/{agent_name}/
+
+  # Claude Code only; ignored by pi agents. Any agent may override the whole block.
+  #
+  # A default `claude -p` discovers whatever the operator happens to have — CLAUDE.md,
+  # skills, plugins, hooks, MCP servers — so the same roster behaves differently on two
+  # machines. That is the failure this factory exists to remove, so it is pinned off here.
+  # It is CONFIG, not code: a repository that genuinely wants its own CLAUDE.md loaded
+  # sets safe_mode: false, and that is its call.
+  claude_code:
+    safe_mode: true                # --safe-mode: no CLAUDE.md, skills, plugins, hooks, MCP
+                                   # servers or custom agents. Auth still works, so a
+                                   # subscription-authenticated roster keeps running.
+                                   # Turn it OFF for an agent that uses harness_engineering
+                                   # — safe mode suppresses exactly those things.
+    bare: false                    # --bare is stricter still, but forces ANTHROPIC_API_KEY
+                                   # auth and never reads OAuth or the keychain — turning it
+                                   # on takes a subscription-only setup offline.
+    setting_sources: []            # user | project | local — empty ignores all settings files
+    strict_mcp_config: true        # only MCP servers this config passes explicitly
+    # A non-interactive run has to answer its own permission prompts. That is only
+    # acceptable because two other things are true: adw_modules/permissions.py
+    # fingerprints the tree before the call and rolls back every write outside the
+    # agent's `writes:` allowlist afterwards, and the run happens in its own worktree.
+    # The factory is not careless here — it verifies after the fact, like everything else.
+    # The CLI REFUSES bypassPermissions when running as root; use acceptEdits there, and
+    # know that acceptEdits silently denies whatever it would otherwise have prompted for.
+    permission_mode: bypassPermissions
+    add_dirs: []                   # extra --add-dir roots. The run's worktree and the
+                                   # session runtime are added automatically.
+    max_budget_usd: 0              # per-call ceiling; 0 = none
 
 observability:
   db: adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
@@ -62,6 +118,17 @@ worktree:
     open_pr: false                 # mode: pr — also run pr_command after pushing
     pr_command: ["gh", "pr", "create", "--fill"]
 
+# The starter roster runs entirely on pi. To move ONE agent to Claude Code, give it a
+# backend and a model of the right shape — the rest of its entry is unchanged, and it
+# can hand its envelope to a pi agent in the same chain:
+#
+#   - name: reviewer
+#     coding_agent: claude_code
+#     model: sonnet                  # alias or full id — NEVER provider/id
+#     thinking: high                 # -> --effort high
+#     claude_code:                   # optional; overrides the defaults block above
+#       permission_mode: bypassPermissions
+#
 agents:
   - name: planner
     model: fireworks/accounts/fireworks/models/kimi-k3

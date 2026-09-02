@@ -33,7 +33,13 @@ Location comes from `observability.db` in `sssf.config.yaml`, default `adws/adw_
 
 **Context is occupancy, not spend.** `events.tokens` and `sessions.total_tokens` bill every turn, so they only grow — an agent that burned 100k tokens may be sitting in a 15k window. `context_tokens` is how full the window actually was when the agent stopped, which is what the visualizer's per-lane Context bar measures against `context_window`.
 
-It is computed the way pi computes it for its own footer and its auto-compaction trigger (`calculateContextTokens` in the coding agent's `core/compaction/compaction.ts`): take the last *valid* assistant turn — skipping `aborted` and `error` turns — and read `usage.totalTokens`, falling back to `input + output + cacheRead + cacheWrite`. Cache reads count; cached prompt is still prompt. `context_window` is the same `contextWindow` pi reads from `~/.pi/agent/models.json`, so `context_tokens / context_window` is the number pi would show. Both are NULL on rows written before the columns existed, and the lane draws no bar rather than a misleading empty one.
+On **pi** it is computed the way pi computes it for its own footer and its auto-compaction trigger (`calculateContextTokens` in the coding agent's `core/compaction/compaction.ts`): take the last *valid* assistant turn — skipping `aborted` and `error` turns — and read `usage.totalTokens`, falling back to `input + output + cacheRead + cacheWrite`. Cache reads count; cached prompt is still prompt. `context_window` is the same `contextWindow` pi reads from `~/.pi/agent/models.json`, so `context_tokens / context_window` is the number pi would show.
+
+On **Claude Code** it is the same part-sum in that CLI's vocabulary — `input_tokens + output_tokens + cache_read_input_tokens + cache_creation_input_tokens` on the last assistant turn — and `context_window` comes from the terminal `result` event's `modelUsage`, looked up by the model the session actually ran on. That lookup matters: `modelUsage` also lists models Claude Code used for its own side work, and taking the first entry would report a summariser's 200k window for a run on a 1M one.
+
+Both are NULL on rows written before the columns existed, and the lane draws no bar rather than a misleading empty one.
+
+**Cost is not symmetric between backends.** Pi reports a per-component breakdown; Claude Code reports `total_cost_usd` and nothing else. `usage.total_cost` reconciles on both, while `input_cost`, `output_cost`, `cache_read_cost` and `cache_write_cost` stay at zero for a Claude Code agent — left empty deliberately, rather than invented from a split the CLI never published.
 
 Two caveats worth knowing. Pi adds an *estimate* for any messages trailing the last assistant usage; in a batch (`-p`) run the session ends on that message, so the two agree. And if auto-compaction fires as the very last act of a run, the recorded number is the pre-compaction size — pi itself reports `null` in that window rather than guessing.
 
@@ -45,7 +51,11 @@ The gate event payload carries `attempt` too, so the `gate_results` table and th
 
 **Where a run ran is written at the START.** The four workspace columns are set the moment the session opens, not when it ends — a killed run is exactly the one whose worktree you need to find, and it never reaches an end. They also outlive what they describe: an accepted run's worktree is removed while its branch is kept, so `branch` stays the answer to "where did this run's work go" long after `repo_root` is gone.
 
-**Streaming is solved by construction.** `agent_pi.py` tails pi's JSONL stdout line by line and the tracer inserts each event into `sssf.db` **while the agent is still working** — never batched at phase end (verified in the first smoke run: tool calls visible mid-run). Everything downstream is a poll → render.
+**Streaming is solved by construction.** Both backends tail their CLI's JSONL stdout line by line and the tracer inserts each event into `sssf.db` **while the agent is still working** — never batched at phase end (verified in the first smoke run of each: tool calls visible mid-run). Everything downstream is a poll → render.
+
+**One tool-call shape, whichever backend ran it.** `adw_modules/tool_calls.py` owns the record — `tool`, `tool_call_id`, `args`, `ok`, `label`, `result_snippet`, and the call's real span — and each backend has a tracker that folds its own event vocabulary into it. Pi announces a `toolCall` block and closes with `tool_execution_end`; Claude Code announces a `tool_use` block in an `assistant` message and closes with `tool_result` blocks in the following `user` message, several at once when calls ran in parallel. Neither the trace schema nor the visualizer knows the difference.
+
+**Claude Code noise is dropped before it is written anywhere** — not just before the tracer, but before the raw-output file too. `system/commands_changed` is the reason: ~20 KB of skill and slash-command listings on every invocation, which would dwarf the actual tool calls in `events.payload_json`. `active_goal`, `autocompact_state`, `post_turn_summary`, `task_summary` and `thinking_tokens` go with it. `system/init` (session id, model, cwd, tools), `assistant`, `user`, `result` and `rate_limit_event` are all kept — the last one because a stalled run is exactly when you want to know a rate limit was hit.
 
 ## Tables
 
@@ -127,7 +137,7 @@ agent_sessions (                   -- the queryable mirror of agent_map.json
   coding_agent  TEXT, model TEXT, color TEXT,   -- color: the config's lane swatch
   session_id    TEXT,
   context_tokens INTEGER,           -- window occupancy after the agent's last turn
-  context_window INTEGER,           -- the model's ceiling, from the pi registry
+  context_window INTEGER,           -- the model's ceiling, per backend
   created_at    TEXT, last_used_at TEXT,
   PRIMARY KEY (adw_id, agent)
 );

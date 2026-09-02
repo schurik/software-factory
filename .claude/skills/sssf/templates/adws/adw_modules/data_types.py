@@ -302,6 +302,42 @@ class PromptEngineering(BaseModel):
     user: str                       # path to user.md
 
 
+class ClaudeCodeConfig(BaseModel):
+    """Determinism and permission settings for `coding_agent: claude_code`.
+
+    A default `claude -p` discovers whatever the operator has lying around —
+    CLAUDE.md, skills, plugins, hooks, MCP servers — which makes a run depend
+    on whose machine it executed on. That is the exact failure the factory
+    exists to remove, so the defaults below pin it off. They are configuration
+    rather than code because some repositories genuinely do want their own
+    CLAUDE.md loaded, and that is their decision to make.
+    """
+
+    # --safe-mode: no CLAUDE.md, skills, plugins, hooks, MCP servers, custom
+    # agents or commands. Auth, model selection, built-in tools and permissions
+    # keep working, so a Claude subscription still authenticates.
+    safe_mode: bool = True
+    # --bare is stricter still (it also skips LSP and background prefetches),
+    # but it forces ANTHROPIC_API_KEY / apiKeyHelper auth and never reads OAuth
+    # or the keychain — so turning it on takes a subscription-authenticated
+    # roster offline. Off by default for that reason; safe_mode covers the
+    # determinism half without the auth cost.
+    bare: bool = False
+    setting_sources: list[str] = Field(default_factory=list)   # user | project | local
+    strict_mcp_config: bool = True                             # only MCP servers we pass
+    # A non-interactive run has to answer its own permission prompts. This is
+    # only acceptable because two other things are true: permissions.py
+    # fingerprints the tree before the call and rolls back every write outside
+    # the agent's `writes:` allowlist afterwards, and the run happens in its own
+    # worktree. The factory is not careless here; it verifies after the fact.
+    # `bypassPermissions` is refused by the CLI when running as root — use
+    # `acceptEdits` there, and know that it silently denies whatever it would
+    # otherwise have prompted for.
+    permission_mode: str = "bypassPermissions"
+    add_dirs: list[str] = Field(default_factory=list)          # --add-dir, beyond cwd
+    max_budget_usd: float = 0.0                                # 0 = no ceiling
+
+
 class AgentConfig(BaseModel):
     name: str
     coding_agent: Literal["pi", "claude_code"] = "pi"
@@ -321,6 +357,8 @@ class AgentConfig(BaseModel):
     #   [...] -> only these. A trailing "/" means a directory prefix; a "*"
     #            makes it a glob; anything else is an exact path.
     writes: Optional[list[str]] = None
+    # Backend-specific knobs. Inert for `coding_agent: pi`.
+    claude_code: ClaudeCodeConfig = Field(default_factory=ClaudeCodeConfig)
 
 
 class ConfigDefaults(BaseModel):
@@ -330,6 +368,7 @@ class ConfigDefaults(BaseModel):
     color: str = ""
     harness_engineering: list[str] = Field(default_factory=list)
     tools: Optional[list[str]] = None    # roster-wide allowlist; None = all tools usable
+    claude_code: ClaudeCodeConfig = Field(default_factory=ClaudeCodeConfig)
     # Off-limits to every agent that has not named them in its own `writes`.
     # The factory's own code is the default: an agent must not be able to edit
     # the machinery that decides whether its work passed.
@@ -500,21 +539,58 @@ class EventRecord(BaseModel):
     ended_at: Optional[str] = None
 
 
-# ── Pi coding agent interface ────────────────────────────────────────────────
+# ── Coding agent interface (one shape, every backend) ────────────────────────
 
-class PiRequest(BaseModel):
-    """Everything one non-interactive pi run needs."""
+class AgentRequest(BaseModel):
+    """Everything one non-interactive coding-agent turn needs, on any backend.
+
+    The four-param rule already forced a request object, so adding a second
+    backend is a couple of fields rather than a second signature. Fields a
+    backend does not use are inert, never an error: pi ignores `resume`, and
+    Claude Code ignores `extensions` (it validates `harness_engineering` its
+    own way — see agent_cc).
+    """
 
     prompt: str
     system_prompt: str
-    model: str                      # registry pattern, resolved to provider + id
+    model: str                      # pi: a registry pattern. claude_code: an alias or model id
     thinking: str = "medium"
-    session_id: str                 # pi --session-id: creates or continues
-    session_dir: str
+    session_id: str                 # the FACTORY's id for this agent's context window
+    session_dir: str                # the backend's own session store, if it keeps one
     raw_output_path: str            # JSONL stream lands here
+    # The run's session runtime — data_dir/sessions/<adw_id> — which lives in
+    # the MAIN checkout, OUTSIDE the worktree the agent is spawned in. It holds
+    # context_handoff/, the prompt copies and this agent's envelope, so every
+    # agent must be able to write it whatever its `writes:` says. A backend that
+    # confines file tools to the working directory has to be told about it.
+    runtime_dir: str = ""
     tools: Optional[list[str]] = None
     extensions: list[str] = Field(default_factory=list)
     cwd: str = "."                  # set from run.repo_root — the codebase root agents work in
+    # Create-vs-resume. pi's --session-id is create-or-continue, so pi needs
+    # neither field; Claude Code's is create-ONLY and errors on a second use,
+    # so it needs both — the UUID it knows the session by, and whether that
+    # session already exists.
+    native_session_id: str = ""     # "" = the backend uses session_id as-is
+    resume: bool = False
+    claude_code: ClaudeCodeConfig = Field(default_factory=ClaudeCodeConfig)
+
+
+PiRequest = AgentRequest            # transitional alias; prefer AgentRequest
+
+
+class AgentSession(BaseModel):
+    """One agent's context window within a run, as the agent map records it.
+
+    `session_id` is the factory's name for it and never changes; the two extra
+    fields exist because Claude Code's `--session-id` is create-only. The first
+    call creates, every later one resumes, and `started` is the flag that says
+    which — so it has to survive the process, not just the phase.
+    """
+
+    session_id: str
+    native_session_id: str = ""     # what the backend calls it; pi echoes session_id back
+    started: bool = False           # the session EXISTS — resume it, do not create it
 
 
 class UsageBreakdown(BaseModel):
@@ -540,24 +616,12 @@ class UsageBreakdown(BaseModel):
     cache_write_cost: float = 0.0
     total_cost: float = 0.0
 
-    def add_turn(self, usage: dict, total_tokens: int) -> None:
-        """Fold in one pi `message_end` usage object.
-
-        `total_tokens` is passed in rather than re-derived: the caller already
-        computes it pi's way (totalTokens, else the sum of the parts).
-        """
-        cost = usage.get("cost") or {}
-        self.input_tokens += usage.get("input") or 0
-        self.output_tokens += usage.get("output") or 0
-        self.cache_read_tokens += usage.get("cacheRead") or 0
-        self.cache_write_tokens += usage.get("cacheWrite") or 0
-        self.reasoning_tokens += usage.get("reasoning") or 0
-        self.total_tokens += total_tokens
-        self.input_cost += cost.get("input") or 0.0
-        self.output_cost += cost.get("output") or 0.0
-        self.cache_read_cost += cost.get("cacheRead") or 0.0
-        self.cache_write_cost += cost.get("cacheWrite") or 0.0
-        self.total_cost += cost.get("total") or 0.0
+    # No `add_turn` here on purpose. Each backend reports usage in its own
+    # vocabulary — pi says `cacheRead`, Claude Code says
+    # `cache_read_input_tokens`, and only pi breaks the cost down per component
+    # — so each backend owns an adapter that BUILDS one of these and merges it
+    # (`agent_pi._turn_usage`, `agent_cc._result_usage`). One function taught
+    # two vocabularies is how a silently-zero column happens.
 
     def merge(self, other: "UsageBreakdown") -> None:
         """Add another call's usage — a phase that retries spends more than once."""
@@ -565,7 +629,14 @@ class UsageBreakdown(BaseModel):
             setattr(self, field, getattr(self, field) + getattr(other, field))
 
 
-class PiResult(BaseModel):
+class AgentResult(BaseModel):
+    """What one coding-agent turn produced. Identical across backends.
+
+    `session_id` is what the backend says the session was — pi echoes back the
+    id it was handed, Claude Code reports the one it created or resumed, and
+    `agents.execute` writes it into the agent map either way.
+    """
+
     text: str = ""
     returncode: int = 0
     session_id: str = ""
@@ -577,3 +648,6 @@ class PiResult(BaseModel):
     # visualizer's context bar measures against `context_window`.
     context_tokens: int = 0
     context_window: int = 0         # 0 when the registry declares no ceiling
+
+
+PiResult = AgentResult              # transitional alias; prefer AgentResult
