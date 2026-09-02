@@ -18,7 +18,7 @@ Writes `adws/adw_sssf_config/sssf.config.yaml` — creating the directory if nee
 
 ```yaml
 defaults:
-  coding_agent: pi                 # v1: pi only (claude_code is specced, stubbed until v2)
+  coding_agent: pi                 # pi | claude_code — per agent, and one chain may mix them
   model: google/gemini-3.6-flash   # ALWAYS provider/model-id — a bare id is ambiguous
   thinking: medium                 # off | minimal | low | medium | high | xhigh | max
   harness_engineering: []          # pi extension names

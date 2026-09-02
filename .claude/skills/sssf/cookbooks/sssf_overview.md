@@ -23,7 +23,8 @@ adws/
 │   ├── data_types.py            AgentCall, PhaseParams, Phase, Envelope + one output type per agent call
 │   ├── agents.py                load_config, validate, resolve entry → interface + model + thinking
 │   ├── runner.py                the Run object: run.phase(PhaseParams) → ph.call(AgentCall)
-│   ├── agent_pi.py              Pi interface (v1)   ·   agent_cc.py  Claude Code (v2, stubbed)
+│   ├── agent_pi.py              Pi backend  ·  agent_cc.py  Claude Code backend
+│   ├── tool_calls.py            the normalized tool-call record both backends emit
 │   ├── gates.py                 gate(envelope, run) -> GateReport — one check per item verified
 │   ├── changes.py               git diff vs a resolved base → ChangeSet → envelope for the documenter
 │   ├── prompts.py, session.py, tracer.py, console.py, git_helper.py, utils.py
@@ -37,7 +38,7 @@ adws/
     └── sssf.db                  gitignored SQLite trace db the visualizer polls
 ```
 
-**v1 runs Pi only.** `coding_agent: pi`, default model `gemini-3.6-flash`, thinking `medium`. `claude_code` is specced in the config and stubbed in the interface — it lands in v2.
+**Two backends, chosen per agent.** `coding_agent: pi` runs `pi -p --mode json` (model is `provider/model-id`, needs that provider's key); `coding_agent: claude_code` runs `claude -p` (model is an alias or a full id, and the CLI brings its own auth, so a subscription needs no key). One chain may mix them, and everything downstream — gates, permissions, the trace, the visualizer — cannot tell which ran a phase. Starter default: `pi`, `gemini-3.6-flash`, thinking `medium`.
 
 ## The phase model
 

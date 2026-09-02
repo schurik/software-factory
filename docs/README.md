@@ -27,7 +27,7 @@ The decision taken was therefore **extend, not rewrite**, and to treat this as a
 
 Upstream's README says it plainly: *"no sandbox, no branch per run, no merge step, no cloud, and no human-in-the-loop approval phase."* Concretely:
 
-1. **`coding_agent: claude_code` is a stub.** The config schema accepts it, but `adw_modules/agent_cc.py` raises `NotImplementedError` and `agents.py:61` rejects any backend but Pi at validation time.
+1. ~~**`coding_agent: claude_code` is a stub.** The config schema accepts it, but `adw_modules/agent_cc.py` raises `NotImplementedError` and `agents.py:61` rejects any backend but Pi at validation time.~~ **Fixed in Phase 1:** both backends are real and selectable per agent, behind one protocol and one normalised tool-call record.
 2. **The trace is local and anonymous.** It lives in a gitignored SQLite file inside each repo. There is no cross-repo view, and no column anywhere records which project, repository, branch or commit a run belonged to.
 3. ~~**Runs execute in the dirty working tree, on the current branch.** Two concurrent runs collide. A failed run leaves its mess where you were working.~~ **Fixed in Phase 2:** a git worktree and branch per run, plus a configurable integration phase that lands it.
 4. **Past runs are never read back.** The trace is a write-only archive.
@@ -48,7 +48,7 @@ These are settled; the phase documents assume them rather than re-argue them.
 
 | Phase | Document | Unlocks | Status |
 |---|---|---|---|
-| 1 | [Dual backend](phase-1-dual-backend.md) | Run agents on Claude Code or Pi, chosen per agent, in the same run | not started |
+| 1 | [Dual backend](phase-1-dual-backend.md) | Run agents on Claude Code or Pi, chosen per agent, in the same run | **built** — see its *As built* section |
 | 2 | [Worktree per run](phase-2-worktree-per-run.md) | Isolated, concurrent, non-destructive runs; the prerequisite for sandboxing | **built** — see its *As built* section |
 | 3 | [Convex trace store](phase-3-convex-trace-store.md) | One queryable place for every run from every repo | not started |
 | 4 | [Learning loop](phase-4-learning-loop.md) | Past runs improve future runs | not started |
@@ -65,7 +65,7 @@ Phase 2 (worktree) ─────┘
 - **Phase 3 does not strictly require Phase 1**, but is meaningfully easier after it: once tool-call events are normalised across backends, the Convex schema does not need a per-backend shape.
 - **Phase 4 hard-depends on Phase 3.** There is nothing to learn from until the central store exists.
 
-Recommended order: **2 → 1 → 3 → 4**. Phase 2 first, because running in a dirty working tree is the thing most likely to cost you real work while you build everything else. Phase 2 is done; Phase 1 is next.
+Recommended order: **2 → 1 → 3 → 4**. Phase 2 first, because running in a dirty working tree is the thing most likely to cost you real work while you build everything else. Phases 2 and 1 are done; Phase 3 is next, and it inherits a tool-call event shape that is already normalised across backends — so its schema needs no per-backend variant.
 
 ## Deliberate non-goals for now
 

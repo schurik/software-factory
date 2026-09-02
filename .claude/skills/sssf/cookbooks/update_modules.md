@@ -10,11 +10,12 @@ Extend `adws/adw_modules/` with new low-level logic.
 
 | Module | Owns |
 |---|---|
-| `data_types.py` | Every Pydantic model: `AgentCall`, `PhaseParams`, `Phase`, `EnvelopeBase` + one output type per agent call, the config models (`AgentConfig`, `SSSFConfig`), `EventRecord`, and `PiRequest`/`PiResult` |
+| `data_types.py` | Every Pydantic model: `AgentCall`, `PhaseParams`, `Phase`, `EnvelopeBase` + one output type per agent call, the config models (`AgentConfig`, `ClaudeCodeConfig`, `SSSFConfig`), `EventRecord`, and the backend-agnostic `AgentRequest`/`AgentResult`/`AgentSession` (`PiRequest`/`PiResult` remain as aliases) |
 | `agents.py` | `load_config`, `validate`, resolving an entry → coding-agent interface + model + thinking + harness extensions |
 | `runner.py` | the `Run` object; `run.phase(PhaseParams)` context manager; `ph.call(AgentCall)` |
-| `agent_pi.py` | the Pi interface (v1) — non-interactive `pi -p --mode json`, JSONL stream tailed live, model resolved against `~/.pi/agent/models.json`; `--session-id` creates-or-continues, so running and continuing an agent are the same call |
-| `agent_cc.py` | the Claude Code interface — stubbed in v1, lands in v2 |
+| `agent_pi.py` | the Pi backend — non-interactive `pi -p --mode json`, JSONL stream tailed live, model resolved against `~/.pi/agent/models.json`; `--session-id` creates-or-continues, so running and continuing an agent are the same call |
+| `agent_cc.py` | the Claude Code backend — non-interactive `claude -p --output-format stream-json`, same live tail; `--session-id` is create-ONLY so the first call creates and every later one `--resume`s, determinism switches (`safe_mode`, `setting_sources`, `strict_mcp_config`) come from `claude_code:` in the config, and `commands_changed` is filtered before it can reach the trace |
+| `tool_calls.py` | the normalized tool-call record and its ledger — one shape per completed call, whichever backend ran it. Adding a third backend means writing a tracker that fills this in, and nothing else |
 | `gates.py` | validation gates over envelope claims |
 | `changes.py` | deterministic change capture: resolve the base ref, `git diff` into `context_handoff/changes.diff`, adapt the `ChangeSet` into an envelope an agent can be handed |
 | `prompts.py` | load system/user prompt refs from config, render placeholders |

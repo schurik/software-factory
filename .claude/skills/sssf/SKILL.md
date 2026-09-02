@@ -6,7 +6,7 @@ argument-hint: "[install | create adw | run adw | update config | ...]"
 
 # Super Simple Software Factory (SSSF)
 
-Reusable combination of **agents plus code**: deterministic Python ADW scripts own sequencing, retries, and acceptance; coding agents (Pi in v1) work inside bounded phases; typed JSON envelopes carry context between them; everything streams into SQLite for the polled visualizer. Agent proposes, code disposes.
+Reusable combination of **agents plus code**: deterministic Python ADW scripts own sequencing, retries, and acceptance; coding agents (Pi or Claude Code, chosen per agent) work inside bounded phases; typed JSON envelopes carry context between them; everything streams into SQLite for the polled visualizer. Agent proposes, code disposes.
 
 ## Startup
 
@@ -82,6 +82,15 @@ Deep specs, when needed: [references/config.md](references/config.md) · [refere
 9. **`tools:` is a capability list, `writes:` is the boundary** — `bash` runs anything (including `git checkout`) and `write` reaches any path, so a tool list can never make "this agent changes nothing" true. `writes:` per agent and `protected_files` in defaults are enforced in `adw_modules/permissions.py` after every agent call: unauthorized changes are rolled back and the phase dies. The session runtime under `data_dir` is always writable — a read-only agent is read-only with respect to the REPO, never mute.
 10. **Every ADW ends in `run.finish()`** — phases passing is not the same as the run being accepted. A test phase that ran a red suite succeeded at its job. Pass `accepted=` so the exit code, the session status, and the banner are decided together and cannot disagree.
 
-## v1 scope
+## Scope
 
-Pi coding agent only (`coding_agent: pi`), default model `gemini-3.6-flash` via openrouter, thinking `medium`. `claude_code` is schema-valid but stubbed until v2. The visualizer app ships in a later pass — observe via sqlite queries until then.
+Two coding-agent backends, selectable **per agent**, and one chain may mix them:
+
+- `coding_agent: pi` — `pi -p --mode json`. `model` is `provider/model-id`, resolved against `pi --list-models`, and needs that provider's key in `.env`. Starter default: `gemini-3.6-flash` via openrouter, thinking `medium`.
+- `coding_agent: claude_code` — `claude -p`. `model` is an alias (`opus`, `sonnet`, `haiku`) or a full id; the CLI brings its own auth, so a Claude subscription runs the factory with no API key at all.
+
+`model`, `thinking`, `tools` and `harness_engineering` each mean something backend-specific, and validation applies the right rule per agent — see [references/config.md](references/config.md#backends). Everything downstream is backend-agnostic: gates, `permissions.py`, the trace schema and the visualizer cannot tell which one produced a phase.
+
+`claude_code` agents run with `safe_mode: true` by default — no `CLAUDE.md`, skills, plugins, hooks or MCP servers — because a run that depends on whose machine it executed on is the failure this factory exists to remove. That is config, not code; a repository that wants its own `CLAUDE.md` sets it false.
+
+The visualizer app ships in a later pass — observe via sqlite queries until then.

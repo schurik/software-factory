@@ -15,17 +15,32 @@ from typing import Optional
 
 import yaml
 
-from . import agent_pi, git_helper, permissions, prompts
-from .data_types import (AgentCall, AgentConfig, EnvelopeBase, EventRecord,
-                         GateCheck, GateReport, Phase, PiRequest, SSSFConfig,
-                         UsageBreakdown)
-from .utils import anchor, new_id
+from . import agent_cc, agent_pi, git_helper, permissions, prompts
+from .data_types import (AgentCall, AgentConfig, AgentRequest, AgentResult,
+                         AgentSession, EnvelopeBase, EventRecord, GateCheck,
+                         GateReport, Phase, SSSFConfig, UsageBreakdown)
+from .utils import anchor
 
 JSON_FIX_ATTEMPTS = 2      # continue-with-correction attempts for malformed JSON
+
+# The whole of the backend seam. A module qualifies by exposing NAME,
+# resolve_model, reachable, validate_agent, new_session_id, ToolCallTracker and
+# run — nothing else in the factory knows which one is running.
+BACKENDS = {agent_pi.NAME: agent_pi, agent_cc.NAME: agent_cc}
 
 
 class GateFailure(RuntimeError):
     pass
+
+
+def backend(agent: AgentConfig):
+    """The coding-agent module this agent runs on."""
+    try:
+        return BACKENDS[agent.coding_agent]
+    except KeyError:
+        raise SystemExit(f"agent {agent.name!r}: coding_agent "
+                         f"{agent.coding_agent!r} is not one of "
+                         f"{' | '.join(sorted(BACKENDS))}") from None
 
 
 # ── config ───────────────────────────────────────────────────────────────────
@@ -34,7 +49,8 @@ def load_config(path: str = "adws/adw_sssf_config/sssf.config.yaml") -> SSSFConf
     raw = yaml.safe_load(Path(path).read_text()) or {}
     defaults = raw.get("defaults", {}) or {}
     for agent in raw.get("agents", []) or []:
-        for key in ("coding_agent", "model", "thinking", "color", "tools", "writes"):
+        for key in ("coding_agent", "model", "thinking", "color", "tools", "writes",
+                    "claude_code"):
             if key in defaults:
                 agent.setdefault(key, defaults[key])
         agent.setdefault("harness_engineering", defaults.get("harness_engineering", []))
@@ -55,6 +71,16 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
     Prompt files are looked for in the MAIN checkout, which is where the roster
     and its prompts live — not in the run's worktree, and not in whatever
     directory the ADW was launched from.
+
+    Everything backend-specific is asked of the backend: pi resolves a model
+    against its catalog and Claude Code accepts an alias, pi's tool names are
+    lowercase and Claude Code's are not, and only one of the two can load a
+    TypeScript extension. The shape here — collect every problem, raise one
+    SystemExit — is unchanged, and every ADW depends on it.
+
+    A model is checked for being WRITTEN correctly, not for being reachable.
+    Nothing here confirms the provider answers or that its key is set, so a
+    missing credential still surfaces partway into a chain.
     """
     root = git_helper.main_root()
     problems = []
@@ -64,16 +90,28 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
         except SystemExit as e:
             problems.append(str(e))
             continue
-        if agent.coding_agent != "pi":
-            problems.append(f"agent {name!r}: coding_agent {agent.coding_agent!r} "
-                            f"is not implemented in v1 (pi only)")
+        driver = BACKENDS.get(agent.coding_agent)
+        if driver is None:
+            problems.append(f"agent {name!r}: coding_agent {agent.coding_agent!r} is not "
+                            f"one of {' | '.join(sorted(BACKENDS))}")
+            continue
         for label, ref in (("system", agent.prompt_engineering.system),
                            ("user", agent.prompt_engineering.user)):
             if not anchor(root, ref).is_file():
                 problems.append(f"agent {name!r}: {label} prompt not found: {ref}")
+        # Model and tool vocabularies belong to the backend: pi resolves against
+        # its catalog, Claude Code takes an alias. Applying either rule to the
+        # other backend is how a valid roster gets rejected — or worse, a
+        # nonsense one accepted.
         try:
-            agent_pi.resolve_model(agent.model)
+            driver.resolve_model(agent.model)
         except ValueError as e:
+            problems.append(f"agent {name!r}: {e}")
+        problems += [f"agent {name!r}: {problem}"
+                     for problem in driver.validate_agent(agent)]
+        try:
+            driver.reachable()      # cached per backend; one probe per process
+        except RuntimeError as e:
             problems.append(f"agent {name!r}: {e}")
     if problems:
         raise SystemExit("config validation failed:\n- " + "\n- ".join(problems))
@@ -82,7 +120,7 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
 # ── execution ────────────────────────────────────────────────────────────────
 
 def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
-    """One agent call: render prompts -> pi run -> typed parse -> gates -> envelope."""
+    """One agent call: render prompts -> backend run -> typed parse -> gates -> envelope."""
     agent = resolve(run.cfg, phase.params.owner)
     agent_dir = run.session_dir / agent.name
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -112,42 +150,49 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     prompts.save(agent_dir / "prompts", "system.md", system_text)
     prompts.save(agent_dir / "prompts", "user.md", user_text)
 
-    session_id = _agent_session_id(run, agent)
+    driver = backend(agent)
+    session = _agent_session(run, agent, driver)
     run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
                                  type="agent_start", name=agent.name,
                                  payload={"model": agent.model, "thinking": agent.thinking,
                                           "color": agent.color,
-                                          "session_id": session_id,
+                                          "session_id": session.session_id,
                                           "coding_agent": agent.coding_agent,
                                           "purpose": agent.purpose,
                                           "tools": agent.tools,  # None = all tools
                                           "harness_engineering": agent.harness_engineering}))
-    run.console.agent_started(agent.name, agent.model, session_id)
+    run.console.agent_started(agent.name, agent.model, session.session_id)
 
-    # Parse retries and gate corrections re-enter the SAME pi session, so the
+    # Parse retries and gate corrections re-enter the SAME agent session, so the
     # last send is the one whose context occupancy is current — while spend is
     # the opposite: every send costs, so usage accumulates across all of them.
-    latest: agent_pi.PiResult | None = None
+    latest: AgentResult | None = None
     spent = UsageBreakdown()
+    forward = _event_forwarder(run, phase, agent.name, driver)
 
-    def send(prompt_text: str) -> agent_pi.PiResult:
+    def send(prompt_text: str) -> AgentResult:
         nonlocal latest
-        request = PiRequest(
+        request = AgentRequest(
             prompt=prompt_text,
             system_prompt=system_text,
             model=agent.model,
             thinking=agent.thinking,
-            session_id=session_id,
-            # absolute: these are read by the pi subprocess, which runs in repo_root
-            session_dir=str((agent_dir / "pi_sessions").resolve()),
+            session_id=session.session_id,
+            # absolute: these are read by the coding-agent subprocess, which
+            # runs in repo_root
+            session_dir=str((agent_dir / f"{agent.coding_agent}_sessions").resolve()),
             raw_output_path=str((agent_dir / "raw_output.jsonl").resolve()),
+            runtime_dir=str(run.session_dir.resolve()),
             tools=agent.tools,
             extensions=agent.harness_engineering,
             cwd=str(run.repo_root),
+            native_session_id=session.native_session_id,
+            resume=session.started,
+            claude_code=agent.claude_code,
         )
-        result = agent_pi.run(
+        result = driver.run(
             request,
-            on_event=_event_forwarder(run, phase, agent.name),
+            on_event=forward,
             on_spawn=lambda pid: run.tracer.process_start(
                 run.adw_id, "agent", agent.name, pid,
                 f"{agent.coding_agent} {agent.name} {agent.model}"),
@@ -155,6 +200,14 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
         run.add_usage(result.tokens, result.cost)
         spent.merge(result.usage)
         latest = result
+        # The session now EXISTS, and the next send in this phase must continue
+        # it rather than create it again. Persisted immediately, not at the end
+        # of the phase: a Claude Code session survives the process, so a run
+        # that dies mid-phase would otherwise leave a map claiming a session it
+        # can no longer create and cannot resume.
+        session.native_session_id = result.session_id or session.native_session_id
+        session.started = True
+        _remember(run, agent, session)
         return result
 
     # What the tree looked like before this agent got its hands on it. Every
@@ -213,11 +266,10 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     _persist_envelope(run, phase, agent.name, call, envelope, attempt, valid=True)
     run.console.envelope_summary(envelope)
     context = latest or result
-    run.tracer.agent_session_row(run.adw_id, agent, session_id,
+    run.tracer.agent_session_row(run.adw_id, agent, session.session_id,
                                  context_tokens=context.context_tokens,
                                  context_window=context.context_window)
-    run.save_agent_map(agent.name, {"session_id": session_id, "model": agent.model,
-                                    "coding_agent": agent.coding_agent})
+    _remember(run, agent, session)
     run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
                                  type="handoff", name=agent.name,
                                  payload={"artifacts": envelope.artifacts,
@@ -246,28 +298,52 @@ def _as_report(result) -> GateReport:
     return GateReport(checks=[GateCheck(item=str(v), ok=False) for v in (result or [])])
 
 
-def _agent_session_id(run, agent: AgentConfig) -> str:
-    entry = run.agent_map.get(agent.name)
-    if entry and entry.get("model") == agent.model:
-        return entry["session_id"]           # rejoin the existing context window
-    return f"sssf-{run.adw_id}-{agent.name}-{new_id(4)}"
+def _agent_session(run, agent: AgentConfig, driver) -> AgentSession:
+    """This agent's context window in this run: rejoined, or freshly minted.
+
+    The pre-existing rule is that a session is reused only while the MODEL is
+    unchanged — a context window built by one model is not one another model
+    should inherit. The backend is now part of that identity for the same
+    reason, and more bluntly: a pi session id is not a UUID and Claude Code
+    would refuse it outright.
+    """
+    entry = run.agent_map.get(agent.name) or {}
+    if entry.get("model") == agent.model and \
+            entry.get("coding_agent", "pi") == agent.coding_agent:
+        return AgentSession(session_id=entry["session_id"],
+                            native_session_id=entry.get("native_session_id", ""),
+                            started=bool(entry.get("started")))
+    session_id = driver.new_session_id(run.adw_id, agent)
+    return AgentSession(session_id=session_id, native_session_id=session_id)
 
 
-def _event_forwarder(run, phase: Phase, agent_name: str):
-    """One tool_call event per real tool call, with its exact args and result."""
-    tracker = agent_pi.ToolCallTracker()
+def _remember(run, agent: AgentConfig, session: AgentSession) -> None:
+    """Write this agent's session state into the run's agent map."""
+    run.save_agent_map(agent.name, {"session_id": session.session_id,
+                                    "model": agent.model,
+                                    "coding_agent": agent.coding_agent,
+                                    "native_session_id": session.native_session_id,
+                                    "started": session.started})
+
+
+def _event_forwarder(run, phase: Phase, agent_name: str, driver):
+    """One tool_call event per real tool call, with its exact args and result.
+
+    The tracker comes from the backend; the record shape does not (it is
+    tool_calls.py's, identical for both), which is what keeps the tracer, the
+    trace schema and the visualizer out of this phase entirely.
+    """
+    tracker = driver.ToolCallTracker()
 
     def forward(event: dict) -> None:
-        record = tracker.observe(event)
-        if record is None:
-            return
-        # The call's span rides the columns; duration_ms stays in the payload as
-        # pi's own authoritative number.
-        run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
-                                     type="tool_call", name=record.pop("label"),
-                                     started_at=record.pop("started_at", None),
-                                     ended_at=record.pop("ended_at", None),
-                                     payload={**record, "agent": agent_name}))
+        for record in tracker.observe(event):
+            # The call's span rides the columns; duration_ms stays in the
+            # payload as the coding agent's own authoritative number.
+            run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
+                                         type="tool_call", name=record.pop("label"),
+                                         started_at=record.pop("started_at", None),
+                                         ended_at=record.pop("ended_at", None),
+                                         payload={**record, "agent": agent_name}))
     return forward
 
 
