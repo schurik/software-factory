@@ -168,11 +168,45 @@ The Claude Code CLI has a `--worktree` flag. Do not use it. The factory must own
 
 ## Done when
 
-- [ ] No `git_helper` function runs in the process cwd by accident; all take an explicit `cwd`.
-- [ ] Every run gets its own worktree and branch; joined runs re-attach.
-- [ ] The main working tree is never modified by a run, dirty or clean.
-- [ ] Gates resolve artifacts inside the worktree and `tests_pass` runs there with `operator_env()`.
-- [ ] The trace lives in the main checkout and survives worktree pruning.
-- [ ] An integration phase merges or opens a PR, configurably.
-- [ ] Failed and killed runs keep their worktree; successful ones are pruned; orphans are listable.
-- [ ] Two concurrent runs complete without interfering.
+- [x] No `git_helper` function runs in the process cwd by accident; all take an explicit `cwd`.
+- [x] Every run gets its own worktree and branch; joined runs re-attach.
+- [x] The main working tree is never modified by a run, dirty or clean.
+- [x] Gates resolve artifacts inside the worktree and `tests_pass` runs there with `operator_env()`.
+- [x] The trace lives in the main checkout and survives worktree pruning.
+- [x] An integration phase merges or opens a PR, configurably.
+- [x] Failed and killed runs keep their worktree; successful ones are pruned; orphans are listable.
+- [x] Two concurrent runs complete without interfering.
+
+## As built
+
+Delivered across four commits — `git_helper` threading, the gates fix, the
+worktree itself, and integration plus cleanup. Where the implementation went
+past or around the design above:
+
+| Design said | What shipped | Why |
+|---|---|---|
+| a `worktrees_dir` config key | a `worktree:` section (`enabled`, `dir`, `branch_prefix`, `base_ref`, `keep_on_success`, `integration`) | the integration switch needed a home, and `enabled: false` keeps the v1 behaviour reachable |
+| `cwd` threaded through `git_helper` | `cwd` is the FIRST parameter of every measuring or mutating function, with **no default** | a defaulted `cwd=None` is the same bug with an opt-in; only `is_repo`, `repo_root` and the new `main_root` may fall back to the process cwd |
+| record the pinned base ref on the session | four columns — `repo_root`, `branch`, `base_ref`, `base_commit` — written at session **start** | a killed run is the one whose tree you need to find, and it never reaches an end |
+| prune a successful run's worktree | prune it **only when it is clean**, whatever the outcome otherwise | a plan-only chain never commits; its `plan.md` lives nowhere else |
+| a merge-or-PR integration phase | plus a fast-forward path (`git fetch . <branch>:<base>`) when the base branch is not checked out anywhere | it lands the run without touching any working tree, which is the common case |
+| orphan listing and cleanup | `scripts/worktrees.py` (`just worktrees`, `worktrees-prune`, `worktree-rm`) rather than an ADW | cleanup takes no prompt and is not agents-plus-code work; giving it a session would create the thing it removes |
+
+Two design questions the doc left open, answered:
+
+- **`changes.resolve_base()` under a worktree** — confirmed, not assumed. On
+  `sssf/<adw_id>`, `merge_base(base, HEAD)` returns the commit the worktree was
+  cut from, so the "HEAD is ahead of main" branch of the cascade reads the run's
+  own commits and nothing else.
+- **Untracked and gitignored files do not come along.** The policy is: they do
+  not, and the factory does not provision them. A run's `.env`, caches and
+  `node_modules` are the repository's cold-start cost to pay in its own quality
+  blocks. `data_dir` is the one exception, and it is not copied either — it is
+  shared, by being anchored to the main checkout.
+
+Verified in a scratch repo, in the order of the section above: concurrent runs
+on separate branches with one db; a dirty main checkout ignored by `commit_all`;
+a killed run finalised as `fail` with its worktree and in-flight file intact; a
+permission breach rolled back inside the worktree while the main checkout was
+untouched; and a joined `--adw-id` continuing the phase sequence and finding the
+earlier ADW's committed work.

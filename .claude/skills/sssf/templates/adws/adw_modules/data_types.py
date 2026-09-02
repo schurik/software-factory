@@ -9,6 +9,7 @@ that its final JSON response is parsed against. No untyped handoffs.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Type
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
@@ -338,6 +339,47 @@ class ConfigDefaults(BaseModel):
     data_dir: str = "adws/adw_data"
 
 
+IntegrationMode = Literal["none", "merge", "pr"]
+
+
+class IntegrationConfig(BaseModel):
+    """How a run's branch gets back to the base branch. Convention, not code.
+
+    Repositories disagree about merge vs. rebase, about who is allowed to move
+    the base branch, and about whether a machine may do it at all — so this is
+    configuration. The integration phase reads it; nothing in it is hard-coded.
+    """
+
+    mode: IntegrationMode = "merge"
+    merge_flags: list[str] = Field(default_factory=lambda: ["--no-ff"])
+    remote: str = "origin"                       # mode: pr — where the branch is pushed
+    open_pr: bool = False                        # mode: pr — also run pr_command
+    # Left as a command rather than an API call: whichever forge CLI the repo
+    # uses is already authenticated in the engineer's shell, and the phase runs
+    # under operator_env() so it resolves exactly as it does in their terminal.
+    pr_command: list[str] = Field(default_factory=lambda: ["gh", "pr", "create", "--fill"])
+
+
+class WorktreeConfig(BaseModel):
+    """One git worktree and one branch per run.
+
+    A run that executes in the engineer's working tree cannot be concurrent, is
+    destructive when it goes wrong, and commits whatever else was lying around.
+    Isolation — not a sandbox: an agent with bash can still leave the worktree,
+    which is what permissions.py is for.
+    """
+
+    enabled: bool = True
+    dir: str = ".sssf-worktrees"     # relative to the MAIN checkout; gitignored
+    branch_prefix: str = "sssf/"     # the run's branch is <prefix><adw_id>
+    base_ref: str = ""               # "" = whatever the main checkout has checked out
+    # A successful run's worktree is a redundant copy of a branch, so it goes.
+    # A failed or killed one is where you go to see what happened, so it stays —
+    # and so does any worktree with uncommitted work in it, whatever the outcome.
+    keep_on_success: bool = False
+    integration: IntegrationConfig = Field(default_factory=IntegrationConfig)
+
+
 class ObservabilityConfig(BaseModel):
     db: str = "adws/adw_data/sssf.db"
     poll_ms: int = 500
@@ -346,7 +388,97 @@ class ObservabilityConfig(BaseModel):
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    worktree: WorktreeConfig = Field(default_factory=WorktreeConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
+
+
+# ── Workspace (where a run works, and where its record lives) ────────────────
+
+class Workspace(BaseModel):
+    """The two roots a run has, kept apart on purpose.
+
+    `repo_root` is the tree the agents are spawned in, the gates measure, the
+    permission snapshot fingerprints and the commit phases commit. `main_root`
+    is the engineer's checkout, which a run must never modify — but which owns
+    the one thing that has to outlive the run: `data_dir`, and with it the trace
+    db, the session dir and context_handoff/. A worktree is pruned; the trace of
+    what happened in it is not.
+
+    Without a worktree (disabled, or not a git repo) both point at the same
+    directory and every path below behaves exactly as it did before.
+    """
+
+    main_root: Path
+    repo_root: Path
+    enabled: bool = False           # False = running directly in the main checkout
+    branch: str = ""                # sssf/<adw_id>
+    base_ref: str = ""              # what it was cut from, as asked for
+    base_commit: str = ""           # ...pinned to a sha at creation
+    created: bool = False           # False = re-attached to a worktree that existed
+
+    @property
+    def joined(self) -> bool:
+        """True when this run re-attached to a worktree an earlier ADW created."""
+        return self.enabled and not self.created
+
+
+class WorktreeRequest(BaseModel):
+    """Everything worktree.ensure() needs. One object, never loose params."""
+
+    main_root: Path
+    adw_id: str
+    config: WorktreeConfig = Field(default_factory=WorktreeConfig)
+
+
+class WorktreeInfo(BaseModel):
+    """One worktree on disk, and whether anything still needs it.
+
+    A killed run leaves its worktree behind deliberately, so "left behind" and
+    "orphaned" are not the same thing — the session status is what tells them
+    apart, and it lives in the trace db, not in git.
+    """
+
+    path: str
+    branch: str = ""
+    adw_id: str = ""
+    dirty: bool = False
+    status: str = "unknown"         # the run's session status, from the trace db
+    prunable: bool = False          # git says the directory is gone
+
+
+class RunSpec(BaseModel):
+    """Everything the Run object is built from, minus the tracer it writes to."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    cfg: SSSFConfig
+    adw_id: str
+    engineer: str
+    workspace: Workspace
+
+
+# ── Integration (landing a run's branch) ─────────────────────────────────────
+
+class IntegrationRequest(BaseModel):
+    """One integration attempt. `mode` empty = whatever the config says."""
+
+    mode: str = ""
+    message: str = ""               # merge commit subject; defaults to the branch
+    title: str = ""                 # PR title, when the forge CLI takes one
+
+
+class IntegrationResult(BaseModel):
+    """What integration actually did — a code phase's evidence, not a claim."""
+
+    mode: IntegrationMode = "none"
+    ok: bool = False
+    branch: str = ""
+    base_ref: str = ""
+    head: str = ""                  # the branch tip that was landed or pushed
+    merged_into: str = ""
+    pushed: bool = False
+    pr_url: str = ""
+    notes: list[str] = Field(default_factory=list)
 
 
 # ── Tracing ──────────────────────────────────────────────────────────────────

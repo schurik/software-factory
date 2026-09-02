@@ -120,6 +120,15 @@ def always_writable(cfg: SSSFConfig) -> list[str]:
     is normally ignored, so it never even appears in a snapshot — but an agent's
     ability to record its work must not hang on a gitignore entry that someone
     can delete or that a changed `data_dir` can outgrow.
+
+    **Under a worktree per run this grant is inert, and that is correct.**
+    `data_dir` is anchored to the MAIN checkout while the snapshot measures the
+    run's worktree, so a runtime path can no longer appear in the change-set
+    this module compares — there is nothing left for the exemption to exempt.
+    It stays because it is still load-bearing whenever the two roots are the
+    same directory: worktrees disabled, or a repository with no commit to
+    branch from. Delete it and a `writes: []` agent in that configuration loses
+    the ability to write its own report.
     """
     return [cfg.defaults.data_dir.rstrip("/") + "/"]
 

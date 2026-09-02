@@ -4,6 +4,12 @@
 for all three kinds (engineer, agent, code). Success must be earned: every
 phase defaults to fail; only a clean exit flips it (agent phases additionally
 require a parsed envelope + green gates, enforced inside ph.call).
+
+Two roots, deliberately: `repo_root` is the run's worktree — where agents are
+spawned, gates measure, and commits land — while `main_root` is the engineer's
+checkout, which owns `data_dir` and everything under it. The run's record has
+to outlive the tree the run worked in, because that tree is pruned when the run
+is accepted.
 """
 
 from __future__ import annotations
@@ -11,12 +17,12 @@ from __future__ import annotations
 import json
 import time
 from contextlib import contextmanager
-from pathlib import Path
 
-from . import agents, git_helper
+from . import agents, worktree
 from .console import Console
-from .data_types import AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams
-from .utils import ensure_dir, now_iso
+from .data_types import (AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams,
+                         RunSpec)
+from .utils import anchor, ensure_dir, now_iso
 
 
 class PhaseHandle:
@@ -40,18 +46,26 @@ class PhaseHandle:
 
 
 class Run:
-    def __init__(self, cfg, adw_id: str, tracer, engineer: str):
-        self.cfg = cfg
-        self.adw_id = adw_id
+    def __init__(self, spec: RunSpec, tracer):
+        self.cfg = spec.cfg
+        self.adw_id = spec.adw_id
         self.tracer = tracer
-        self.console = Console(tracer, adw_id)
-        self.engineer = engineer
+        self.console = Console(tracer, spec.adw_id)
+        self.engineer = spec.engineer
         self.phases: list[Phase] = []
         self.tokens = 0
         self.cost = 0.0
-        self._seq = tracer.max_phase_seq(adw_id)   # a joined run continues the sequence
-        self.repo_root = git_helper.repo_root()    # where every agent is spawned to work
-        self.session_dir = ensure_dir(Path(cfg.defaults.data_dir) / "sessions" / adw_id)
+        self._seq = tracer.max_phase_seq(spec.adw_id)  # a joined run continues the sequence
+        self.workspace = spec.workspace
+        self.repo_root = spec.workspace.repo_root      # the tree agents work in
+        self.main_root = spec.workspace.main_root      # the checkout that owns data_dir
+        # The runtime is anchored to the MAIN checkout, not to the worktree: one
+        # trace db for every concurrent run, one place the visualizer reads, and
+        # a record that survives the worktree being pruned. The cost is that
+        # context_handoff/ now sits outside the agent's working directory, so
+        # the path handed to an agent must be absolute — see agents.execute.
+        data_dir = anchor(spec.workspace.main_root, self.cfg.defaults.data_dir)
+        self.session_dir = ensure_dir(data_dir / "sessions" / spec.adw_id)
         self.context_handoff_dir = ensure_dir(self.session_dir / "context_handoff")
         self._agent_map_path = self.session_dir / "agent_map.json"
         self.agent_map: dict = (json.loads(self._agent_map_path.read_text())
@@ -138,5 +152,14 @@ class Run:
                 type="error", name="not_accepted", payload={"reason": note}))
             self.console.note(f"not accepted: {note}")
         self.tracer.session_finish(self.adw_id, ok=ok)
+        # An accepted run's worktree is a redundant copy of a branch that is
+        # kept, so it goes; a failed or killed one is the evidence, so it stays.
+        # `release` also keeps anything with uncommitted work in it, whatever
+        # the outcome — a plan-only chain never commits, and its plan lives
+        # nowhere else.
+        if ok and not self.cfg.worktree.keep_on_success:
+            self.console.note(f"worktree: {worktree.release(self.workspace)}")
+        elif self.workspace.enabled:
+            self.console.note(f"worktree: kept {self.repo_root} on {self.workspace.branch}")
         self.console.session_finished(ok, self.tokens, self.cost, self.cfg.observability.db)
         return 0 if ok else 1

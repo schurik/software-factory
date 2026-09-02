@@ -12,6 +12,7 @@ Phases: engineer(request) -> planner -> git(commit_plan)
         -> reviewer [-> builder(revise) -> reviewer ... bounded]
         -> code(retest, only if a revision changed code)
         -> git(commit_build) -> code(changes) -> documenter -> git(commit_docs)
+        -> git(integrate)
 
 Three commits, three work products, three authors. The plan, the code, and the
 write-up each land in their own commit, and each commit message is the words of
@@ -39,15 +40,22 @@ and the unfinished code stays where the engineer can see it.
 The documenter measures against the commit this run STARTED from, not against
 `main`, because by then the run has moved `main` itself. That baseline is
 pinned before the first commit phase and printed in the request phase.
+
+All three commits land on the run's own `sssf/<adw_id>` branch, in its own
+worktree — the engineer's checkout is never touched. The last phase lands that
+branch the way the repository asked to have it landed (`worktree.integration`),
+and a branch that does not land is not a failed run: the work is committed and
+the branch is kept, so integration stays a thing a human can finish by hand.
 """
 
 import argparse
 import sys
 
-from adw_modules import agents, changes, gates, git_helper, quality, session, utils
+from adw_modules import (agents, changes, gates, git_helper, integration, quality,
+                         session, utils)
 from adw_modules.data_types import (AgentCall, BuildOutput, ChangeCapture,
-                                    DocumentOutput, PhaseParams, PlanOutput,
-                                    ReviewOutput)
+                                    DocumentOutput, IntegrationRequest, PhaseParams,
+                                    PlanOutput, ReviewOutput)
 
 REQUIRED_AGENTS = ["planner", "builder", "reviewer", "documenter"]
 MAX_FIX_LOOPS = 3
@@ -62,12 +70,12 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
     run = session.ensure(cfg, adw_id)
-    baseline = git_helper.rev("HEAD")     # pinned before this run commits anything
+    baseline = git_helper.rev(run.repo_root, "HEAD")   # pinned before this run commits anything
 
     def commit(ph, envelope) -> None:
         """Commit what the preceding phase produced, in that agent's own words."""
         message = envelope.commit_message or f"sssf({run.adw_id}): {envelope.summary}"
-        ph.log(sha=git_helper.commit_all(message), message=message)
+        ph.log(sha=git_helper.commit_all(run.repo_root, message), message=message)
 
     def record(ph, result) -> None:
         """Log a deterministic block's verdict — the same shape every ADW uses."""
@@ -77,7 +85,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
 
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:
-        ph.log(input=prompt, baseline=git_helper.short_sha(baseline))
+        ph.log(input=prompt, baseline=git_helper.short_sha(run.repo_root, baseline))
 
     with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
                                description="Turn the request into an implementable plan")) as ph:
@@ -170,6 +178,19 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                    description="Ship the write-up in its own commit, beside the code it describes")) as ph:
             commit(ph, document)
 
+        with run.phase(PhaseParams(name="integrate", kind="code", owner="git",
+                                   description="Land the run's branch on its base branch, "
+                                               "the way this repository has said it wants "
+                                               "it landed")) as ph:
+            landed = integration.integrate(run, IntegrationRequest())
+            ph.log(mode=landed.mode, landed=landed.ok, merged_into=landed.merged_into,
+                   pushed=landed.pushed, pr_url=landed.pr_url,
+                   notes=" · ".join(landed.notes))
+
+    # Acceptance is the suite and the review, not the landing. A branch that
+    # could not be merged — because the engineer's checkout is mid-edit, or
+    # because the repository wants a human on that decision — is still a run
+    # that did what it was asked; the work is committed and its branch is kept.
     return run.finish(accepted=verified,
                       reason="the suite or the review never came back clean")
 

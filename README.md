@@ -360,11 +360,12 @@ Honest edges, because knowing them is cheaper than discovering them.
 | The synced triad drifts | Type, `## Report` example, and `output_type=` disagree, so every call burns correction rounds | Grep the type name and fix all three in one edit |
 | Gates pass, output is bad | Gates check what a predicate can check, not plan quality or code taste | Run the `reviewer`, or read it yourself |
 | An agent edits something it should not | Detected and rolled back after the call, and the phase fails | Expected. Widen that agent's `writes` if the change was legitimate |
-| Commit phase has nothing to commit | `commit_all` raises if the cwd is not a git repo or nothing changed | `git init` with one commit first. A no-op build fails the phase rather than committing nothing |
+| Commit phase has nothing to commit | `commit_all` raises if the tree is not a git repo or nothing changed | `git init` with one commit first. A no-op build fails the phase rather than committing nothing |
+| A green run left your branch unchanged | Runs commit to `sssf/<adw_id>` in their own worktree, not to your branch | Expected. `just integrate <adw_id>` lands it; `just worktrees` shows what is still around |
 | `install.py --force` | Overwrites **all** stamped files, config and prompts included | Commit before you force |
 | `coding_agent: claude_code` | Schema-valid, but `agent_cc.py` raises | v1 is Pi only |
 
-Also missing on purpose, so you know what to add: this runs on your current branch. For real work you want a branch per run, a sandbox around the agent, and a merge step at the end.
+Also missing on purpose, so you know what to add: a sandbox around the agent. A branch per run and a merge step ship in this fork — every run works in its own git worktree on `sssf/<adw_id>` and lands through a configurable integration phase (`docs/phase-2-worktree-per-run.md`) — but a worktree is isolation, not containment. An agent with `bash` can still walk out of it, and `permissions.py` is what actually holds the line.
 
 **Is this overkill for a one-off feature?** Yes. Prompt an agent and move on. This earns its keep when the same workflow runs a hundred times, when validation is the only thing standing between you and a bad merge, and when you need the thousandth run to look like the first.
 
@@ -387,7 +388,7 @@ Where to start, roughly in the order that pays off fastest:
 | Your definition of done | `adws/adw_modules/gates.py` | A gate is one function. Whatever "done" means where you work, write it here |
 | Your agent capabilities | `adws/adw_data/harness_engineering/` | Pi extensions, a different set per agent if that is what the job needs |
 
-And what it deliberately does not do. It runs on your current branch. There is no sandbox, no branch per run, no merge step, no cloud, and no human-in-the-loop approval phase. Those are the obvious next things to build. They are left out so the core stays small enough to read in one sitting, which is the only reason you would trust it enough to change it.
+And what it deliberately does not do. There is no sandbox, no cloud, and no human-in-the-loop approval phase. (A branch per run and a merge step were on this list; they are built — see `docs/phase-2-worktree-per-run.md`.) The rest are the obvious next things to build. They are left out so the core stays small enough to read in one sitting, which is the only reason you would trust it enough to change it.
 
 So take it. Fork it, strip the parts you do not need, rename the agents, throw out half the workflows, and roll what is left into the factory your product actually needs. The specific chains in here matter far less than the shape: code owns the loop, agents own the phases, and every run leaves a trace you can go read.
 

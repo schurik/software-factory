@@ -43,6 +43,8 @@ The gate event payload carries `attempt` too, so the `gate_results` table and th
 
 **A `tool_call` is the one event that spans time**, so it fills both `started_at` and `ended_at` on the row — the tool's real start and return. Every other type is a point in time: `started_at` is when it was recorded and `ended_at` stays NULL. Lay tool calls out on a time axis from those columns, never by parsing `payload_json` (`duration_ms` is in the payload too, as pi's own number, but it is a convenience, not the source for layout).
 
+**Where a run ran is written at the START.** The four workspace columns are set the moment the session opens, not when it ends — a killed run is exactly the one whose worktree you need to find, and it never reaches an end. They also outlive what they describe: an accepted run's worktree is removed while its branch is kept, so `branch` stays the answer to "where did this run's work go" long after `repo_root` is gone.
+
 **Streaming is solved by construction.** `agent_pi.py` tails pi's JSONL stdout line by line and the tracer inserts each event into `sssf.db` **while the agent is still working** — never batched at phase end (verified in the first smoke run: tool calls visible mid-run). Everything downstream is a poll → render.
 
 ## Tables
@@ -54,7 +56,11 @@ sessions (
   status        TEXT,              -- running | success | fail
   engineer      TEXT,
   started_at    TEXT, ended_at TEXT,
-  total_tokens  INTEGER, total_cost REAL
+  total_tokens  INTEGER, total_cost REAL,
+  repo_root     TEXT,              -- the worktree the run executed in
+  branch        TEXT,              -- sssf/<adw_id>
+  base_ref      TEXT,              -- what that branch was cut from...
+  base_commit   TEXT               -- ...pinned to a sha at run start
 );
 
 phases (

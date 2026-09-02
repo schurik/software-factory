@@ -15,11 +15,11 @@ from typing import Optional
 
 import yaml
 
-from . import agent_pi, permissions, prompts
+from . import agent_pi, git_helper, permissions, prompts
 from .data_types import (AgentCall, AgentConfig, EnvelopeBase, EventRecord,
                          GateCheck, GateReport, Phase, PiRequest, SSSFConfig,
                          UsageBreakdown)
-from .utils import new_id
+from .utils import anchor, new_id
 
 JSON_FIX_ATTEMPTS = 2      # continue-with-correction attempts for malformed JSON
 
@@ -50,7 +50,13 @@ def resolve(cfg: SSSFConfig, name: str) -> AgentConfig:
 
 
 def validate(cfg: SSSFConfig, required: list[str]) -> None:
-    """Fail fast: every required name must resolve to a usable agent."""
+    """Fail fast: every required name must resolve to a usable agent.
+
+    Prompt files are looked for in the MAIN checkout, which is where the roster
+    and its prompts live — not in the run's worktree, and not in whatever
+    directory the ADW was launched from.
+    """
+    root = git_helper.main_root()
     problems = []
     for name in required:
         try:
@@ -63,7 +69,7 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
                             f"is not implemented in v1 (pi only)")
         for label, ref in (("system", agent.prompt_engineering.system),
                            ("user", agent.prompt_engineering.user)):
-            if not Path(ref).is_file():
+            if not anchor(root, ref).is_file():
                 problems.append(f"agent {name!r}: {label} prompt not found: {ref}")
         try:
             agent_pi.resolve_model(agent.model)
@@ -84,10 +90,25 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     variables = {
         "prompt": call.prompt,
         "previous_envelope": call.previous.model_dump_json(indent=2) if call.previous else "(none)",
+        # Absolute, and it has to be. One worktree per RUN, not per agent: every
+        # agent in a session is spawned in the same `run.repo_root`, and hands
+        # its work to the next one through this directory — which lives under
+        # data_dir in the MAIN checkout, outside that worktree.
+        #
+        # So a relative path would not lose the agents each other; they would
+        # all resolve it identically, to a directory inside the worktree. It
+        # would lose them the CODE. `changes.capture` and the quality blocks
+        # write to `run.context_handoff_dir` and the trace records it, so the
+        # two halves of one handoff would be in different trees. Worse, the
+        # agents' half would then sit inside the tree that `commit_all` stages
+        # with `git add -A` and that permissions.py fingerprints — a scout with
+        # `writes: []` would breach its own boundary by filing its report — and
+        # it would be deleted with the worktree when the run is released.
         "context_handoff_dir": str(run.context_handoff_dir),
     }
-    system_text = prompts.render(agent.prompt_engineering.system, variables)
-    user_text = prompts.render(agent.prompt_engineering.user, variables)
+    # The roster's prompts live beside the config, in the main checkout.
+    system_text = prompts.render(anchor(run.main_root, agent.prompt_engineering.system), variables)
+    user_text = prompts.render(anchor(run.main_root, agent.prompt_engineering.user), variables)
     prompts.save(agent_dir / "prompts", "system.md", system_text)
     prompts.save(agent_dir / "prompts", "user.md", user_text)
 

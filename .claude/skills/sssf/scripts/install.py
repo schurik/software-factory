@@ -9,7 +9,7 @@ Usage:
 
 Stamps: adws/ (modules + starter ADWs), adws/adw_data/prompt_engineering/
 (4 starter agents), adws/adw_sssf_config/sssf.config.yaml, .env.sample,
-.gitignore entries.
+.gitignore entries (including the per-run worktree directory).
 Existing files are skipped unless --force.
 """
 
@@ -24,6 +24,11 @@ GITIGNORE_ENTRIES = [
     "adws/adw_data/sessions/",
     "adws/adw_data/sssf.db*",
     ".env",
+    # One worktree per run, checked out inside the repo. Ignored rather than
+    # committed for the obvious reason, and because chains that end in a commit
+    # phase call `git add -A` — without this, a run's first commit would try to
+    # add the tree it is running in.
+    ".sssf-worktrees/",
     # The ADWs are Python, so importing adw_modules writes bytecode next to it.
     # Chains that end in a commit phase call `git add -A`, so without this a
     # stamped repo commits its own .pyc files — 15 of them showed up in the

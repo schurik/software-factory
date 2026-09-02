@@ -36,6 +36,32 @@ observability:
   db: adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
   poll_ms: 500                     # visualizer live-poll cadence
 
+# Every run gets its own git worktree on its own branch, cut from a base ref
+# pinned at run start. The engineer's working tree is never touched, two runs
+# can execute at once without colliding, and a failed run leaves its state
+# somewhere you can open instead of somewhere in the way.
+#
+# Isolation, not a sandbox: an agent with `bash` can still leave the worktree.
+# adw_modules/permissions.py is the boundary, and it measures this tree.
+worktree:
+  enabled: true
+  dir: .sssf-worktrees             # relative to the main checkout; gitignored
+  branch_prefix: "sssf/"           # the run's branch is <prefix><adw_id>
+  base_ref: ""                     # "" = whatever the main checkout has checked out
+  # A clean worktree is a redundant copy of a branch that is kept, so an
+  # accepted run drops it. A failed or killed run keeps its worktree — that is
+  # where you go to see what happened — and so does anything holding
+  # uncommitted work, whatever the outcome.
+  keep_on_success: false
+  # How a run's branch gets back to the base branch. Repositories disagree
+  # about this, so it is config, not code.
+  integration:
+    mode: merge                    # none | merge | pr
+    merge_flags: ["--no-ff"]       # mode: merge — the run stays legible as one merge
+    remote: origin                 # mode: pr — where the branch is pushed
+    open_pr: false                 # mode: pr — also run pr_command after pushing
+    pr_command: ["gh", "pr", "create", "--fill"]
+
 agents:
   - name: planner
     model: fireworks/accounts/fireworks/models/kimi-k3
