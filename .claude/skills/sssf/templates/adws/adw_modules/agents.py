@@ -90,11 +90,20 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     variables = {
         "prompt": call.prompt,
         "previous_envelope": call.previous.model_dump_json(indent=2) if call.previous else "(none)",
-        # Absolute, and it has to be: the handoff directory lives under data_dir
-        # in the MAIN checkout, while the agent is spawned in the run's
-        # worktree. A relative path here would resolve inside the worktree, and
-        # every artifact an agent was told to hand over would land somewhere the
-        # next agent never looks.
+        # Absolute, and it has to be. One worktree per RUN, not per agent: every
+        # agent in a session is spawned in the same `run.repo_root`, and hands
+        # its work to the next one through this directory — which lives under
+        # data_dir in the MAIN checkout, outside that worktree.
+        #
+        # So a relative path would not lose the agents each other; they would
+        # all resolve it identically, to a directory inside the worktree. It
+        # would lose them the CODE. `changes.capture` and the quality blocks
+        # write to `run.context_handoff_dir` and the trace records it, so the
+        # two halves of one handoff would be in different trees. Worse, the
+        # agents' half would then sit inside the tree that `commit_all` stages
+        # with `git add -A` and that permissions.py fingerprints — a scout with
+        # `writes: []` would breach its own boundary by filing its report — and
+        # it would be deleted with the worktree when the run is released.
         "context_handoff_dir": str(run.context_handoff_dir),
     }
     # The roster's prompts live beside the config, in the main checkout.
