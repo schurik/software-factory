@@ -31,7 +31,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   repo_root     TEXT,
   branch        TEXT,
   base_ref      TEXT,
-  base_commit   TEXT
+  base_commit   TEXT,
+  -- What asked for this run. `trigger` is how it started at all ('engineer' |
+  -- 'issue'); `issue_url` is canonical rather than a number, because a number
+  -- means nothing without the project it belongs to.
+  trigger       TEXT,
+  issue_url     TEXT
 );
 CREATE TABLE IF NOT EXISTS phases (
   phase_id      TEXT PRIMARY KEY,
@@ -108,7 +113,9 @@ MIGRATIONS = [("agent_sessions", "color", "TEXT"),
               ("sessions", "repo_root", "TEXT"),
               ("sessions", "branch", "TEXT"),
               ("sessions", "base_ref", "TEXT"),
-              ("sessions", "base_commit", "TEXT")]
+              ("sessions", "base_commit", "TEXT"),
+              ("sessions", "trigger", "TEXT"),
+              ("sessions", "issue_url", "TEXT")]
 
 
 def session_statuses(db_path: str | Path) -> dict[str, str]:
@@ -201,6 +208,16 @@ class Tracer:
     def session_request(self, adw_id: str, request: str) -> None:
         self.conn.execute("UPDATE sessions SET request=? WHERE adw_id=?",
                           (request[:500], adw_id))
+
+    def session_issue(self, adw_id: str, url: str, trigger: str = "issue") -> None:
+        """Tie this run to the work item that caused it. One half of the pair.
+
+        The other half is the comment the run posts back on the issue. Both are
+        needed: this answers "which run belongs to #42" from the trace, and the
+        comment answers "which issue produced this branch" from the tracker.
+        """
+        self.conn.execute("UPDATE sessions SET issue_url=?, trigger=? WHERE adw_id=?",
+                          (url[:500], trigger, adw_id))
 
     def session_finish(self, adw_id: str, ok: bool) -> None:
         self.conn.execute(

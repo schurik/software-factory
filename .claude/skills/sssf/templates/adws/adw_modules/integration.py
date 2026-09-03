@@ -38,8 +38,22 @@ def integrate(run, params: IntegrationRequest) -> IntegrationResult:
     config = run.cfg.worktree.integration
     workspace = run.workspace
     mode = params.mode or config.mode
+
+    # An externally triggered run must not be able to move the base branch. The
+    # prompt came from whoever can file an issue, not from the engineer's own
+    # terminal, so the one thing that cannot be left to config discipline is
+    # whether a merge is even reachable on that path. `mode: none` still wins —
+    # a repository that wants nothing landed gets nothing landed.
+    if (run.trigger == "issue" and run.cfg.issues.force_pr
+            and mode == "merge"):
+        mode = "pr"
+
     result = IntegrationResult(mode=mode, branch=workspace.branch,
                                base_ref=workspace.base_ref)
+    if mode != (params.mode or config.mode):
+        result.notes.append("issue-triggered run: merge downgraded to pr "
+                            "(issues.force_pr) — a stranger's prompt does not "
+                            "move the base branch")
 
     if mode == "none":
         result.ok = True
@@ -113,6 +127,20 @@ def _merge(run, result: IntegrationResult) -> IntegrationResult:
     return result
 
 
+def _pr_body(run, template: str, result: IntegrationResult) -> str:
+    """Render the configured PR body. Empty template = let pr_command decide.
+
+    `Closes #<n>` in the template is what makes an issue-triggered run close its
+    own issue on merge — the forge does it, so nothing here has to.
+    """
+    if not template:
+        return ""
+    return template.format(adw_id=run.adw_id, branch=result.branch,
+                           base_ref=result.base_ref,
+                           issue_number=run.issue_number or "",
+                           issue_url=run.issue_url or "")
+
+
 def _open_pr(run, result: IntegrationResult, params: IntegrationRequest) -> IntegrationResult:
     """Push the branch, and optionally ask the forge CLI to open the PR.
 
@@ -148,6 +176,9 @@ def _open_pr(run, result: IntegrationResult, params: IntegrationRequest) -> Inte
     argv = [*config.pr_command, "--base", result.base_ref, "--head", result.branch]
     if params.title:
         argv += ["--title", params.title]
+    body = params.body or _pr_body(run, config.pr_body_template, result)
+    if body:
+        argv += ["--body", body]
     # The forge CLI is already authenticated in the engineer's shell, so it runs
     # under their environment rather than the ADW's ephemeral `uv run` venv.
     completed = subprocess.run(argv, cwd=tree, env=operator_env(),

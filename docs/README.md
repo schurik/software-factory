@@ -31,7 +31,7 @@ Upstream's README says it plainly: *"no sandbox, no branch per run, no merge ste
 2. **The trace is local and anonymous.** It lives in a gitignored SQLite file inside each repo. There is no cross-repo view, and no column anywhere records which project, repository, branch or commit a run belonged to.
 3. ~~**Runs execute in the dirty working tree, on the current branch.** Two concurrent runs collide. A failed run leaves its mess where you were working.~~ **Fixed in Phase 2:** a git worktree and branch per run, plus a configurable integration phase that lands it.
 4. **Past runs are never read back.** The trace is a write-only archive.
-5. **Every run starts from a shell.** There is no path from a tracked work item to a run, and no path back — a finished run tells nobody but the engineer who launched it.
+5. ~~**Every run starts from a shell.** There is no path from a tracked work item to a run, and no path back.~~ **Fixed in Phase 5:** a labelled issue starts a run, and the run reports back to it.
 
 ## Decisions already fixed
 
@@ -53,7 +53,7 @@ These are settled; the phase documents assume them rather than re-argue them.
 | 2 | [Worktree per run](phase-2-worktree-per-run.md) | Isolated, concurrent, non-destructive runs; the prerequisite for sandboxing | **built** — see its *As built* section |
 | 3 | [Convex trace store](phase-3-convex-trace-store.md) | One queryable place for every run from every repo | not started |
 | 4 | [Learning loop](phase-4-learning-loop.md) | Past runs improve future runs | not started |
-| 5 | [Issue tracking](phase-5-issue-tracking.md) | A run starts from an issue, and reports back to it | not started |
+| 5 | [Issue tracking](phase-5-issue-tracking.md) | A run starts from an issue, and reports back to it | **built** — see its *As built* section |
 
 ### Dependency order
 

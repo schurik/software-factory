@@ -117,6 +117,55 @@ worktree:
     remote: origin                 # mode: pr — where the branch is pushed
     open_pr: false                 # mode: pr — also run pr_command after pushing
     pr_command: ["gh", "pr", "create", "--fill"]
+    # Passed as --body, rendered with {adw_id}, {branch}, {base_ref} and — on an
+    # issue-triggered run — {issue_number} and {issue_url}. `Closes #<n>` here is
+    # what makes such a run close its own issue when the PR merges; the forge
+    # does it, nothing in the factory has to. NOTE: gh rejects --fill together
+    # with an explicit body, so drop --fill above if you set this.
+    pr_body_template: ""
+
+# Where work items come from, and which chain each label asks for. OFF by
+# default: this is the one path where the prompt is written by whoever can file
+# an issue rather than by the engineer at the keyboard, so a repository opts in
+# to it deliberately.
+#
+# The trigger is `<skill>/scripts/issue_watch.py`, run by cron or by hand — it
+# sits ABOVE the factory, not inside it. The label is the queue; the flip from
+# queued to running is the lock.
+issues:
+  enabled: false
+  # WHICH REPO is watched. "" resolves once at startup from the origin remote of
+  # this checkout. Set it explicitly for cron — a scheduler has an arbitrary
+  # working directory, and a watcher that silently polls the wrong project looks
+  # exactly like one with nothing to do. A tracker that is not the forge (Jira,
+  # Linear) has no remote to infer from and MUST set this.
+  project: ""                      # e.g. "acme/widgets"
+  # Commands, not API calls, for the reason pr_command already gives: the forge
+  # CLI is installed and authenticated in your shell already. glab, jira and
+  # linear fit the same four verbs.
+  fetch_command:   ["gh", "issue", "view"]
+  list_command:    ["gh", "issue", "list"]
+  comment_command: ["gh", "issue", "comment"]
+  state_command:   ["gh", "issue", "edit"]
+  # label -> ADW. THE LABEL IS THE AUTHORIZATION: a human applied it, and the
+  # watcher never looks at an issue that does not carry one. An empty route map
+  # means nothing ever launches, which is the safe default.
+  route: {}
+  # route:
+  #   "sssf:build": adws/adw_issue_sdlc.py
+  #   "sssf:scout": adws/adw_issue_scout.py
+  states:                          # the label state machine, and the lock
+    queued:  "sssf:queued"
+    running: "sssf:running"
+    done:    "sssf:done"
+    failed:  "sssf:failed"
+  # [] accepts every issue author, because the person who applied the routing
+  # label is then the only authorization. Narrow it where anyone can label.
+  trusted_authors: []
+  max_concurrent: 2                # bounds runs in flight, not spend
+  # An issue-triggered run may not move the base branch, whatever
+  # worktree.integration.mode says. Enforced in integration.py, not here.
+  force_pr: true
 
 # The starter roster runs entirely on pi. To move ONE agent to Claude Code, give it a
 # backend and a model of the right shape — the rest of its entry is unchanged, and it

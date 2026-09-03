@@ -61,6 +61,31 @@ sdlc *ARGS:
 simple-sdlc *ARGS:
     uv run adws/adw_simple_sdlc.py --config {{config}} "$@"
 
+# ── from an issue ───────────────────────────────────────────────────────────
+# The label is the authorization: a human applies it, the watcher only ever
+# looks at issues carrying it, and the flip off it is the lock. Off until
+# `issues.enabled` says otherwise — see the issues block in the config.
+
+# work one issue end to end: just issue 42
+issue NUMBER *ARGS:
+    uv run adws/adw_issue_sdlc.py {{NUMBER}} --config {{config}} "$@"
+
+# read-only triage, comments its findings: just issue-scout 42
+issue-scout NUMBER *ARGS:
+    uv run adws/adw_issue_scout.py {{NUMBER}} --config {{config}} "$@"
+
+# poll once and launch what is labelled: just issues
+issues:
+    uv run {{skill}}/scripts/issue_watch.py once --config {{config}}
+
+# what the watcher would do, and whether it can: just issues-status
+issues-status:
+    @uv run {{skill}}/scripts/issue_watch.py status --config {{config}}
+
+# keep polling — this is the cron form: just issues-watch
+issues-watch *ARGS:
+    uv run {{skill}}/scripts/issue_watch.py loop --config {{config}} "$@"
+
 # ── land a run's branch ─────────────────────────────────────────────────────
 # Every run works on its own sssf/<adw_id> branch in its own worktree. Chains
 # stop at a committed branch; this is what brings it back to the base branch,

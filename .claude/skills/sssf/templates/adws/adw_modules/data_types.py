@@ -248,6 +248,28 @@ class VerifyOutput(EnvelopeBase):
     failures: list[str] = Field(default_factory=list)
 
 
+class IssueOutput(EnvelopeBase):
+    """A tracked work item, shaped as an envelope so the planner can consume it.
+
+    Same adapter idea as VerifyOutput and ChangesOutput: code fetches the issue,
+    the planner receives it through the one door every agent handoff uses.
+
+    The BODY IS NOT A FIELD, and that is deliberate twice over. Envelopes are
+    persisted whole into `envelopes.payload_json`, and an issue body can be a
+    screenshot-laden novel. More importantly, a body that arrives as a path in
+    `artifacts` is visibly MATERIAL THE AGENT READS rather than INSTRUCTIONS THE
+    AGENT RECEIVED — the reporter is not the operator, and the framing is the
+    cheapest part of keeping that true. `issues.as_envelope` says so out loud in
+    `notes_for_next_agent`.
+    """
+
+    number: int = 0
+    url: str = ""
+    title: str = ""
+    labels: list[str] = Field(default_factory=list)
+    author: str = ""
+
+
 # ── Agent calls ──────────────────────────────────────────────────────────────
 
 class GateCheck(BaseModel):
@@ -397,6 +419,12 @@ class IntegrationConfig(BaseModel):
     # uses is already authenticated in the engineer's shell, and the phase runs
     # under operator_env() so it resolves exactly as it does in their terminal.
     pr_command: list[str] = Field(default_factory=lambda: ["gh", "pr", "create", "--fill"])
+    # Rendered with {adw_id}, {branch}, {base_ref} and — for an issue-triggered
+    # run — {issue_number} and {issue_url}, then passed as --body. Left empty,
+    # nothing is passed and pr_command decides on its own (`--fill` does).
+    # NOTE: `--fill` and an explicit body are mutually exclusive in gh; a repo
+    # that sets a template here drops --fill from pr_command.
+    pr_body_template: str = ""
 
 
 class WorktreeConfig(BaseModel):
@@ -424,10 +452,57 @@ class ObservabilityConfig(BaseModel):
     poll_ms: int = 500
 
 
+class IssueStates(BaseModel):
+    """The label state machine. The flip from `queued` IS the lock.
+
+    No queue and no state file: the watcher claims an issue by moving its label,
+    which is atomic at the forge and visible to humans in the place they already
+    look. Two watchers racing the same issue means one of them loses the flip.
+    """
+
+    queued: str = "sssf:queued"
+    running: str = "sssf:running"
+    done: str = "sssf:done"
+    failed: str = "sssf:failed"
+
+
+class IssuesConfig(BaseModel):
+    """Where work items come from, and which chain each label asks for.
+
+    Commands rather than API calls, for the reason `pr_command` already gives:
+    whichever forge CLI the repo uses is installed and authenticated in the
+    engineer's shell already, and everything here runs under operator_env().
+    """
+
+    enabled: bool = False
+    # WHICH REPO the watcher watches. Empty resolves ONCE at startup from the
+    # origin remote of the main checkout — never left to each command's cwd,
+    # because cron has an arbitrary working directory and a watcher that
+    # silently polls the wrong project looks exactly like one with nothing to
+    # do. A tracker that is not the forge has no remote to infer from and must
+    # set this. It is the same normalised identity the trace records.
+    project: str = ""
+    fetch_command: list[str] = Field(default_factory=lambda: ["gh", "issue", "view"])
+    list_command: list[str] = Field(default_factory=lambda: ["gh", "issue", "list"])
+    comment_command: list[str] = Field(default_factory=lambda: ["gh", "issue", "comment"])
+    state_command: list[str] = Field(default_factory=lambda: ["gh", "issue", "edit"])
+    # label -> ADW script. The watcher routes on this; no ADW knows about it.
+    route: dict[str, str] = Field(default_factory=dict)
+    states: IssueStates = Field(default_factory=IssueStates)
+    # Empty = every issue author is accepted, and the human who applied the
+    # routing label is the only authorization. Narrow it where anyone can label.
+    trusted_authors: list[str] = Field(default_factory=list)
+    max_concurrent: int = 2
+    # An issue-triggered run must not be able to move the base branch. Enforced
+    # in integration.integrate(), not left to whoever edits the config.
+    force_pr: bool = True
+
+
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     worktree: WorktreeConfig = Field(default_factory=WorktreeConfig)
+    issues: IssuesConfig = Field(default_factory=IssuesConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
 
 
@@ -504,6 +579,7 @@ class IntegrationRequest(BaseModel):
     mode: str = ""
     message: str = ""               # merge commit subject; defaults to the branch
     title: str = ""                 # PR title, when the forge CLI takes one
+    body: str = ""                  # PR body; overrides config.pr_body_template
 
 
 class IntegrationResult(BaseModel):
@@ -517,6 +593,59 @@ class IntegrationResult(BaseModel):
     merged_into: str = ""
     pushed: bool = False
     pr_url: str = ""
+    notes: list[str] = Field(default_factory=list)
+
+
+# ── Issues (a tracked work item as a run's entry point) ──────────────────────
+
+class IssueRef(BaseModel):
+    """Which work item, in which project. `project` empty = whatever config says."""
+
+    number: int
+    project: str = ""
+
+
+class IssueContext(BaseModel):
+    """One fetched issue. What the forge said, plus where the body was written.
+
+    `body_path` rather than the body itself for the same reason IssueOutput has
+    no body field — see that type. Nothing downstream reads `body` off this
+    object; the agent opens the file.
+    """
+
+    number: int
+    project: str = ""
+    url: str = ""
+    title: str = ""
+    labels: list[str] = Field(default_factory=list)
+    author: str = ""
+    state: str = ""
+    body_path: str = ""             # written into context_handoff/
+
+
+class IssueUpdate(BaseModel):
+    """One write back to the tracker: a comment, a label move, or both."""
+
+    number: int
+    project: str = ""
+    comment: str = ""
+    add_labels: list[str] = Field(default_factory=list)
+    remove_labels: list[str] = Field(default_factory=list)
+
+
+class IssueResult(BaseModel):
+    """What a tracker write actually did — evidence, never a claim.
+
+    A failed write-back is NOT a failed run. The work is committed and the
+    branch is kept either way; the tracker just did not hear about it, which is
+    a thing a human can finish by hand. So this carries `ok` and notes rather
+    than raising, exactly like IntegrationResult.
+    """
+
+    ok: bool = False
+    number: int = 0
+    commented: bool = False
+    labels_changed: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
 

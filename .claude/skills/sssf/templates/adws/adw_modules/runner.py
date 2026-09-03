@@ -59,6 +59,12 @@ class Run:
         self.workspace = spec.workspace
         self.repo_root = spec.workspace.repo_root      # the tree agents work in
         self.main_root = spec.workspace.main_root      # the checkout that owns data_dir
+        # What asked for this run. 'engineer' until an issue phase says otherwise
+        # — and integration reads it, because a prompt written by whoever can
+        # file an issue does not get to move the base branch.
+        self.trigger = "engineer"
+        self.issue_number = 0
+        self.issue_url = ""
         # The runtime is anchored to the MAIN checkout, not to the worktree: one
         # trace db for every concurrent run, one place the visualizer reads, and
         # a record that survives the worktree being pruned. The cost is that
@@ -75,6 +81,20 @@ class Run:
     def save_agent_map(self, agent: str, entry: dict) -> None:
         self.agent_map[agent] = entry
         self._agent_map_path.write_text(json.dumps(self.agent_map, indent=2))
+
+    # ── issue provenance (set by an issue phase, read by integration) ──────
+    def record_issue(self, context) -> None:
+        """Bind this run to the work item that caused it, in memory and in the db.
+
+        Lives here rather than in the ADW script (rule 6) because three
+        different things need it afterwards: the trace column, the PR body
+        template, and integration's refusal to merge an externally triggered
+        run. A script that set them one by one would eventually set only two.
+        """
+        self.trigger = "issue"
+        self.issue_number = context.number
+        self.issue_url = context.url
+        self.tracer.session_issue(self.adw_id, context.url)
 
     # ── usage (run totals mirror what the tracer accumulates in sqlite) ─────
     def add_usage(self, tokens: int, cost: float) -> None:

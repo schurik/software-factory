@@ -27,6 +27,20 @@ observability:
   db: adws/adw_data/sssf.db
   poll_ms: 500
 
+issues:                                 # off by default; a run from a work item
+  enabled: false
+  project: ""                           # "" = the origin remote of this checkout
+  fetch_command:   ["gh", "issue", "view"]
+  list_command:    ["gh", "issue", "list"]
+  comment_command: ["gh", "issue", "comment"]
+  state_command:   ["gh", "issue", "edit"]
+  route: {}                             # label -> ADW script
+  states: {queued: "sssf:queued", running: "sssf:running",
+           done: "sssf:done", failed: "sssf:failed"}
+  trusted_authors: []
+  max_concurrent: 2
+  force_pr: true
+
 worktree:
   enabled: true
   dir: .sssf-worktrees
@@ -118,6 +132,7 @@ How a run's branch gets back to its base. Configuration rather than code, becaus
 | `remote` | string | `pr` only: where the branch is pushed. Default `origin`. |
 | `open_pr` | bool | `pr` only: also run `pr_command` after pushing. Default `false` — pushing is safe everywhere, opening a PR needs an authenticated CLI. |
 | `pr_command` | list[string] | The forge CLI, run with `--base <base_ref> --head <branch>` appended. Default `["gh", "pr", "create", "--fill"]`. |
+| `pr_body_template` | string | Passed as `--body`, rendered with `{adw_id}`, `{branch}`, `{base_ref}`, `{issue_number}`, `{issue_url}`. Empty (default) passes nothing. `Closes #{issue_number}` here is what makes an issue-triggered run close its own issue on merge. **`gh` rejects `--fill` together with an explicit body** — drop `--fill` from `pr_command` if you set this. |
 
 `merge` picks its own path and refuses rather than guessing:
 
@@ -127,6 +142,33 @@ How a run's branch gets back to its base. Configuration rather than code, becaus
 - **Uncommitted work in the run's own worktree** → refused, in every mode. Merging would ship less than the run produced.
 
 A refusal fails the *integration*, not the *run*: the phase ran and reported, the commits exist, the branch is kept, and `just integrate <adw_id>` finishes the job later.
+
+### `issues`
+
+Where work items come from, and which chain each label asks for. **Off by default**, because this is the one path where the prompt is written by whoever can file an issue rather than by the engineer at the keyboard.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `enabled` | bool | Default `false`. The watcher refuses to poll until this is on. |
+| `project` | string | **Which repo is watched.** `""` resolves once at startup from the `origin` remote of the main checkout. Set it explicitly for cron: a scheduler has an arbitrary working directory, and a watcher that silently polls the wrong project looks exactly like one with nothing to do. A tracker that is not the forge has no remote to infer from and must set it. |
+| `fetch_command`, `list_command`, `comment_command`, `state_command` | list[string] | The forge CLI, always aimed with `--repo <project>` appended — never left to the process cwd. Commands rather than API calls for the reason `pr_command` gives: the CLI is installed and authenticated in your shell already. |
+| `route` | map[label → script] | Which ADW a label asks for. **Empty means nothing ever launches**, which is the safe default. |
+| `states` | object | The label state machine: `queued`, `running`, `done`, `failed`. |
+| `trusted_authors` | list[string] | `[]` accepts every issue author, because the human who applied the routing label is then the only authorization. Narrow it where anyone can label. |
+| `max_concurrent` | int | Runs in flight, counted from `sessions.status='running'`. Bounds parallelism, **not spend**. |
+| `force_pr` | bool | Default `true`. An issue-triggered run's `merge` is downgraded to `pr` in `integration.integrate()`. `mode: none` still wins. |
+
+**The label flip is the lock.** Claiming an issue means moving it off `queued` at the forge — atomic there, and visible to humans in the place they already look. Two watchers racing the same issue: one wins the flip, the other's call is a no-op and it moves on. No queue, no state file, and a crashed watcher leaves a `running` label a person can read and reset.
+
+**The trust boundary**, in the order it is enforced:
+
+1. **The routing label is the authorization** — a human applied it, and the watcher never looks at an issue without one.
+2. **`trusted_authors`**, checked in the issue phase, before any agent is spawned.
+3. **The body is an artifact, not a field** — it reaches the planner as `artifacts[0]` framed as a user's description of a problem, never as instructions. It is also absent from the persisted envelope.
+4. **`writes:` and `protected_files`** are unchanged but now load-bearing: an agent editing the machinery that judges it is rolled back by `permissions.py`.
+5. **`force_pr`** — the base branch is not reachable from this path.
+
+The trigger itself sits *above* the factory: `<skill>/scripts/issue_watch.py` (`just issues`, `issues-status`, `issues-watch`), run by cron or by hand.
 
 ### `agents[]`
 
