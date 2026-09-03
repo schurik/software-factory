@@ -117,6 +117,8 @@ A new top-level block, i.e. a fifth field on `SSSFConfig` beside `defaults`, `ob
 ```yaml
 issues:
   enabled: false                       # off until a repo opts in
+  project: ""                          # "" = infer from the checkout's origin remote;
+                                       # required for a tracker that is not the forge
   fetch_command:   ["gh", "issue", "view"]
   comment_command: ["gh", "issue", "comment"]
   state_command:   ["gh", "issue", "edit"]
@@ -135,11 +137,21 @@ issues:
 
 Commands rather than API calls, for the reason `pr_command` already gives: whichever forge CLI the repo uses is already installed and already authenticated. `gh`, `glab`, `jira` and `linear` all fit the same three verbs, so a provider abstraction buys nothing until one of them demonstrably does not.
 
+**`project` is the answer to "which repo does the watcher watch".** Left empty it is resolved once at startup from the `origin` remote of `git_helper.main_root()` — the ordinary single-repo case, where the factory is stamped into the repo it works on and the config lives at `adws/adw_sssf_config/sssf.config.yaml` inside it. Resolving it *explicitly* at startup rather than letting `gh` infer it per invocation matters for three reasons:
+
+- **cron has an arbitrary working directory.** A watcher that relies on cwd works from the engineer's terminal and silently watches nothing, or the wrong thing, from a scheduler.
+- **A tracker that is not the forge has no remote to infer from.** Jira and Linear need a project key, and there is nowhere else to get it — so the key has to exist in the config even when GitHub would not have needed it.
+- **It is the same identity Phase 3 records.** `sessions.repo` comes from the same normalised `origin` URL, so a run's tracker project and its trace identity cannot drift apart into two unrelated notions of "which project".
+
+Every command is then passed the resolved value explicitly (`gh issue list --repo <project>`, `--repo` on view/comment/edit alike), never left to cwd. `select` stays purely the filter — *which issues*, never *whose*.
+
+**One watcher per repo**, because the config is per-repo and so is the stamped factory. Watching several repositories is several watcher processes with several configs, which is the honest shape of it: they share nothing but the engineer's forge auth. A single watcher fanning out across repos would need a place to keep cross-repo state, and that place is Phase 3, not this one.
+
 ### 6. The trigger, deliberately outside the factory
 
 `docs/README.md` already places the queue and worker layer *above* the factory, not inside it. Keep it there: `.claude/skills/sssf/scripts/issue_watch.py`, alongside `worktrees.py`, run by cron, a CI schedule, or by hand:
 
-1. Query `issues.select`.
+1. Query `issues.select` against the resolved `project`, and fail loudly at startup if it could not be resolved — a watcher that polls nothing looks identical to a watcher with nothing to do.
 2. For each hit, flip `queued → running`. **The label flip is the lock** — if it fails, someone else took the issue. No queue, no state file, and the state is visible to humans in the place they already look.
 3. Pick the script from `route` by label; spawn it with the issue number.
 4. On exit, flip to `done` or `failed`. The run's own write-back phase supplies the detail.
@@ -182,9 +194,10 @@ Genuinely open:
 3. The issue body reaches the agent as `artifacts[0]`, and the persisted envelope in `envelopes.payload_json` does not contain it.
 4. The run opens a PR whose body closes the issue, and the issue carries one comment naming the `adw_id` and the PR.
 5. Two issues picked up at once produce two worktrees, two branches and two sessions, and neither touches the main checkout.
-6. An issue whose body contains an explicit instruction to modify `adws/adw_modules/` produces a rolled-back phase and a failed run, not a modified module.
-7. Running the watcher twice concurrently over the same issue yields exactly one run — the second loses the label flip.
-8. A failed run leaves the issue labelled `sssf:failed`, its worktree intact, and a comment saying where to look.
+6. The watcher run from `/` by cron watches the same project it watches from the engineer's terminal, and a config with an unresolvable `project` refuses to start rather than idling.
+7. An issue whose body contains an explicit instruction to modify `adws/adw_modules/` produces a rolled-back phase and a failed run, not a modified module.
+8. Running the watcher twice concurrently over the same issue yields exactly one run — the second loses the label flip.
+9. A failed run leaves the issue labelled `sssf:failed`, its worktree intact, and a comment saying where to look.
 
 ## Done when
 
