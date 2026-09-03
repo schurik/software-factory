@@ -236,6 +236,13 @@ Three things the doc did not say, settled while building:
   watcher that must not block is a watcher that wanted a queue, and the queue is
   Phase 3's problem.
 
+The visualizer surfaces the pair rather than scheduling from it. `server/db.ts` selects the two new columns through the same `optionalColumn()` probe every other added column uses, an issue-triggered card carries an amber chip linking to the work item, and the list offers one filter — *from issues* — which appears only once there is something to filter to. What it deliberately does **not** get is the watcher: the app needs bun while the factory needs only `uv`, its own header states the data path as `agents → sqlite → web ui`, and a TypeScript watcher would re-implement project resolution and the label state machine in a second language that could drift from the first. The trigger stays a cron line.
+
+Two things that only showed up once a card was on screen:
+
+- **`trigger` is stamped `engineer` at session start**, not left null for non-issue runs. Otherwise null meant both "an old row" and "somebody typed this", and an analytics query cannot tell those apart — it would report the second as the first.
+- **`record_issue` also writes `request`.** That column is otherwise only written by an *engineer* phase (`PhaseHandle.log`), and an issue-triggered chain has none, so every such run read as blank in `just sessions` and on its card. The issue title is exactly what the field is for.
+
 **Verified end to end** against a stub forge CLI: project resolved from the
 `origin` remote (`git@…:acme/widgets.git` → `acme/widgets`) and passed as
 `--repo` on every call; the body written to `context_handoff/issue.md` under a

@@ -78,6 +78,24 @@ watch(
 
 const running = computed(() => props.session.status === 'running')
 
+// The work item this run came from, when it came from one. `trigger` is what
+// decides — an `issue_url` without it would be a row from before the column
+// existed, and guessing is how a dash becomes a wrong link. The number is the
+// URL's last path segment on every forge that numbers issues; when it is not a
+// number the chip falls back to the word, so an unfamiliar tracker still links.
+const issue = computed(() => {
+  const s = props.session
+  if (s.trigger !== 'issue' || !s.issue_url) return null
+  const tail = s.issue_url.replace(/\/+$/, '').split('/').at(-1) ?? ''
+  return { url: s.issue_url, label: /^\d+$/.test(tail) ? `#${tail}` : 'issue' }
+})
+
+// The card is an <a>; so is this chip. Without stopping the click the browser
+// would follow the outer link instead — the card and the issue are two places.
+function openIssue(event: MouseEvent) {
+  event.stopPropagation()
+}
+
 const range = computed(() => {
   const s = props.session
   let t0 = ts(s.started_at)
@@ -199,6 +217,16 @@ const hiddenRowCount = computed(() =>
     </button>
     <span class="card-id">{{ session.adw_id }}</span>
     <span class="card-adw" :title="session.adw_name ?? ''">{{ session.adw_name ?? '—' }}</span>
+    <a
+      v-if="issue"
+      class="card-issue"
+      :href="issue.url"
+      target="_blank"
+      rel="noopener noreferrer"
+      :title="`started from ${issue.url}`"
+      @click="openIssue"
+      >{{ issue.label }}</a
+    >
     <span class="card-req" :title="session.request ?? ''">{{ session.request }}</span>
 
     <div v-if="rows.length" class="tl">
@@ -340,6 +368,29 @@ const hiddenRowCount = computed(() =>
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Amber, because it is the one thing on the card that did not come from the
+   engineer at the keyboard. Sits beside the ADW name: same question — what
+   produced this run — answered from the other side. */
+.card-issue {
+  flex: none;
+  /* The card stacks its header in a column, so without this the chip would
+     stretch to the full card width — flex: none only holds the main axis. */
+  align-self: flex-start;
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--amber);
+  border: 1px solid rgba(232, 182, 74, 0.35);
+  border-radius: 5px;
+  padding: 1px 6px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.card-issue:hover {
+  border-color: var(--amber);
+  background: rgba(232, 182, 74, 0.1);
 }
 
 .card-req {

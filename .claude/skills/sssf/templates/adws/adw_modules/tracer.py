@@ -175,10 +175,16 @@ class Tracer:
 
     # ── sessions ────────────────────────────────────────────────────────────
     def session_start(self, adw_id: str, engineer: str, adw_name: str | None = None) -> None:
+        # `trigger` is stamped 'engineer' here rather than left null, so null
+        # means one thing only: a row written before the column existed. A run
+        # that nobody can classify and a run somebody typed are different
+        # answers, and an analytics query that cannot tell them apart will
+        # quietly report the first as the second. An issue phase overwrites it.
         self.conn.execute(
-            "INSERT INTO sessions (adw_id, status, engineer, started_at) VALUES (?,?,?,?) "
+            "INSERT INTO sessions (adw_id, status, engineer, started_at, trigger) "
+            "VALUES (?,?,?,?,?) "
             "ON CONFLICT(adw_id) DO UPDATE SET status='running'",
-            (adw_id, "running", engineer, now_iso()),
+            (adw_id, "running", engineer, now_iso(), "engineer"),
         )
         if not adw_name:
             return

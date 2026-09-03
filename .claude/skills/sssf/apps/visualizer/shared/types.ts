@@ -41,6 +41,15 @@ export interface Session {
   total_cost: number | null;
   /** 1 once archived out of the review list. Review state, not run state. */
   archived: number | null;
+  /**
+   * How the run was started: "engineer" (a prompt someone typed) or "issue"
+   * (a labelled work item the watcher picked up). Null on rows written before
+   * the column existed — which is not the same as "engineer", so the UI shows
+   * nothing rather than guessing.
+   */
+  trigger: string | null;
+  /** Canonical URL of the work item that caused this run, when there was one. */
+  issue_url: string | null;
 }
 
 /**

@@ -62,7 +62,7 @@ The gate event payload carries `attempt` too, so the `gate_results` table and th
 ```sql
 sessions (
   adw_id        TEXT PRIMARY KEY,
-  request       TEXT,              -- the engineer's ask
+  request       TEXT,              -- the ask: what the engineer typed, or "#<n> <issue title>"
   status        TEXT,              -- running | success | fail
   engineer      TEXT,
   started_at    TEXT, ended_at TEXT,
@@ -70,7 +70,11 @@ sessions (
   repo_root     TEXT,              -- the worktree the run executed in
   branch        TEXT,              -- sssf/<adw_id>
   base_ref      TEXT,              -- what that branch was cut from...
-  base_commit   TEXT               -- ...pinned to a sha at run start
+  base_commit   TEXT,              -- ...pinned to a sha at run start
+  trigger       TEXT,              -- engineer | issue. NULL only on rows older
+                                   -- than the column: a run nobody can classify
+                                   -- and a run somebody typed are different answers
+  issue_url     TEXT               -- the work item that caused it, when there was one
 );
 
 phases (

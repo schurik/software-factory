@@ -95,6 +95,12 @@ class Run:
         self.issue_number = context.number
         self.issue_url = context.url
         self.tracer.session_issue(self.adw_id, context.url)
+        # `request` is otherwise only written by an ENGINEER phase (see
+        # PhaseHandle.log), and an issue-triggered chain has none — so without
+        # this every such run reads as blank in `just sessions` and on its card
+        # in the UI. The title is what the request field is for: the one line
+        # that says what this run was about.
+        self.tracer.session_request(self.adw_id, f"#{context.number} {context.title}")
 
     # ── usage (run totals mirror what the tracer accumulates in sqlite) ─────
     def add_usage(self, tokens: int, cost: float) -> None:

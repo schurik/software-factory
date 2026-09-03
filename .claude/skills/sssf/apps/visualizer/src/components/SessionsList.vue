@@ -44,8 +44,23 @@ function onArchived(adwId: string) {
   sessions.value = sessions.value.filter((s) => s.adw_id !== adwId)
 }
 
-const ordered = computed(() =>
+const sorted = computed(() =>
   sessions.value.toSorted((a, b) => (ts(b.started_at) || 0) - (ts(a.started_at) || 0)),
+)
+
+// Two questions the list gets asked, so two filters and no more: everything,
+// or only what an issue asked for. `trigger` is null on rows written before the
+// column existed, which is why "issue" tests for the value rather than
+// "engineer" testing for its absence — an old run is not an issue run.
+type Filter = 'all' | 'issue'
+const filter = ref<Filter>('all')
+
+const issueCount = computed(() => sessions.value.filter((s) => s.trigger === 'issue').length)
+
+const ordered = computed(() =>
+  filter.value === 'issue'
+    ? sorted.value.filter((s) => s.trigger === 'issue')
+    : sorted.value,
 )
 </script>
 
@@ -53,7 +68,28 @@ const ordered = computed(() =>
   <div class="sessions">
     <div v-if="apiError" class="error-bar">api unreachable — retrying {{ apiError }}</div>
 
-    <div v-if="ordered.length" class="list-head dim">{{ ordered.length }} runs</div>
+    <div v-if="sorted.length" class="list-head">
+      <span class="dim">{{ ordered.length }} runs</span>
+      <!-- Only offered once there is something to filter TO. A toggle that can
+           only ever empty the list is a way to make the UI look broken. -->
+      <span v-if="issueCount" class="filters">
+        <button
+          type="button"
+          :class="{ on: filter === 'all' }"
+          @click="filter = 'all'"
+        >
+          all
+        </button>
+        <button
+          type="button"
+          :class="{ on: filter === 'issue' }"
+          title="runs a labelled issue started"
+          @click="filter = 'issue'"
+        >
+          from issues · {{ issueCount }}
+        </button>
+      </span>
+    </div>
 
     <div v-if="ordered.length" class="cards">
       <SessionCard
@@ -63,6 +99,9 @@ const ordered = computed(() =>
         :now-ms="nowMs"
         @archived="onArchived"
       />
+    </div>
+    <div v-else-if="filter === 'issue'" class="empty-state">
+      no issue-triggered runs yet — see the issues block in sssf.config.yaml
     </div>
     <div v-else-if="loaded" class="empty-state">no sessions yet — run an ADW to see it here</div>
     <div v-else-if="!apiError" class="empty-state">loading sessions…</div>
@@ -76,8 +115,38 @@ const ordered = computed(() =>
 }
 
 .list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 16px 24px 0;
   font-size: 16px;
+}
+
+.filters {
+  display: flex;
+  gap: 6px;
+}
+
+.filters button {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--faint);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+
+.filters button:hover {
+  color: var(--dim);
+  border-color: var(--border-soft);
+}
+
+.filters button.on {
+  color: var(--amber);
+  border-color: rgba(232, 182, 74, 0.45);
 }
 
 .cards {
