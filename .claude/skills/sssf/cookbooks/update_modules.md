@@ -22,6 +22,7 @@ Extend `adws/adw_modules/` with new low-level logic.
 | `integration.py` | land that branch again — merge, fast-forward ref update, or push-and-open-a-PR, per `worktree.integration`. Refusals are notes, never exceptions. `keep_published()` is the small half: a commit phase calls it to push onto a branch that is ALREADY on the remote, so an open pull request never falls behind its session |
 | `quality.py` | lint / typecheck / build / test as CODE: argv lists, not shell strings, run under the operator's own environment, adapted into an envelope so failures reach the builder through the ordinary door |
 | `issues.py` | fetch a tracked work item, adapt it into an envelope, write comments and label state back. Names no agent on the receiving end |
+| `pull_requests.py` | the same shape one step later: read a pull request AND its review threads in one graphql snapshot, adapt the open ones into an envelope, reply in each thread and resolve it. `actionable()` is the queue definition and lives here alone. Shares `resolve_project`/`_aim`/`_run` with `issues.py` rather than copying them |
 | `changes.py` | deterministic change capture: resolve the base ref, `git diff` into `context_handoff/changes.diff`, adapt the `ChangeSet` into an envelope an agent can be handed |
 | `prompts.py` | load system/user prompt refs from config, render placeholders |
 | `session.py` | mint or join `adw_id`, maintain `agent_map.json`, create session dirs incl. `context_handoff/` |

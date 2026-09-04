@@ -273,6 +273,30 @@ class IssueOutput(EnvelopeBase):
     author: str = ""
 
 
+class PullRequestOutput(EnvelopeBase):
+    """Open review feedback on a pull request, shaped as an envelope.
+
+    The same adapter as IssueOutput, one step later in the life of a branch: an
+    issue is what STARTS a session, review threads are what a session hears back
+    once its work is under review. Both are text written by someone who is not
+    the operator, so both arrive the same way and with the same framing.
+
+    THE THREADS ARE NOT A FIELD, for the reason IssueOutput gives about bodies
+    and for one more: a review thread is a conversation, and the part that
+    matters to the builder is which file and line it hangs on. That reads as a
+    document and not as a JSON blob, so it is written to `artifacts[0]` and the
+    envelope carries only what an ADW needs to decide with — how many threads
+    there are, and where the pull request is.
+    """
+
+    number: int = 0
+    url: str = ""
+    title: str = ""
+    branch: str = ""                # headRefName — the session's own branch
+    base_ref: str = ""
+    thread_count: int = 0           # how many are actionable, not how many exist
+
+
 # ── Agent calls ──────────────────────────────────────────────────────────────
 
 class GateCheck(BaseModel):
@@ -501,11 +525,75 @@ class IssuesConfig(BaseModel):
     force_pr: bool = True
 
 
+class PullRequestStates(BaseModel):
+    """The one label this path needs, and why it is not a state machine.
+
+    An issue is claimed by moving a label, because nothing else at the forge
+    records that a run took it. A review thread already carries that state:
+    unresolved means outstanding, resolved means handled, and both are visible
+    to the reviewer who wrote it. So there is no `queued`/`running`/`done` here.
+
+    `failed` is the exception, and it exists to stop one specific loop: a run
+    that ends red leaves its threads unresolved, which is exactly the condition
+    the watcher launches on — so without a mark it would relaunch the same
+    failing run every poll, forever. A human removing the label is the restart.
+    """
+
+    failed: str = "sssf:pr-failed"
+
+
+class PullRequestsConfig(BaseModel):
+    """Review feedback as a run's entry point: read threads, answer them, resolve.
+
+    The sibling of IssuesConfig one step later in a branch's life, and off by
+    default for the same reason: the text driving the agents is written by
+    whoever can review, not by the engineer at the keyboard.
+
+    Commands rather than API calls, as everywhere else here — with one shape the
+    issue path does not need. Review THREADS (their ids, and whether they are
+    resolved) exist only in the forge's graphql API; `gh pr view --json comments`
+    returns issue-level comments and review bodies, never the inline threads
+    where the actual asks are. So `graphql_command` reads a pull request and
+    writes back into its threads, and there is deliberately no `fetch_command`
+    beside it: one query returns the state AND the threads in one consistent
+    snapshot, where two commands would disagree about a pull request that was
+    merged between them.
+    """
+
+    enabled: bool = False
+    # WHICH REPO, resolved once — same rule and same failure mode as
+    # IssuesConfig.project: a watcher that cannot name its project polls
+    # nothing, and polling nothing looks exactly like having nothing to do.
+    project: str = ""
+    list_command: list[str] = Field(default_factory=lambda: ["gh", "pr", "list"])
+    comment_command: list[str] = Field(default_factory=lambda: ["gh", "pr", "comment"])
+    state_command: list[str] = Field(default_factory=lambda: ["gh", "pr", "edit"])
+    graphql_command: list[str] = Field(default_factory=lambda: ["gh", "api", "graphql"])
+    # Empty = every reviewer is accepted, because the ability to review this
+    # repository's pull requests is itself the authorization. Narrow it where
+    # that is not true — a public fork's PR can be reviewed by anyone.
+    trusted_reviewers: list[str] = Field(default_factory=list)
+    # Bots whose comments are never work: coverage reporters, changelog nags.
+    # The factory's own comments are skipped regardless — see pull_requests.py.
+    ignore_authors: list[str] = Field(default_factory=list)
+    reply_to_threads: bool = True
+    resolve_threads: bool = True
+    # Bounds the prompt, not the pull request. A review with eighty threads is a
+    # conversation to have, not a batch to hand an agent in one go.
+    max_threads: int = 20
+    max_concurrent: int = 2
+    # A merged or closed pull request ends its session: a still-running review
+    # run is killed, and its worktree released. See scripts/pr_watch.py.
+    reap_merged: bool = True
+    states: PullRequestStates = Field(default_factory=PullRequestStates)
+
+
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     worktree: WorktreeConfig = Field(default_factory=WorktreeConfig)
     issues: IssuesConfig = Field(default_factory=IssuesConfig)
+    pull_requests: PullRequestsConfig = Field(default_factory=PullRequestsConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
 
 
@@ -648,6 +736,117 @@ class IssueResult(BaseModel):
     ok: bool = False
     number: int = 0
     commented: bool = False
+    labels_changed: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+# ── Pull requests (review feedback as a run's entry point) ───────────────────
+
+class PullRequestRef(BaseModel):
+    """Which pull request, in which project. `project` empty = whatever config says."""
+
+    number: int
+    project: str = ""
+
+
+class ReviewComment(BaseModel):
+    """One comment inside a review thread. `comment_id` is what a reply targets."""
+
+    comment_id: int = 0             # REST databaseId — replies POST against it
+    author: str = ""
+    body: str = ""
+    created_at: str = ""
+
+
+class ReviewThread(BaseModel):
+    """One review conversation, anchored to a file and line.
+
+    `thread_id` is the GraphQL node id, and it is the only handle that can
+    resolve a thread — REST has no notion of thread state at all. That is why
+    the threads are read through graphql rather than through `gh pr view`, which
+    returns issue-level comments and review bodies but never the inline threads
+    where the actual asks live.
+    """
+
+    thread_id: str = ""
+    path: str = ""                  # the file the thread hangs on, "" for a PR-level one
+    line: Optional[int] = None
+    resolved: bool = False
+    outdated: bool = False          # the diff moved out from under it
+    comments: list[ReviewComment] = Field(default_factory=list)
+
+    @property
+    def author(self) -> str:
+        """Who opened the thread — the ask's author, not the last replier."""
+        return self.comments[0].author if self.comments else ""
+
+    @property
+    def last_author(self) -> str:
+        return self.comments[-1].author if self.comments else ""
+
+
+class PullRequestContext(BaseModel):
+    """One fetched pull request, plus where its threads were written.
+
+    `threads_path` rather than the thread text itself, for the reason
+    PullRequestOutput gives. `threads` is kept in memory because the run has to
+    reply to each one afterwards and needs their ids — it is not persisted into
+    an envelope.
+    """
+
+    number: int
+    project: str = ""
+    url: str = ""
+    title: str = ""
+    state: str = ""                 # OPEN | MERGED | CLOSED
+    draft: bool = False
+    author: str = ""
+    branch: str = ""                # headRefName
+    base_ref: str = ""              # baseRefName
+    review_decision: str = ""
+    threads: list[ReviewThread] = Field(default_factory=list)
+    threads_path: str = ""          # written into context_handoff/
+
+    @property
+    def merged(self) -> bool:
+        return self.state.upper() == "MERGED"
+
+    @property
+    def open(self) -> bool:
+        return self.state.upper() == "OPEN"
+
+
+class PullRequestUpdate(BaseModel):
+    """One write back to a pull request: a thread reply, a comment, a label move.
+
+    `thread_id` addresses both thread writes — the reply and the resolve — so a
+    caller that has a thread can do either without a second identifier.
+    """
+
+    number: int
+    project: str = ""
+    comment: str = ""               # a pull-request-level comment
+    reply: str = ""                 # a reply inside the thread named below
+    thread_id: str = ""             # which thread to reply in and/or resolve
+    resolve: bool = False
+    add_labels: list[str] = Field(default_factory=list)
+    remove_labels: list[str] = Field(default_factory=list)
+
+
+class PullRequestResult(BaseModel):
+    """What a pull-request write actually did — evidence, never a claim.
+
+    Same contract as IssueResult: a forge that did not hear about a finished run
+    is not a failed run. The commits are on the branch and the branch is pushed
+    either way; a reviewer who did not get a reply is something a human can
+    finish by hand, and failing the run over it would throw away the work.
+    """
+
+    ok: bool = False
+    number: int = 0
+    commented: bool = False
+    replied: bool = False
+    resolved: list[str] = Field(default_factory=list)   # thread ids
     labels_changed: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 

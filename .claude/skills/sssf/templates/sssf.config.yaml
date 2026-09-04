@@ -172,6 +172,49 @@ issues:
   # worktree.integration.mode says. Enforced in integration.py, not here.
   force_pr: true
 
+# Review feedback on the factory's OWN pull requests, answered in the session
+# that opened them. OFF by default, for the reason `issues` is: the text driving
+# the agents is written by whoever can review, not by the engineer at the
+# keyboard.
+#
+# The trigger is `<skill>/scripts/pr_watch.py`, or `just pr-review <n>` by hand.
+# THE UNRESOLVED THREAD IS THE QUEUE — there is no label to claim and no state
+# file, because the forge already tracks which asks are outstanding and shows it
+# to the reviewer who wrote them. A run answers a thread and resolves it, so the
+# queue empties itself.
+pull_requests:
+  enabled: false
+  project: ""                      # "" = resolved once from origin, as in issues
+  # Review THREADS are the one thing `gh pr view --json` cannot return — it
+  # gives issue-level comments and review bodies, never the inline threads where
+  # the asks actually are, and never `isResolved`. So a pull request is read
+  # through graphql (one query: state AND threads, one consistent snapshot), and
+  # replies and resolves are written back the same way.
+  list_command:    ["gh", "pr", "list"]
+  comment_command: ["gh", "pr", "comment"]
+  state_command:   ["gh", "pr", "edit"]
+  graphql_command: ["gh", "api", "graphql"]
+  # [] accepts everyone: being able to review this repository's pull requests is
+  # itself the authorization. Narrow it where that is not true — anyone can
+  # comment on a public repository's pull request.
+  trusted_reviewers: []
+  # Bots whose comments are never work an agent can do. The factory's own
+  # comments are skipped regardless, or a run would answer its own answer.
+  ignore_authors: []               # e.g. ["codecov[bot]", "github-actions[bot]"]
+  reply_to_threads: true           # answer in the thread before resolving it
+  resolve_threads: true            # ...and only when the run actually went green
+  max_threads: 20                  # bounds the prompt; a bigger review is a conversation
+  max_concurrent: 2
+  # A merged or closed pull request ends its session: pr_watch stops a review run
+  # still working that branch and releases its worktree. The BRANCH is never
+  # deleted — that belongs to whoever merged.
+  reap_merged: true
+  states:
+    # The only label this path uses, and it stops one specific loop: a run that
+    # ends red leaves its threads open, which is exactly what launched it. A
+    # human removing this label is the restart.
+    failed: "sssf:pr-failed"
+
 # The starter roster runs entirely on pi. To move ONE agent to Claude Code, give it a
 # backend and a model of the right shape — the rest of its entry is unchanged, and it
 # can hand its envelope to a pi agent in the same chain:

@@ -177,6 +177,49 @@ That excludes a second watcher **on the same machine**, which is the deployment 
 
 The trigger itself sits *above* the factory: `<skill>/scripts/issue_watch.py` (`just issues`, `issues-status`, `issues-watch`), run by cron or by hand.
 
+### `pull_requests`
+
+Review feedback on the factory's own pull requests, answered inside the session that opened them. **Off by default**, for the reason `issues` is: the text driving the agents is written by whoever can review, not by the engineer at the keyboard.
+
+This is the other end of a branch's life. `adw_pr_review.py` reads `sssf/<adw_id>` off the pull request's head ref, joins **that** session, works the worktree it already has (re-created from the branch if an accepted run pruned it), and `integration.keep_published()` pushes onto the branch that is already on the remote — so the pull request is **updated, never replaced**, and no phase in the chain can reach the base branch.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `enabled` | bool | Default `false`. The watcher refuses to poll until this is on; `just pr-review <n>` by hand does not consult it, exactly as `just issue 42` does not consult `issues.enabled`. |
+| `project` | string | Which repo. `""` resolves once from the `origin` remote — same rule and same cron failure mode as `issues.project`. A graphql query must name its repository, so an unresolved project is refused rather than guessed. |
+| `list_command` | list[string] | How open pull requests are listed for the watcher, filtered to `worktree.branch_prefix`. |
+| `comment_command`, `state_command` | list[string] | The pull-request-level comment, and the one label move. Aimed with `--repo <project>`, like every other forge call here. |
+| `graphql_command` | list[string] | **Why this exists.** Review *threads* — their ids, and `isResolved` — are unreachable from `gh pr view --json`, which returns issue-level comments and review bodies but never the inline threads where the asks are. One query returns the state *and* the threads in one snapshot; two commands would disagree about a pull request merged between them. Replies and resolves go back the same way. |
+| `trusted_reviewers` | list[string] | `[]` accepts everyone — being able to review this repository's pull requests *is* the authorization. Narrow it where that is not true, such as a public repository where anyone may comment. |
+| `ignore_authors` | list[string] | Bots whose comments are never work an agent can do (coverage reporters, changelog nags). The factory's own comments are skipped regardless. |
+| `reply_to_threads`, `resolve_threads` | bool | The two halves of the write-back. The reply goes **first**, and a failed reply **skips** the resolve: a resolved thread with no answer in it reads as feedback that was dismissed. |
+| `max_threads` | int | Bounds the prompt, not the pull request. A review with eighty threads is a conversation to have, not a batch to hand an agent. |
+| `max_concurrent` | int | Runs in flight, counted from the same session table `issues` uses. |
+| `reap_merged` | bool | Default `true`. See **Merged is the end of the session** below. |
+| `states.failed` | string | The only label this path uses. |
+
+**The unresolved thread is the queue.** No label to claim, no state file, no watermark column. A thread a reviewer opened is outstanding until something resolves it, and the run that answers it resolves it — the same trick `issue_watch` plays with a label, except the forge maintains this state for us and shows it to the reviewer who wrote it. A second run therefore finds only what is genuinely left. Four things are excluded from the queue: resolved threads, outdated ones (the diff moved out from under them), `ignore_authors`, and any thread whose **last word is the factory's own** — without that test a run answers its own answer, forever.
+
+`states.failed` exists for the one case the forge's state cannot express: a run that ends red leaves its threads open, which is exactly the condition that launched it. Without a mark the next poll relaunches the same failing run forever. A human removing the label is the restart.
+
+**Merged is the end of the session.** A merged pull request vanishes from the watcher's queue on its own, but three things would otherwise hang. `pr_watch`'s reap pass — over the worktrees on disk plus the sessions that believe they are running, never over the repository's history, so the work shrinks as the factory tidies up — handles each:
+
+1. **A run still working that branch is stopped**, with `SIGTERM`, which `session.py` turns into a clean finish. Letting it continue is not merely pointless: `keep_published` would push onto a branch that has already landed and may already be deleted.
+2. **Its worktree is released**, by the same conservative rule `just worktrees-prune` uses — ended session, clean tree. Uncommitted work stays put even here. **The branch is never deleted**, locally or on the remote; that belongs to whoever merged.
+3. **The `states.failed` label and the lock file are dropped.**
+
+Idempotent throughout: a second pass finds no process, no worktree and no label.
+
+**The trust boundary**, in the order it is enforced:
+
+1. **The branch prefix is the authorization** — only `sssf/<adw_id>` is worked. A branch no run of this factory produced has no pinned base, no trace and no worktree, and is refused before a session exists.
+2. **`trusted_reviewers`**, checked in the `pr` phase, before any agent is spawned.
+3. **The threads are an artifact, not a field** — they reach the builder as `artifacts[0]`, framed as reviewers' requests to weigh rather than instructions to follow, and the prompt slot carries only the operator's own sentence.
+4. **`writes:` and `protected_files`** are unchanged but load-bearing, as on the issue path.
+5. **The base branch is unreachable** — this chain has no integration phase at all, and `integration.integrate()` additionally downgrades a `merge` on a `pr_review`-triggered session, so a later `just integrate` cannot land it either.
+
+The trigger sits *above* the factory: `<skill>/scripts/pr_watch.py` (`just prs`, `prs-status`, `prs-watch`). `prs-watch --pr <n>` watches a single pull request and exits when it merges or closes.
+
 ### `agents[]`
 
 | Field | Required | Meaning |

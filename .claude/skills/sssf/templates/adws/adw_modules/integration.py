@@ -61,16 +61,27 @@ def integrate(run, params: IntegrationRequest) -> IntegrationResult:
     # terminal, so the one thing that cannot be left to config discipline is
     # whether a merge is even reachable on that path. `mode: none` still wins —
     # a repository that wants nothing landed gets nothing landed.
+    downgrade = ""
     if (run.trigger == "issue" and run.cfg.issues.force_pr
             and mode == "merge"):
         mode = "pr"
+        downgrade = ("issue-triggered run: merge downgraded to pr "
+                     "(issues.force_pr) — a stranger's prompt does not "
+                     "move the base branch")
+    # A run that exists BECAUSE the branch is under review is the one run that
+    # must never end the review. There is no config switch beside this one: an
+    # engineer who wants the branch merged says so by merging the pull request,
+    # which is the whole point of having opened it. `mode: none` still wins.
+    elif run.trigger == "pr_review" and mode == "merge":
+        mode = "pr"
+        downgrade = ("review-triggered run: merge downgraded to pr — this "
+                     "branch is already under review, and merging it here "
+                     "would land it without the review it is waiting for")
 
     result = IntegrationResult(mode=mode, branch=workspace.branch,
                                base_ref=workspace.base_ref)
-    if mode != (params.mode or config.mode):
-        result.notes.append("issue-triggered run: merge downgraded to pr "
-                            "(issues.force_pr) — a stranger's prompt does not "
-                            "move the base branch")
+    if downgrade:
+        result.notes.append(downgrade)
 
     if mode == "none":
         result.ok = True
