@@ -31,7 +31,16 @@ CREATE TABLE IF NOT EXISTS sessions (
   repo_root     TEXT,
   branch        TEXT,
   base_ref      TEXT,
-  base_commit   TEXT
+  base_commit   TEXT,
+  -- What asked for this run. `trigger` is how it started at all ('engineer' |
+  -- 'issue'); `issue_url` is canonical rather than a number, because a number
+  -- means nothing without the project it belongs to.
+  trigger       TEXT,
+  issue_url     TEXT,
+  -- Where the run's branch ended up, recorded by the integration phase. The
+  -- URL is the pointer; WHY a branch did not land stays in that phase's notes,
+  -- because a refusal is a paragraph and this is a column.
+  pr_url        TEXT
 );
 CREATE TABLE IF NOT EXISTS phases (
   phase_id      TEXT PRIMARY KEY,
@@ -108,7 +117,40 @@ MIGRATIONS = [("agent_sessions", "color", "TEXT"),
               ("sessions", "repo_root", "TEXT"),
               ("sessions", "branch", "TEXT"),
               ("sessions", "base_ref", "TEXT"),
-              ("sessions", "base_commit", "TEXT")]
+              ("sessions", "base_commit", "TEXT"),
+              ("sessions", "trigger", "TEXT"),
+              ("sessions", "issue_url", "TEXT"),
+              ("sessions", "pr_url", "TEXT")]
+
+
+def running_adw_pids(db_path: str | Path) -> dict[str, int]:
+    """{adw_id: pid} for every session that BELIEVES it is running, read-only.
+
+    "Believes" is the point. A session goes to `running` at start and is only
+    ever closed by `run.finish()` or the SIGTERM/SIGINT handler — a SIGKILL, an
+    OOM or a reboot leaves the row saying `running` forever. Anything that
+    budgets on that count (the issue watcher's max_concurrent) would wedge
+    permanently after two such deaths, and the symptom is indistinguishable
+    from a genuinely busy factory.
+
+    The pid is the way out: the caller checks whether the process still exists.
+    That is why the adw process row is written before the first phase opens.
+    """
+    path = Path(db_path)
+    if not path.exists():
+        return {}
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+    try:
+        rows = conn.execute(
+            "SELECT s.adw_id, p.pid FROM sessions s "
+            "  JOIN processes p ON p.adw_id = s.adw_id "
+            " WHERE s.status = 'running' AND p.kind = 'adw' AND p.ended_at IS NULL"
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    return {adw_id: pid for adw_id, pid in rows if pid}
 
 
 def session_statuses(db_path: str | Path) -> dict[str, str]:
@@ -168,10 +210,16 @@ class Tracer:
 
     # ── sessions ────────────────────────────────────────────────────────────
     def session_start(self, adw_id: str, engineer: str, adw_name: str | None = None) -> None:
+        # `trigger` is stamped 'engineer' here rather than left null, so null
+        # means one thing only: a row written before the column existed. A run
+        # that nobody can classify and a run somebody typed are different
+        # answers, and an analytics query that cannot tell them apart will
+        # quietly report the first as the second. An issue phase overwrites it.
         self.conn.execute(
-            "INSERT INTO sessions (adw_id, status, engineer, started_at) VALUES (?,?,?,?) "
+            "INSERT INTO sessions (adw_id, status, engineer, started_at, trigger) "
+            "VALUES (?,?,?,?,?) "
             "ON CONFLICT(adw_id) DO UPDATE SET status='running'",
-            (adw_id, "running", engineer, now_iso()),
+            (adw_id, "running", engineer, now_iso(), "engineer"),
         )
         if not adw_name:
             return
@@ -201,6 +249,44 @@ class Tracer:
     def session_request(self, adw_id: str, request: str) -> None:
         self.conn.execute("UPDATE sessions SET request=? WHERE adw_id=?",
                           (request[:500], adw_id))
+
+    def session_issue(self, adw_id: str, url: str, trigger: str = "issue") -> None:
+        """Tie this run to the work item that caused it. One half of the pair.
+
+        The other half is the comment the run posts back on the issue. Both are
+        needed: this answers "which run belongs to #42" from the trace, and the
+        comment answers "which issue produced this branch" from the tracker.
+        """
+        self.conn.execute("UPDATE sessions SET issue_url=?, trigger=? WHERE adw_id=?",
+                          (url[:500], trigger, adw_id))
+
+    def session_provenance(self, adw_id: str) -> tuple[str, str]:
+        """(trigger, issue_url) for a session, "" when unknown. Read, not written.
+
+        A run is one PROCESS but a session can span several — `just integrate
+        <adw_id>` re-enters an ADW hours later — and provenance that lived only
+        in the first process's memory was gone by then. `force_pr` then read
+        "engineer" on an issue-triggered session and merged into the base
+        branch: the one control this phase put in code rather than in config,
+        defeated by the documented follow-up path.
+        """
+        row = self.conn.execute(
+            "SELECT trigger, issue_url FROM sessions WHERE adw_id=?", (adw_id,)
+        ).fetchone()
+        return (row[0] or "", row[1] or "") if row else ("", "")
+
+    def session_pr(self, adw_id: str, url: str) -> None:
+        """Record the pull request this run's branch became.
+
+        Written from integration.integrate() rather than from an ADW, so no
+        chain can land a branch and forget to say where it went. Empty urls are
+        ignored: a merge and a refusal both produce none, and overwriting a real
+        url with "" on a second integration attempt would lose the pointer.
+        """
+        if not url:
+            return
+        self.conn.execute("UPDATE sessions SET pr_url=? WHERE adw_id=?",
+                          (url[:500], adw_id))
 
     def session_finish(self, adw_id: str, ok: bool) -> None:
         self.conn.execute(

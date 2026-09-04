@@ -59,6 +59,7 @@ It is isolation, not a sandbox — an agent with `bash` can leave the worktree, 
 | `/sssf install`, set up the factory in this repo | [cookbooks/install.md](cookbooks/install.md) |
 | create a new ADW / workflow | [cookbooks/create_adw.md](cookbooks/create_adw.md) |
 | land a run's branch, clean up worktrees | [references/config.md](references/config.md#worktreeintegration) |
+| start runs from tracked issues, run the watcher | [references/config.md](references/config.md#issues) |
 | modify an existing ADW chain | [cookbooks/update_adw.md](cookbooks/update_adw.md) |
 | create the config / agent roster | [cookbooks/create_config.md](cookbooks/create_config.md) |
 | add or retune an agent (model, thinking, tools, prompts) | [cookbooks/update_config.md](cookbooks/update_config.md) |

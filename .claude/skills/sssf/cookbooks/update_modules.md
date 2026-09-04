@@ -17,11 +17,15 @@ Extend `adws/adw_modules/` with new low-level logic.
 | `agent_cc.py` | the Claude Code backend — non-interactive `claude -p --output-format stream-json`, same live tail; `--session-id` is create-ONLY so the first call creates and every later one `--resume`s, determinism switches (`safe_mode`, `setting_sources`, `strict_mcp_config`) come from `claude_code:` in the config, and `commands_changed` is filtered before it can reach the trace |
 | `tool_calls.py` | the normalized tool-call record and its ledger — one shape per completed call, whichever backend ran it. Adding a third backend means writing a tracker that fills this in, and nothing else |
 | `gates.py` | validation gates over envelope claims |
+| `permissions.py` | the write boundary — snapshots the tree, checks it after every agent call against that agent's `writes` plus `defaults.protected_files`, rolls unauthorized changes back and kills the phase. `tools` is a capability list; THIS is the boundary |
+| `worktree.py` | create-or-join the run's worktree and branch, and release it when a clean accepted run no longer needs it |
+| `integration.py` | land that branch again — merge, fast-forward ref update, or push-and-open-a-PR, per `worktree.integration`. Refusals are notes, never exceptions |
+| `quality.py` | lint / typecheck / build / test as CODE: argv lists, not shell strings, run under the operator's own environment, adapted into an envelope so failures reach the builder through the ordinary door |
+| `issues.py` | fetch a tracked work item, adapt it into an envelope, write comments and label state back. Names no agent on the receiving end |
 | `changes.py` | deterministic change capture: resolve the base ref, `git diff` into `context_handoff/changes.diff`, adapt the `ChangeSet` into an envelope an agent can be handed |
 | `prompts.py` | load system/user prompt refs from config, render placeholders |
 | `session.py` | mint or join `adw_id`, maintain `agent_map.json`, create session dirs incl. `context_handoff/` |
 | `tracer.py` | append JSONL **and** insert every event into `sssf.db` as it happens |
-| `console.py` | the terminal narrative — every line printed also lands in the db as a `log` event, so the UI reads the same story; plain sequential lines, no spinners |
 | `console.py` | the rich stdout reporter — every line printed is ALSO traced as a `log` event (`{message, level}`) so the terminal and the swim-lane UI tell the same story |
 | `git_helper.py` | branch, status, diff, commit — the raw plumbing `changes.py` composes |
 | `utils.py` | safe subprocess env, logging, `resolve_prompt` |

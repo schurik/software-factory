@@ -13,6 +13,7 @@
 import { existsSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { SssfDb, resolveDbPath } from "./db.ts";
+import { forgeAvailable, prStatus } from "./pr.ts";
 import type { AgentPrompts, ApiError, HealthResponse } from "../shared/types.ts";
 
 const PORT = Number(process.env.PORT ?? 4600);
@@ -120,6 +121,7 @@ const server = Bun.serve({
           db: db.path,
           journal_mode: db.journalMode,
           sessions: db.sessionCount(),
+          forge: forgeAvailable(),
         } satisfies HealthResponse),
     ),
 
@@ -128,6 +130,20 @@ const server = Bun.serve({
     "/api/sessions/:adw_id": safely((req) => {
       const detail = db.sessionDetail(param(req, "adw_id"));
       return detail ? json(detail) : notFound(`no session ${param(req, "adw_id")}`);
+    }),
+
+    // The one route that looks outside the database. The trace knows the url
+    // the run recorded; only the forge knows whether that PR is still open.
+    // Read-only, cached, and it answers `available: false` rather than failing
+    // when there is no gh — see server/pr.ts.
+    "/api/sessions/:adw_id/pr": safely(async (req) => {
+      const adwId = param(req, "adw_id");
+      // session(), not sessionDetail(): this needs one column, and the detail
+      // build also scans and JSON-parses every agent_end event for the usage
+      // totals — three queries and a parse loop to read a url.
+      const session = db.session(adwId);
+      if (!session) return notFound(`no session ${adwId}`);
+      return json(await prStatus(session.pr_url));
     }),
 
     // The one write. Archiving is review triage — it belongs to the reader, not

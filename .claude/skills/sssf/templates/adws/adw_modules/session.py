@@ -62,6 +62,11 @@ def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
     run = Run(RunSpec(cfg=cfg, adw_id=adw_id, engineer=engineer_name(),
                       workspace=workspace), tracer)
     tracer.session_start(adw_id, run.engineer, adw_name=Path(sys.argv[0]).stem)
+    # Read AFTER session_start, so a brand-new session has its row to read from
+    # and a joined one has the first process's answer rather than this one's
+    # default. An issue-triggered session that a later ADW re-enters must still
+    # know it was issue-triggered — integration.py refuses to merge on that.
+    run.adopt_provenance(*tracer.session_provenance(adw_id))
     tracer.session_workspace(adw_id, workspace)
     # This process is the run. Record it before any phase opens, so a run that
     # hangs in its first agent call is still killable by adw_id.

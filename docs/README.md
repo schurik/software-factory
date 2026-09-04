@@ -31,6 +31,7 @@ Upstream's README says it plainly: *"no sandbox, no branch per run, no merge ste
 2. **The trace is local and anonymous.** It lives in a gitignored SQLite file inside each repo. There is no cross-repo view, and no column anywhere records which project, repository, branch or commit a run belonged to.
 3. ~~**Runs execute in the dirty working tree, on the current branch.** Two concurrent runs collide. A failed run leaves its mess where you were working.~~ **Fixed in Phase 2:** a git worktree and branch per run, plus a configurable integration phase that lands it.
 4. **Past runs are never read back.** The trace is a write-only archive.
+5. ~~**Every run starts from a shell.** There is no path from a tracked work item to a run, and no path back.~~ **Fixed in Phase 5:** a labelled issue starts a run, and the run reports back to it.
 
 ## Decisions already fixed
 
@@ -44,7 +45,7 @@ These are settled; the phase documents assume them rather than re-argue them.
 | Execution environment | Local, with a git worktree and branch per run as the first step |
 | Document language | English, matching the rest of the repository |
 
-## The four phases
+## The phases
 
 | Phase | Document | Unlocks | Status |
 |---|---|---|---|
@@ -52,20 +53,23 @@ These are settled; the phase documents assume them rather than re-argue them.
 | 2 | [Worktree per run](phase-2-worktree-per-run.md) | Isolated, concurrent, non-destructive runs; the prerequisite for sandboxing | **built** — see its *As built* section |
 | 3 | [Convex trace store](phase-3-convex-trace-store.md) | One queryable place for every run from every repo | not started |
 | 4 | [Learning loop](phase-4-learning-loop.md) | Past runs improve future runs | not started |
+| 5 | [Issue tracking](phase-5-issue-tracking.md) | A run starts from an issue, and reports back to it | **built** — see its *As built* section |
 
 ### Dependency order
 
 ```
 Phase 1 (dual backend) ─┐
                         ├─→ Phase 3 (Convex) ─→ Phase 4 (learning)
-Phase 2 (worktree) ─────┘
+Phase 2 (worktree) ─────┤
+                        └─→ Phase 5 (issue tracking)
 ```
 
 - **Phase 1 and Phase 2 are independent of each other.** They touch disjoint modules: Phase 1 changes `agents.py`, `agent_cc.py`, `agent_pi.py` and `data_types.py`; Phase 2 changes `git_helper.py`, `gates.py`, `runner.py` and `session.py`. Either can go first, and both are roughly a day of work.
 - **Phase 3 does not strictly require Phase 1**, but is meaningfully easier after it: once tool-call events are normalised across backends, the Convex schema does not need a per-backend shape.
 - **Phase 4 hard-depends on Phase 3.** There is nothing to learn from until the central store exists.
+- **Phase 5 depends only on Phase 2**, which is built, so it can be taken at any point. It is independent of Phases 3 and 4 except for one coordination point: both it and Phase 3 add columns to `sessions`, through the same additive `MIGRATIONS` list.
 
-Recommended order: **2 → 1 → 3 → 4**. Phase 2 first, because running in a dirty working tree is the thing most likely to cost you real work while you build everything else. Phases 2 and 1 are done; Phase 3 is next, and it inherits a tool-call event shape that is already normalised across backends — so its schema needs no per-backend variant.
+Recommended order: **2 → 1 → 3 → 4**, with **5 wherever it is wanted**. Phase 2 first, because running in a dirty working tree is the thing most likely to cost you real work while you build everything else. Phases 2 and 1 are done; Phase 3 is next, and it inherits a tool-call event shape that is already normalised across backends — so its schema needs no per-backend variant.
 
 ## Deliberate non-goals for now
 

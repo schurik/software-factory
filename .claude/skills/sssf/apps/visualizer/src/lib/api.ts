@@ -4,6 +4,7 @@ import type {
   EventsPage,
   GateResult,
   HealthResponse,
+  PrStatus,
   PromptsResponse,
   SessionDetail,
   SessionSummary,
@@ -49,6 +50,20 @@ export async function archiveSession(adwId: string, archived = true): Promise<vo
     body: JSON.stringify({ archived }),
   })
   if (!res.ok) throw new Error(`POST ${url} → ${res.status}`)
+}
+
+/**
+ * Live PR state for one run. Never throws for the ordinary "no PR" and "no gh"
+ * cases — the server answers `available: false` with a reason, and a card that
+ * cannot reach the api at all is better off showing the recorded url than an
+ * error where a status pill goes.
+ */
+export async function fetchPrStatus(adwId: string): Promise<PrStatus> {
+  try {
+    return (await getJson(`/api/sessions/${encodeURIComponent(adwId)}/pr`)) as PrStatus
+  } catch (error) {
+    return { available: false, reason: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 export function fetchHealth(): Promise<HealthResponse> {

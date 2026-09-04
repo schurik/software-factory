@@ -23,6 +23,9 @@ TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 GITIGNORE_ENTRIES = [
     "adws/adw_data/sessions/",
     "adws/adw_data/sssf.db*",
+    # One file per issue the watcher has ever claimed. Runtime, and the flock
+    # is what matters — the file itself is just something to hold it on.
+    "adws/adw_data/issue-locks/",
     ".env",
     # One worktree per run, checked out inside the repo. Ignored rather than
     # committed for the obvious reason, and because chains that end in a commit

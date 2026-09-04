@@ -51,6 +51,10 @@ The gate event payload carries `attempt` too, so the `gate_results` table and th
 
 **Where a run ran is written at the START.** The four workspace columns are set the moment the session opens, not when it ends — a killed run is exactly the one whose worktree you need to find, and it never reaches an end. They also outlive what they describe: an accepted run's worktree is removed while its branch is kept, so `branch` stays the answer to "where did this run's work go" long after `repo_root` is gone.
 
+**Where the ask came from and where the work went** are `trigger`, `issue_url` and `pr_url`, and they are written by three different things at three different times: `trigger` at session start (`engineer`, overwritten by an issue phase), `issue_url` when the issue is fetched, `pr_url` by `integration.integrate()` when a pull request is actually opened. `trigger` is NULL only on rows older than the column — a run nobody can classify and a run somebody typed are different answers, and stamping `engineer` at start is what keeps them apart. A NULL `pr_url` covers three different endings — the run merged instead, integration refused, or the chain never got that far — so the *reason* lives in the integrate phase's notes rather than in a column.
+
+**Provenance survives a session, not just a process.** `just integrate <adw_id>` re-enters an ADW hours later, and `session.ensure()` reads `trigger`/`issue_url` back into the Run at start. Without that, a second process would default to `engineer` and `issues.force_pr` would let an issue-triggered run merge into the base branch — the one control that phase put in code rather than in config, defeated by the documented follow-up path.
+
 **Streaming is solved by construction.** Both backends tail their CLI's JSONL stdout line by line and the tracer inserts each event into `sssf.db` **while the agent is still working** — never batched at phase end (verified in the first smoke run of each: tool calls visible mid-run). Everything downstream is a poll → render.
 
 **One tool-call shape, whichever backend ran it.** `adw_modules/tool_calls.py` owns the record — `tool`, `tool_call_id`, `args`, `ok`, `label`, `result_snippet`, and the call's real span — and each backend has a tracker that folds its own event vocabulary into it. Pi announces a `toolCall` block and closes with `tool_execution_end`; Claude Code announces a `tool_use` block in an `assistant` message and closes with `tool_result` blocks in the following `user` message, several at once when calls ran in parallel. Neither the trace schema nor the visualizer knows the difference.
@@ -62,7 +66,7 @@ The gate event payload carries `attempt` too, so the `gate_results` table and th
 ```sql
 sessions (
   adw_id        TEXT PRIMARY KEY,
-  request       TEXT,              -- the engineer's ask
+  request       TEXT,              -- the ask: what the engineer typed, or "#<n> <issue title>"
   status        TEXT,              -- running | success | fail
   engineer      TEXT,
   started_at    TEXT, ended_at TEXT,
@@ -70,7 +74,15 @@ sessions (
   repo_root     TEXT,              -- the worktree the run executed in
   branch        TEXT,              -- sssf/<adw_id>
   base_ref      TEXT,              -- what that branch was cut from...
-  base_commit   TEXT               -- ...pinned to a sha at run start
+  base_commit   TEXT,              -- ...pinned to a sha at run start
+  trigger       TEXT,              -- engineer | issue. NULL only on rows older
+                                   -- than the column: a run nobody can classify
+                                   -- and a run somebody typed are different answers
+  issue_url     TEXT,              -- the work item that caused it, when there was one
+  pr_url        TEXT               -- the pull request its branch became. NULL covers
+                                   -- three endings — merged instead, integration
+                                   -- refused, or the chain never got that far — and
+                                   -- the integrate phase's notes say which
 );
 
 phases (
@@ -160,6 +172,23 @@ PRAGMA busy_timeout=5000;
 ```
 
 WAL allows readers during writes. Writers are the tracers of running ADW processes; concurrent writers are fine given one small transaction per event plus `busy_timeout`. The visualizer reads on a readonly connection with exactly one exception: archiving a session (`POST /api/sessions/:adw_id/archive`) opens a second connection to set `sessions.archived`. That flag is review triage — it says a human has looked at the run — so it is the reader's state living on the row, and no tracer ever writes or reads it.
+
+## Reading the trace for provenance
+
+```sql
+-- where the ask came from and where the work went
+SELECT adw_id, trigger, status, substr(request,1,40), issue_url, pr_url
+  FROM sessions ORDER BY started_at DESC LIMIT 10;
+
+-- runs a stranger asked for, and whether their PR exists
+SELECT adw_id, status, issue_url, pr_url FROM sessions WHERE trigger = 'issue';
+
+-- why a branch did not land: the integrate phase's own notes
+SELECT e.payload_json FROM events e JOIN phases p ON p.phase_id = e.phase_id
+ WHERE p.name = 'integrate' AND e.type = 'log' AND e.adw_id = ?;
+```
+
+**A `running` session is a belief, not a fact.** Nothing reaps a row left behind by a SIGKILL, an OOM or a reboot, so anything that budgets on that count must check the pid: `processes` holds one `kind='adw'` row per run, written before the first phase opens precisely so a hung or dead run stays identifiable. `tracer.running_adw_pids()` is the read; signal 0 is the liveness probe. The issue watcher does exactly this — counting believed-running sessions instead would wedge it at `max_concurrent` permanently, looking identical to a busy factory.
 
 ## Polling contract
 

@@ -38,8 +38,22 @@ def integrate(run, params: IntegrationRequest) -> IntegrationResult:
     config = run.cfg.worktree.integration
     workspace = run.workspace
     mode = params.mode or config.mode
+
+    # An externally triggered run must not be able to move the base branch. The
+    # prompt came from whoever can file an issue, not from the engineer's own
+    # terminal, so the one thing that cannot be left to config discipline is
+    # whether a merge is even reachable on that path. `mode: none` still wins —
+    # a repository that wants nothing landed gets nothing landed.
+    if (run.trigger == "issue" and run.cfg.issues.force_pr
+            and mode == "merge"):
+        mode = "pr"
+
     result = IntegrationResult(mode=mode, branch=workspace.branch,
                                base_ref=workspace.base_ref)
+    if mode != (params.mode or config.mode):
+        result.notes.append("issue-triggered run: merge downgraded to pr "
+                            "(issues.force_pr) — a stranger's prompt does not "
+                            "move the base branch")
 
     if mode == "none":
         result.ok = True
@@ -113,6 +127,35 @@ def _merge(run, result: IntegrationResult) -> IntegrationResult:
     return result
 
 
+def _pr_body(run, template: str, result: IntegrationResult) -> str:
+    """Render the configured PR body. Empty template = let pr_command decide.
+
+    `Closes #<n>` in the template is what makes an issue-triggered run close its
+    own issue on merge — the forge does it, so nothing here has to.
+
+    A BAD TEMPLATE MUST NOT KILL THE RUN. This is operator-authored markdown, and
+    `str.format` treats every brace as a field: one JSON snippet, one `${{ }}`,
+    one stray `{` and it raises — inside the integrate phase, after the commits
+    landed and the branch was pushed, so the chain dies with its work committed
+    and `run.finish()` never reached. Every other failure in this module comes
+    back as a note; a typo in a config string has no business being the
+    exception. The PR gets opened without a body instead, and the note says why.
+    """
+    if not template:
+        return ""
+    try:
+        return template.format(adw_id=run.adw_id, branch=result.branch,
+                               base_ref=result.base_ref,
+                               issue_number=run.issue_number or "",
+                               issue_url=run.issue_url or "")
+    except (KeyError, IndexError, ValueError) as error:
+        result.notes.append(
+            f"pr_body_template could not be rendered ({type(error).__name__}: "
+            f"{error}) — opening the pull request without a body. A literal "
+            f"brace in that template must be doubled: {{{{ and }}}}")
+        return ""
+
+
 def _open_pr(run, result: IntegrationResult, params: IntegrationRequest) -> IntegrationResult:
     """Push the branch, and optionally ask the forge CLI to open the PR.
 
@@ -148,6 +191,9 @@ def _open_pr(run, result: IntegrationResult, params: IntegrationRequest) -> Inte
     argv = [*config.pr_command, "--base", result.base_ref, "--head", result.branch]
     if params.title:
         argv += ["--title", params.title]
+    body = params.body or _pr_body(run, config.pr_body_template, result)
+    if body:
+        argv += ["--body", body]
     # The forge CLI is already authenticated in the engineer's shell, so it runs
     # under their environment rather than the ADW's ephemeral `uv run` venv.
     completed = subprocess.run(argv, cwd=tree, env=operator_env(),
@@ -159,5 +205,8 @@ def _open_pr(run, result: IntegrationResult, params: IntegrationRequest) -> Inte
         return result
     result.pr_url = next((line for line in completed.stdout.split()
                           if line.startswith("http")), "")
+    # Recorded here, not in the ADW: this is the only place a pr url exists, and
+    # a chain that landed a branch must not be able to forget where it went.
+    run.tracer.session_pr(run.adw_id, result.pr_url)
     result.notes.append(f"opened a pull request{': ' + result.pr_url if result.pr_url else ''}")
     return result

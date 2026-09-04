@@ -59,6 +59,15 @@ class Run:
         self.workspace = spec.workspace
         self.repo_root = spec.workspace.repo_root      # the tree agents work in
         self.main_root = spec.workspace.main_root      # the checkout that owns data_dir
+        # What asked for this run. 'engineer' until an issue phase says otherwise
+        # — and integration reads it, because a prompt written by whoever can
+        # file an issue does not get to move the base branch.
+        self.trigger = "engineer"
+        self.issue_number = 0
+        self.issue_url = ""
+        # ...unless the session already knows better. A joined run inherits the
+        # provenance the first process recorded; without this every re-entry
+        # would claim to be engineer-triggered. session.ensure() fills it in.
         # The runtime is anchored to the MAIN checkout, not to the worktree: one
         # trace db for every concurrent run, one place the visualizer reads, and
         # a record that survives the worktree being pruned. The cost is that
@@ -75,6 +84,40 @@ class Run:
     def save_agent_map(self, agent: str, entry: dict) -> None:
         self.agent_map[agent] = entry
         self._agent_map_path.write_text(json.dumps(self.agent_map, indent=2))
+
+    # ── issue provenance (set by an issue phase, read by integration) ──────
+    def adopt_provenance(self, trigger: str, issue_url: str) -> None:
+        """Take on what the session already recorded, without re-writing it.
+
+        The counterpart to record_issue: that one is a run LEARNING it came from
+        an issue, this one is a later process being TOLD. Nothing is written
+        back, because nothing changed.
+        """
+        if trigger:
+            self.trigger = trigger
+        if issue_url:
+            self.issue_url = issue_url
+            tail = issue_url.rstrip("/").rsplit("/", 1)[-1]
+            self.issue_number = int(tail) if tail.isdigit() else 0
+
+    def record_issue(self, context) -> None:
+        """Bind this run to the work item that caused it, in memory and in the db.
+
+        Lives here rather than in the ADW script (rule 6) because three
+        different things need it afterwards: the trace column, the PR body
+        template, and integration's refusal to merge an externally triggered
+        run. A script that set them one by one would eventually set only two.
+        """
+        self.trigger = "issue"
+        self.issue_number = context.number
+        self.issue_url = context.url
+        self.tracer.session_issue(self.adw_id, context.url)
+        # `request` is otherwise only written by an ENGINEER phase (see
+        # PhaseHandle.log), and an issue-triggered chain has none — so without
+        # this every such run reads as blank in `just sessions` and on its card
+        # in the UI. The title is what the request field is for: the one line
+        # that says what this run was about.
+        self.tracer.session_request(self.adw_id, f"#{context.number} {context.title}")
 
     # ── usage (run totals mirror what the tracer accumulates in sqlite) ─────
     def add_usage(self, tokens: int, cost: float) -> None:
