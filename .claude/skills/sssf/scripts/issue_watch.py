@@ -13,12 +13,22 @@ Deliberately OUTSIDE the factory, like `worktrees.py`. A queue and a worker sit
 above the control plane, not inside it — and this is the smallest thing that
 does the job: the LABEL IS THE QUEUE and the poll is the dequeue.
 
-THE LABEL FLIP IS THE LOCK. Claiming an issue means moving it off `queued` at
-the forge, which is atomic there and visible to humans in the place they already
-look. Two watchers racing the same issue: one wins the flip, the other's `gh`
-call is a no-op on an issue that no longer matches and it moves on. No state
-file, nothing to corrupt, and a crashed watcher leaves a `running` label a
-person can read and reset.
+THE LABEL FLIP IS THE CLAIM, NOT THE LOCK — an earlier version of this file
+said otherwise and was wrong. The forge has no conditional label change:
+`gh issue edit --remove-label queued` succeeds whether or not the issue still
+carries it, so two watchers that listed concurrently BOTH come back ok and both
+launch, which costs two worktrees, two pull requests and two runs' worth of
+tokens on one issue.
+
+Exclusion therefore comes from a file lock, taken per issue before the claim and
+held for the whole run. That covers the deployment this is built for — one
+watcher per repository, from cron, on one machine — and it does NOT cover two
+watchers on two machines. Nothing available at the forge would; if you need
+that, run one watcher.
+
+What the labels still give you is STATE a human can read and reset, in the place
+they already look. A crashed watcher leaves an issue on `running`, and moving it
+back to `queued` by hand is the whole recovery.
 
 `project` is resolved ONCE at startup and this refuses to run without it. A
 watcher that polls nothing looks exactly like a watcher with nothing to do —
@@ -30,10 +40,13 @@ Thin for the reason ADWs are (SKILL.md rule 6): every decision below lives in
 """
 
 import argparse
+import fcntl
 import json
+import os
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path.cwd() / "adws"))      # the stamped factory in this repo
@@ -71,11 +84,29 @@ def _list_queued(cfg, main_root, project: str) -> list[dict]:
 
 
 def _running_count(cfg, main_root) -> int:
-    """How many runs are in flight, straight from the trace. WAL: never blocks."""
-    from adw_modules.tracer import session_statuses
+    """How many runs are ACTUALLY in flight. WAL: reading never blocks a writer.
+
+    A session row saying `running` is a belief, not a fact — a SIGKILL, an OOM
+    or a reboot leaves one behind forever, and nothing reaps it. Counting those
+    would wedge the watcher at max_concurrent permanently, looking exactly like
+    a busy factory. So each candidate is checked for a live pid; signal 0 is the
+    standard "does this process exist" probe and delivers nothing.
+
+    A recycled pid can make a dead run look alive. That errs toward launching
+    too FEW runs, which the next poll fixes — the opposite mistake spends money.
+    """
+    from adw_modules.tracer import running_adw_pids
     from adw_modules.utils import anchor
-    statuses = session_statuses(anchor(main_root, cfg.observability.db))
-    return sum(1 for status in statuses.values() if status == "running")
+    alive = 0
+    for adw_id, pid in running_adw_pids(anchor(main_root, cfg.observability.db)).items():
+        try:
+            os.kill(pid, 0)
+            alive += 1
+        except ProcessLookupError:
+            print(f"  (session {adw_id} says running, pid {pid} is gone — not counted)")
+        except PermissionError:
+            alive += 1          # exists, owned by someone else
+    return alive
 
 
 def _route(cfg, labels: list[str]) -> str:
@@ -88,21 +119,50 @@ def _route(cfg, labels: list[str]) -> str:
     return ""
 
 
+@contextmanager
+def _claim(cfg, main_root, project: str, number: int):
+    """Hold an exclusive claim on one issue, or yield False.
+
+    `flock` on a file per (project, issue), non-blocking: a second watcher on
+    this machine fails instantly and moves on rather than launching a duplicate
+    run. Held for the whole run, released by the OS even if this process is
+    killed — a lock file left behind is not a stuck lock.
+
+    Two watchers on two machines are still both able to claim. That is a real
+    limit, stated in the module docstring rather than papered over.
+    """
+    from adw_modules.utils import anchor, ensure_dir
+    lock_dir = ensure_dir(anchor(main_root, f"{cfg.defaults.data_dir}/issue-locks"))
+    slug = f"{project.replace('/', '-')}-{number}.lock" if project else f"{number}.lock"
+    handle = open(lock_dir / slug, "w")
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print(f"  #{number}: another watcher on this machine holds it")
+            yield False
+            return
+        yield True
+    finally:
+        handle.close()          # releases the flock
+
+
 def _flip(cfg, main_root, project: str, number: int,
           add: str, remove: str) -> bool:
-    """Move an issue's label. The return value is the lock: False = someone else."""
-    from adw_modules.utils import operator_env
-    argv = [*cfg.issues.state_command, str(number)]
-    if project:
-        argv += ["--repo", project]
-    argv += ["--add-label", add, "--remove-label", remove]
-    completed = subprocess.run(argv, cwd=str(main_root), env=operator_env(),
-                               capture_output=True, text=True)
-    if completed.returncode != 0:
-        print(f"  #{number}: not claimed "
-              f"({(completed.stderr or completed.stdout).strip()[-200:]})")
-        return False
-    return True
+    """Move an issue's labels. NOT exclusion — see _claim and the module docstring.
+
+    Thin over `adw_modules.issues.set_state`, which is where the argv shape and
+    the forge's quirks already live. Reimplementing it here is what the first
+    version did, and the two copies would have drifted the moment either grew a
+    flag.
+    """
+    from adw_modules.data_types import IssueUpdate
+    from adw_modules.issues import set_state
+    result = set_state(main_root, cfg.issues, IssueUpdate(
+        number=number, project=project, add_labels=[add], remove_labels=[remove]))
+    if not result.ok:
+        print(f"  #{number}: {' · '.join(result.notes)}")
+    return result.ok
 
 
 def _launch(script: str, config_path: str, number: int, main_root) -> int:
@@ -143,18 +203,24 @@ def once(config_path: str) -> int:
             print(f"  #{number}: max_concurrent ({cfg.issues.max_concurrent}) "
                   f"reached — leaving it queued for the next poll")
             break
-        if not _flip(cfg, main_root, project, number,
-                     cfg.issues.states.running, cfg.issues.states.queued):
-            continue
+        # The lock is held across the claim, the run and the release — a second
+        # watcher that listed the same issue a moment ago finds it taken and
+        # moves on instead of launching a duplicate.
+        with _claim(cfg, main_root, project, number) as mine:
+            if not mine:
+                continue
+            if not _flip(cfg, main_root, project, number,
+                         cfg.issues.states.running, cfg.issues.states.queued):
+                continue
 
-        code = _launch(script, config_path, number, main_root)
-        launched += 1
-        # The run's own report phase said WHAT happened on the issue; this says
-        # whether it may be picked up again. Only the exit code knows that, and
-        # only this process ever sees it.
-        _flip(cfg, main_root, project, number,
-              cfg.issues.states.done if code == 0 else cfg.issues.states.failed,
-              cfg.issues.states.running)
+            code = _launch(script, config_path, number, main_root)
+            launched += 1
+            # The run's own report phase said WHAT happened on the issue; this
+            # says whether it may be picked up again. Only the exit code knows
+            # that, and only this process ever sees it.
+            _flip(cfg, main_root, project, number,
+                  cfg.issues.states.done if code == 0 else cfg.issues.states.failed,
+                  cfg.issues.states.running)
     print(f"launched {launched} run(s)")
     return 0
 

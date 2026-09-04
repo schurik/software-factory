@@ -123,6 +123,36 @@ MIGRATIONS = [("agent_sessions", "color", "TEXT"),
               ("sessions", "pr_url", "TEXT")]
 
 
+def running_adw_pids(db_path: str | Path) -> dict[str, int]:
+    """{adw_id: pid} for every session that BELIEVES it is running, read-only.
+
+    "Believes" is the point. A session goes to `running` at start and is only
+    ever closed by `run.finish()` or the SIGTERM/SIGINT handler — a SIGKILL, an
+    OOM or a reboot leaves the row saying `running` forever. Anything that
+    budgets on that count (the issue watcher's max_concurrent) would wedge
+    permanently after two such deaths, and the symptom is indistinguishable
+    from a genuinely busy factory.
+
+    The pid is the way out: the caller checks whether the process still exists.
+    That is why the adw process row is written before the first phase opens.
+    """
+    path = Path(db_path)
+    if not path.exists():
+        return {}
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+    try:
+        rows = conn.execute(
+            "SELECT s.adw_id, p.pid FROM sessions s "
+            "  JOIN processes p ON p.adw_id = s.adw_id "
+            " WHERE s.status = 'running' AND p.kind = 'adw' AND p.ended_at IS NULL"
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    return {adw_id: pid for adw_id, pid in rows if pid}
+
+
 def session_statuses(db_path: str | Path) -> dict[str, str]:
     """{adw_id: status} for every session, read-only. {} when there is no db.
 
@@ -229,6 +259,21 @@ class Tracer:
         """
         self.conn.execute("UPDATE sessions SET issue_url=?, trigger=? WHERE adw_id=?",
                           (url[:500], trigger, adw_id))
+
+    def session_provenance(self, adw_id: str) -> tuple[str, str]:
+        """(trigger, issue_url) for a session, "" when unknown. Read, not written.
+
+        A run is one PROCESS but a session can span several — `just integrate
+        <adw_id>` re-enters an ADW hours later — and provenance that lived only
+        in the first process's memory was gone by then. `force_pr` then read
+        "engineer" on an issue-triggered session and merged into the base
+        branch: the one control this phase put in code rather than in config,
+        defeated by the documented follow-up path.
+        """
+        row = self.conn.execute(
+            "SELECT trigger, issue_url FROM sessions WHERE adw_id=?", (adw_id,)
+        ).fetchone()
+        return (row[0] or "", row[1] or "") if row else ("", "")
 
     def session_pr(self, adw_id: str, url: str) -> None:
         """Record the pull request this run's branch became.

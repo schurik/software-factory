@@ -65,6 +65,9 @@ class Run:
         self.trigger = "engineer"
         self.issue_number = 0
         self.issue_url = ""
+        # ...unless the session already knows better. A joined run inherits the
+        # provenance the first process recorded; without this every re-entry
+        # would claim to be engineer-triggered. session.ensure() fills it in.
         # The runtime is anchored to the MAIN checkout, not to the worktree: one
         # trace db for every concurrent run, one place the visualizer reads, and
         # a record that survives the worktree being pruned. The cost is that
@@ -83,6 +86,20 @@ class Run:
         self._agent_map_path.write_text(json.dumps(self.agent_map, indent=2))
 
     # ── issue provenance (set by an issue phase, read by integration) ──────
+    def adopt_provenance(self, trigger: str, issue_url: str) -> None:
+        """Take on what the session already recorded, without re-writing it.
+
+        The counterpart to record_issue: that one is a run LEARNING it came from
+        an issue, this one is a later process being TOLD. Nothing is written
+        back, because nothing changed.
+        """
+        if trigger:
+            self.trigger = trigger
+        if issue_url:
+            self.issue_url = issue_url
+            tail = issue_url.rstrip("/").rsplit("/", 1)[-1]
+            self.issue_number = int(tail) if tail.isdigit() else 0
+
     def record_issue(self, context) -> None:
         """Bind this run to the work item that caused it, in memory and in the db.
 

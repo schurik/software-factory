@@ -151,7 +151,7 @@ Every command is then passed the resolved value explicitly (`gh issue list --rep
 `docs/README.md` already places the queue and worker layer *above* the factory, not inside it. Keep it there: `.claude/skills/sssf/scripts/issue_watch.py`, alongside `worktrees.py`, run by cron, a CI schedule, or by hand:
 
 1. List open issues carrying `states.queued` in the resolved `project`, and fail loudly at startup if it could not be resolved — a watcher that polls nothing looks identical to a watcher with nothing to do.
-2. For each hit, flip `queued → running`. **The label flip is the lock** — if it fails, someone else took the issue. No queue, no state file, and the state is visible to humans in the place they already look.
+2. For each hit, take a `flock` on a file per issue, then flip `queued → running`. **The flip is the claim; the file lock is the exclusion** — the forge has no conditional label change, so `--remove-label queued` succeeds whether or not the issue still carries it and two concurrent watchers would otherwise both launch. The lock covers one machine, which is what one-watcher-per-repo-from-cron needs; two machines would still both claim, and nothing at the forge would prevent it. The labels remain state a human can read and reset.
 3. Pick the script from `route` by label; spawn it with the issue number.
 4. On exit, flip to `done` or `failed`. The run's own write-back phase supplies the detail.
 
@@ -195,7 +195,7 @@ Genuinely open:
 5. Two issues picked up at once produce two worktrees, two branches and two sessions, and neither touches the main checkout.
 6. The watcher run from `/` by cron watches the same project it watches from the engineer's terminal, and a config with an unresolvable `project` refuses to start rather than idling.
 7. An issue whose body contains an explicit instruction to modify `adws/adw_modules/` produces a rolled-back phase and a failed run, not a modified module.
-8. Running the watcher twice concurrently over the same issue yields exactly one run — the second loses the label flip.
+8. Running the watcher twice concurrently over the same issue yields exactly one run — the second finds the file lock held and moves on.
 9. A failed run leaves the issue labelled `sssf:failed`, its worktree intact, and a comment saying where to look.
 
 ## Done when
@@ -219,6 +219,7 @@ Delivered in one commit. Where the implementation went past or around the design
 | the ADW sets `sessions.issue_url` | `run.record_issue(context)` on `Run` | three things need the provenance afterwards — the trace column, the PR body template, and integration's refusal — and a script setting them one by one would eventually set two |
 | `IntegrationConfig.pr_body_template` | plus `IntegrationRequest.body` overriding it | the config is the repository's convention; the request is one run's exception, exactly as `mode`/`title` already work |
 | `fetch` / `as_envelope` / `comment` / `set_state` | plus `resolve_project()` and `trusted()` | project resolution is the answer to "which repo does the watcher watch" and belongs beside the commands that consume it; `trusted()` is one line the two ADWs would otherwise each spell out |
+| the label flip as the lock | a `flock` per issue, **plus** the flip | `gh issue edit --remove-label X` succeeds whether or not X is still there, so the flip alone let two concurrent watchers both claim and both launch. The doc claimed atomicity the forge does not offer; the lock is now real and its one-machine limit is stated rather than assumed away |
 | a `select` query beside the label states | **no `select` key at all** — the watcher lists on `states.queued` | one label, named once. A `select` that could drift from the label the watcher flips is a lock that silently stops locking, and a config key nothing reads is worse than no key |
 | — | `just issue`, `issue-scout`, `issues`, `issues-status`, `issues-watch` | `issues-status` prints what the watcher would do and whether it *can*, which is the question cron makes hard to answer |
 

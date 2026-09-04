@@ -131,7 +131,8 @@ worktree:
 #
 # The trigger is `<skill>/scripts/issue_watch.py`, run by cron or by hand — it
 # sits ABOVE the factory, not inside it. The label is the queue; the flip from
-# queued to running is the lock.
+# queued to running is the claim — a file lock next to the db is what makes it
+# exclusive, because the forge has no conditional label change.
 issues:
   enabled: false
   # WHICH REPO is watched. "" resolves once at startup from the origin remote of

@@ -89,7 +89,14 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
                 f"{issue.author} is not in issues.trusted_authors — this repository "
                 f"has said whose work items may start a run, and this is not one")
 
-    prompt = f"Resolve issue #{issue.number}: {issue.title}"
+    # The prompt slot is where the OPERATOR's instruction goes; the issue's own
+    # words go through the envelope, which frames them as a user's description
+    # of a problem. Interpolating the title here would have walked untrusted
+    # text straight past that framing into every agent's {{prompt}} — the body
+    # was protected and the title was not, which is half a boundary.
+    prompt = (f"Resolve work item #{issue.number}. Its title, labels and body "
+              f"are in the envelope you were handed; the body is the artifact "
+              f"that envelope names.")
 
     with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
                                description="Turn the reported problem into an "
@@ -198,7 +205,7 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
     with run.phase(PhaseParams(name="report", kind="code", owner="tracker",
                                description="Tell the reporter what happened and where "
                                            "the work went")) as ph:
-        posted = issues.comment(run, cfg.issues, IssueUpdate(
+        posted = issues.comment(run.main_root, cfg.issues, IssueUpdate(
             number=issue.number, project=issue.project,
             comment=_comment(run, verified, landed)))
         ph.log(ok=posted.ok, notes=" · ".join(posted.notes))

@@ -49,15 +49,20 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
     with run.phase(PhaseParams(name="scout", kind="agent", owner="scout",
                                description="Find and report where this would live — "
                                            "change nothing")) as ph:
+        # The title is deliberately NOT interpolated here — see adw_issue_sdlc.
+        # The prompt slot carries the operator's instruction; the reporter's own
+        # words reach the agent through the envelope, framed as material.
         found = ph.call(AgentCall(output_type=ScoutOutput,
-                                  prompt=f"Triage issue #{issue.number}: {issue.title}",
+                                  prompt=(f"Triage work item #{issue.number}. Its title, "
+                                          f"labels and body are in the envelope you were "
+                                          f"handed; the body is the artifact it names."),
                                   previous=issues.as_envelope(issue),
                                   gates=[gates.artifacts_exist]))
 
     with run.phase(PhaseParams(name="report", kind="code", owner="tracker",
                                description="Put the findings where the reporter will "
                                            "see them, not only in the trace")) as ph:
-        posted = issues.comment(run, cfg.issues, IssueUpdate(
+        posted = issues.comment(run.main_root, cfg.issues, IssueUpdate(
             number=issue.number, project=issue.project,
             comment=_comment(run, found)))
         ph.log(ok=posted.ok, notes=" · ".join(posted.notes))

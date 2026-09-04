@@ -95,13 +95,6 @@ const issue = computed(() => {
   return { url: s.issue_url, label: /^\d+$/.test(tail) ? `#${tail}` : 'issue' }
 })
 
-// The card is an <a>; so are these chips. Without stopping the click the
-// browser would follow the outer link instead — the card, the issue and the
-// pull request are three different places.
-function openLink(event: MouseEvent) {
-  event.stopPropagation()
-}
-
 // The pull request the run's branch became. The url comes from the trace, so it
 // is known the moment the integration phase ran; the STATE does not, and is
 // asked of the forge separately — see below.
@@ -256,7 +249,13 @@ const hiddenRowCount = computed(() =>
 </script>
 
 <template>
-  <a class="card" :class="session.status" :href="hrefFor(session.adw_id)">
+  <!-- A div, not an anchor. HTML forbids nesting <a>, and the parser enforces
+       it by CLOSING the outer one where the inner starts — so with the issue
+       and PR chips inside, everything below them stopped being part of the
+       card's link. The stretched-link pattern fixes both: one anchor whose
+       ::after covers the card, and chips that are ordinary links above it. -->
+  <div class="card" :class="session.status">
+    <a class="card-link" :href="hrefFor(session.adw_id)" :aria-label="`run ${session.adw_id}`" />
     <button
       class="card-archive"
       type="button"
@@ -276,7 +275,6 @@ const hiddenRowCount = computed(() =>
       target="_blank"
       rel="noopener noreferrer"
       :title="`started from ${issue.url}`"
-      @click="openLink"
       >{{ issue.label }}</a
     >
     <a
@@ -286,7 +284,6 @@ const hiddenRowCount = computed(() =>
       target="_blank"
       rel="noopener noreferrer"
       :title="prTitle"
-      @click="openLink"
     >
       {{ pr.label }}
       <span v-if="prPill" class="pr-pill" :class="prPill.tone">{{ prPill.text }}</span>
@@ -339,7 +336,7 @@ const hiddenRowCount = computed(() =>
       <StatChip kind="runtime" :value="durationMs" />
       <StatChip kind="tokens" :value="session.total_tokens" />
     </div>
-  </a>
+  </div>
 </template>
 
 <style scoped>
@@ -420,6 +417,25 @@ const hiddenRowCount = computed(() =>
 
 /* Text rows must never absorb flex shrink — the fixed-height card squeezes
    overflow into .tl (which clips), not into the text. */
+/* The card's own link, stretched over the whole card by its ::after. It stays
+   a real anchor — keyboard focus, middle-click, copy-link-address all work —
+   while the chips sit above it and win the click on their own area. */
+.card-link {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  text-decoration: none;
+}
+
+/* Above the stretched link, so a click on a chip opens the chip's target and
+   a click anywhere else opens the run. */
+.card-links,
+.card-archive {
+  position: relative;
+  z-index: 1;
+}
+
 .card-id {
   flex: none;
   font-family: var(--mono);

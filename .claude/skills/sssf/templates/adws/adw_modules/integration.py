@@ -132,13 +132,28 @@ def _pr_body(run, template: str, result: IntegrationResult) -> str:
 
     `Closes #<n>` in the template is what makes an issue-triggered run close its
     own issue on merge — the forge does it, so nothing here has to.
+
+    A BAD TEMPLATE MUST NOT KILL THE RUN. This is operator-authored markdown, and
+    `str.format` treats every brace as a field: one JSON snippet, one `${{ }}`,
+    one stray `{` and it raises — inside the integrate phase, after the commits
+    landed and the branch was pushed, so the chain dies with its work committed
+    and `run.finish()` never reached. Every other failure in this module comes
+    back as a note; a typo in a config string has no business being the
+    exception. The PR gets opened without a body instead, and the note says why.
     """
     if not template:
         return ""
-    return template.format(adw_id=run.adw_id, branch=result.branch,
-                           base_ref=result.base_ref,
-                           issue_number=run.issue_number or "",
-                           issue_url=run.issue_url or "")
+    try:
+        return template.format(adw_id=run.adw_id, branch=result.branch,
+                               base_ref=result.base_ref,
+                               issue_number=run.issue_number or "",
+                               issue_url=run.issue_url or "")
+    except (KeyError, IndexError, ValueError) as error:
+        result.notes.append(
+            f"pr_body_template could not be rendered ({type(error).__name__}: "
+            f"{error}) — opening the pull request without a body. A literal "
+            f"brace in that template must be doubled: {{{{ and }}}}")
+        return ""
 
 
 def _open_pr(run, result: IntegrationResult, params: IntegrationRequest) -> IntegrationResult:

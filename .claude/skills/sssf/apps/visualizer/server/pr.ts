@@ -83,7 +83,11 @@ async function ask(url: string): Promise<PrStatus> {
       isDraft?: boolean;
       title?: string;
       reviewDecision?: string;
-      statusCheckRollup?: { conclusion?: string; status?: string }[];
+      // Two node shapes in one list: CheckRun carries status/conclusion, and
+      // StatusContext (the older commit-status API, which plenty of CI still
+      // posts) carries `state`. Reading only the first shape pinned any
+      // status-based CI at "checks running" forever — including a red one.
+      statusCheckRollup?: { conclusion?: string; status?: string; state?: string }[];
     };
     return {
       available: true,
@@ -105,20 +109,22 @@ async function ask(url: string): Promise<PrStatus> {
  * and one failure dominates everything — a rollup that reported SUCCESS while
  * a job was still queued would be a lie with a checkmark on it.
  */
-function rollup(checks?: { conclusion?: string; status?: string }[]): string | undefined {
+const BAD = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "ERROR"]);
+const GOOD = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+
+function rollup(
+  checks?: { conclusion?: string; status?: string; state?: string }[],
+): string | undefined {
   if (!checks?.length) return undefined;
   let pending = false;
   for (const check of checks) {
-    const conclusion = (check.conclusion ?? "").toUpperCase();
+    // A CheckRun answers through conclusion (once status is COMPLETED); a
+    // StatusContext answers through state and has neither of the others.
+    const verdict = (check.conclusion || check.state || "").toUpperCase();
     const status = (check.status ?? "").toUpperCase();
-    if (conclusion === "FAILURE" || conclusion === "TIMED_OUT" ||
-        conclusion === "CANCELLED" || conclusion === "ACTION_REQUIRED") {
-      return "FAILURE";
-    }
-    if (!conclusion || status === "IN_PROGRESS" || status === "QUEUED" ||
-        status === "PENDING") {
-      pending = true;
-    }
+    if (BAD.has(verdict)) return "FAILURE";
+    if (GOOD.has(verdict) && status !== "IN_PROGRESS" && status !== "QUEUED") continue;
+    pending = true;
   }
   return pending ? "PENDING" : "SUCCESS";
 }

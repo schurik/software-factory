@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, shallowRef } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import type { SessionSummary } from '../lib/types'
 import { fetchSessions } from '../lib/api'
 import { ts } from '../lib/format'
@@ -56,6 +56,13 @@ type Filter = 'all' | 'issue'
 const filter = ref<Filter>('all')
 
 const issueCount = computed(() => sessions.value.filter((s) => s.trigger === 'issue').length)
+
+// Archiving the last issue run hides the chips, and a filter left pointing at
+// nothing would strand the list empty with no control to click back. The filter
+// follows the data rather than the other way round.
+watch(issueCount, (count) => {
+  if (!count && filter.value === 'issue') filter.value = 'all'
+})
 
 const ordered = computed(() =>
   filter.value === 'issue'

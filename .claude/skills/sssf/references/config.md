@@ -158,7 +158,9 @@ Where work items come from, and which chain each label asks for. **Off by defaul
 | `max_concurrent` | int | Runs in flight, counted from `sessions.status='running'`. Bounds parallelism, **not spend**. |
 | `force_pr` | bool | Default `true`. An issue-triggered run's `merge` is downgraded to `pr` in `integration.integrate()`. `mode: none` still wins. |
 
-**The label flip is the lock.** Claiming an issue means moving it off `queued` at the forge — atomic there, and visible to humans in the place they already look. Two watchers racing the same issue: one wins the flip, the other's call is a no-op and it moves on. No queue, no state file, and a crashed watcher leaves a `running` label a person can read and reset.
+**The flip is the claim; a file lock is the exclusion.** Moving an issue off `queued` records the claim where humans already look, but it does not *win* anything: the forge has no conditional label change, and `gh issue edit --remove-label queued` succeeds whether or not the issue still carries it. So the watcher takes a `flock` on `<data_dir>/issue-locks/<project>-<n>.lock` before claiming and holds it for the whole run.
+
+That excludes a second watcher **on the same machine**, which is the deployment this is built for — one watcher per repository, from cron. Two watchers on two machines would both claim, and nothing available at the forge would prevent it; run one. A crashed watcher leaves a `running` label, and moving it back to `queued` by hand is the whole recovery.
 
 **The trust boundary**, in the order it is enforced:
 

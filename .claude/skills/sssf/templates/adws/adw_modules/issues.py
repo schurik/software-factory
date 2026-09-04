@@ -190,18 +190,24 @@ def trusted(config: IssuesConfig, context: IssueContext) -> bool:
     return context.author in config.trusted_authors
 
 
-def comment(run, config: IssuesConfig, update: IssueUpdate) -> IssueResult:
-    """Post one comment. Returns evidence; a rejected write is not an exception."""
+def comment(tree, config: IssuesConfig, update: IssueUpdate) -> IssueResult:
+    """Post one comment. Returns evidence; a rejected write is not an exception.
+
+    Takes the TREE rather than a Run, because that is all it needs — and because
+    the watcher lives outside the factory and has no Run to give. A function that
+    demanded one would be reimplemented inline there, which is exactly what
+    happened before this signature.
+    """
     result = IssueResult(number=update.number)
     if not update.comment:
         result.ok = True
         result.notes.append("nothing to say")
         return result
 
-    project = update.project or resolve_project(config, run.main_root)
+    project = update.project or resolve_project(config, tree)
     argv = _aim([*config.comment_command], project, update.number)
     argv += ["--body", update.comment]
-    completed = _run(argv, run.main_root)
+    completed = _run(argv, tree)
     if completed.returncode != 0:
         result.notes.append(f"`{' '.join(config.comment_command)}` failed: "
                             f"{(completed.stderr or completed.stdout).strip()[-500:]}")
@@ -212,21 +218,28 @@ def comment(run, config: IssuesConfig, update: IssueUpdate) -> IssueResult:
     return result
 
 
-def set_state(run, config: IssuesConfig, update: IssueUpdate) -> IssueResult:
-    """Move an issue's labels. This is also how the watcher takes its lock."""
+def set_state(tree, config: IssuesConfig, update: IssueUpdate) -> IssueResult:
+    """Move an issue's labels — the watcher's claim, and its release.
+
+    NOT a lock on its own, and it was described as one before. The forge has no
+    conditional label change: `gh issue edit --remove-label X` succeeds whether
+    or not the issue still carries X, so two watchers that listed concurrently
+    both come back ok=True here. The exclusion has to come from somewhere else —
+    see `issue_watch.py`, which takes a file lock before calling this.
+    """
     result = IssueResult(number=update.number)
     if not (update.add_labels or update.remove_labels):
         result.ok = True
         result.notes.append("no label change asked for")
         return result
 
-    project = update.project or resolve_project(config, run.main_root)
+    project = update.project or resolve_project(config, tree)
     argv = _aim([*config.state_command], project, update.number)
     for label in update.add_labels:
         argv += ["--add-label", label]
     for label in update.remove_labels:
         argv += ["--remove-label", label]
-    completed = _run(argv, run.main_root)
+    completed = _run(argv, tree)
     if completed.returncode != 0:
         result.notes.append(f"`{' '.join(config.state_command)}` failed: "
                             f"{(completed.stderr or completed.stdout).strip()[-500:]}")

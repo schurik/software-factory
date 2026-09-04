@@ -138,9 +138,12 @@ const server = Bun.serve({
     // when there is no gh — see server/pr.ts.
     "/api/sessions/:adw_id/pr": safely(async (req) => {
       const adwId = param(req, "adw_id");
-      const detail = db.sessionDetail(adwId);
-      if (!detail) return notFound(`no session ${adwId}`);
-      return json(await prStatus(detail.session.pr_url));
+      // session(), not sessionDetail(): this needs one column, and the detail
+      // build also scans and JSON-parses every agent_end event for the usage
+      // totals — three queries and a parse loop to read a url.
+      const session = db.session(adwId);
+      if (!session) return notFound(`no session ${adwId}`);
+      return json(await prStatus(session.pr_url));
     }),
 
     // The one write. Archiving is review triage — it belongs to the reader, not
