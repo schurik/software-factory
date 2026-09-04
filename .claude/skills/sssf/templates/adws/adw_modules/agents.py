@@ -395,3 +395,20 @@ def _persist_envelope(run, phase: Phase, agent_name: str, call: AgentCall,
                   "output_type": call.output_type.__name__, "attempt": attempt,
                   **envelope.model_dump()}
         (run.session_dir / agent_name / "envelope.json").write_text(json.dumps(record, indent=2))
+
+
+def load_envelope(run, agent_name: str, output_type: type[EnvelopeBase]) -> EnvelopeBase:
+    """Reload an agent's persisted envelope as a typed object — the read side
+    of `_persist_envelope`, for an ADW that resumes work an EARLIER run already
+    produced under the same `--adw-id`, rather than calling that agent again.
+
+    Ignores the four bookkeeping keys `_persist_envelope` writes alongside the
+    envelope's own fields (`agent_name`, `purpose`, `output_type`, `attempt`) —
+    pydantic drops unknown fields on `model_validate` by default.
+    """
+    path = run.session_dir / agent_name / "envelope.json"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"no envelope for {agent_name!r} in session {run.adw_id} ({path}) — "
+            f"it has not produced one in this session yet")
+    return output_type.model_validate(json.loads(path.read_text()))
