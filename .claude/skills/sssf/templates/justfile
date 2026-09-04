@@ -68,11 +68,11 @@ simple-sdlc *ARGS:
 
 # work one issue end to end: just issue 42
 issue NUMBER *ARGS:
-    uv run adws/adw_issue_sdlc.py {{NUMBER}} --config {{config}} "$@"
+    uv run adws/adw_issue_sdlc.py {{NUMBER}} --config {{config}} {{ARGS}}
 
 # read-only triage, comments its findings: just issue-scout 42
 issue-scout NUMBER *ARGS:
-    uv run adws/adw_issue_scout.py {{NUMBER}} --config {{config}} "$@"
+    uv run adws/adw_issue_scout.py {{NUMBER}} --config {{config}} {{ARGS}}
 
 # poll once and launch what is labelled: just issues
 issues:
@@ -94,7 +94,7 @@ issues-watch *ARGS:
 
 # answer the open review threads on one PR: just pr-review 17
 pr-review NUMBER *ARGS:
-    uv run adws/adw_pr_review.py {{NUMBER}} --config {{config}} "$@"
+    uv run adws/adw_pr_review.py {{NUMBER}} --config {{config}} {{ARGS}}
 
 # poll once and answer what has feedback: just prs
 prs:
@@ -115,7 +115,7 @@ prs-watch *ARGS:
 
 # merge or push a finished run: just integrate <adw_id>
 integrate ADW_ID *ARGS:
-    uv run adws/adw_integrate.py --config {{config}} --adw-id {{ADW_ID}} "$@"
+    uv run adws/adw_integrate.py --config {{config}} --adw-id {{ADW_ID}} {{ARGS}}
 
 # ── watch it ────────────────────────────────────────────────────────────────
 # Reads never block a running workflow, the db is WAL. Poll as hard as you like.
@@ -134,7 +134,7 @@ tail ADW_ID:
 
 # stop a run — agent children first, then the workflow: just kill <adw_id>
 kill ADW_ID *ARGS:
-    uv run {{skill}}/scripts/kill_run.py {{ADW_ID}} --config {{config}} "$@"
+    uv run {{skill}}/scripts/kill_run.py {{ADW_ID}} --config {{config}} {{ARGS}}
 
 # what a run has alive right now, with pids: just procs <adw_id>
 procs ADW_ID:
@@ -154,7 +154,7 @@ worktrees-prune *ARGS:
 
 # drop one run's worktree, branch retained: just worktree-rm <adw_id>
 worktree-rm ADW_ID *ARGS:
-    uv run {{skill}}/scripts/worktrees.py remove {{ADW_ID}} "$@"
+    uv run {{skill}}/scripts/worktrees.py remove {{ADW_ID}} {{ARGS}}
 
 # ── observability UI ────────────────────────────────────────────────────────
 
