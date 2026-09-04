@@ -66,6 +66,27 @@ Two things that bite:
 
 `--adw-id` is optional on **every** ADW. Given one, the run joins that session if it exists or creates it pinned to exactly that id: same `sessions/{adw_id}/` dirs, same `context_handoff/`, envelopes appended, and each agent resumes its existing coding-agent context window via `agent_map.json`. That is how you chain ADWs — plan under one id, then build under the same id.
 
+## Launching from an issue
+
+Only when `issues.enabled` is on. Two shapes, and the difference matters for what you tell the engineer afterwards:
+
+```bash
+just issue 42                    # one issue, end to end, right now
+just issue-scout 42              # read-only triage; comments its findings back
+just issues                      # one poll: claim everything labelled, launch each
+just issues-status               # what the watcher would do, and whether it CAN
+```
+
+`just issues-status` before scheduling anything. A watcher that cannot resolve its project polls nothing and looks exactly like a watcher with nothing to do — it prints the resolved project, the routes, and how many runs it believes are in flight.
+
+An issue-triggered run differs from a typed one in three ways worth reporting:
+
+- **Its ask came from a stranger.** The body reached the agents as an artifact framed as a user's description of a problem; the routing label a human applied is the authorization.
+- **It cannot merge.** `issues.force_pr` downgrades a configured `merge` to `pr`, so the work arrives as a pull request even in a repo that normally merges.
+- **The issue heard about it.** The run's last phase comments the outcome, the `adw_id` and the PR url back on the issue, so "did anyone tell the reporter" is already answered.
+
+The label is the state a human reads: `sssf:running` left behind means a watcher died mid-run, and moving it back to `sssf:queued` by hand is the whole recovery.
+
 ## Observe
 
 The trace db is `adws/adw_data/sssf.db`. It is WAL, so reads never block the running writers — poll it as often as you like.
@@ -83,9 +104,14 @@ sqlite3 adws/adw_data/sssf.db \
 sqlite3 adws/adw_data/sssf.db \
   "select attempt, gate, passed, checks_json from gate_results where adw_id='a1b2c3d4';"
 
-# session-level status
+# session-level status, with where the ask came from and where the work went
 sqlite3 adws/adw_data/sssf.db \
-  "select adw_id, request, status, total_tokens from sessions order by started_at desc limit 5;"
+  "select adw_id, trigger, status, substr(request,1,40), issue_url, pr_url
+     from sessions order by started_at desc limit 5;"
+
+# runs a stranger asked for
+sqlite3 adws/adw_data/sssf.db \
+  "select adw_id, status, issue_url, pr_url from sessions where trigger='issue' order by started_at desc;"
 
 # what an agent actually did, slowest tool calls first
 sqlite3 adws/adw_data/sssf.db \
@@ -94,6 +120,8 @@ sqlite3 adws/adw_data/sssf.db \
 ```
 
 Poll on a cursor: keep the highest `rowid` you have seen and query `where rowid > ?`. Don't re-read the whole table each pass.
+
+`trigger` is `engineer` or `issue`, and NULL only on rows written before that column existed — a run nobody can classify and a run somebody typed are different answers. `issue_url` and `pr_url` are the two ends of a run's provenance; the *reason* a branch did not land is in the integrate phase's notes, not in a column.
 
 `tool_call` rows carry a real span, so durations come off the columns — see `references/observability.md` for which fields each event type populates.
 

@@ -58,7 +58,9 @@ class DocumentOutput(EnvelopeBase):
 
 There is no test output type: running the suite is a `kind="code"` phase, and its `QualityResult` reaches the next agent through `quality.as_envelope`.
 
-Two of these are adapters rather than agent reports — code shaped as an envelope so an agent can be handed a deterministic result through the same door: `VerifyOutput` (a lint/test block's result) and `ChangesOutput` (a captured `git diff`, from `changes.as_envelope`). The consuming agent cannot tell the difference, which is the point.
+Three of these are adapters rather than agent reports — code shaped as an envelope so an agent can be handed a deterministic result through the same door: `VerifyOutput` (a lint/test block's result), `ChangesOutput` (a captured `git diff`, from `changes.as_envelope`) and `IssueOutput` (a tracked work item, from `issues.as_envelope`). The consuming agent cannot tell the difference, which is the point — and none of them names the agent on the other side, so an issue may go to a scout, a planner, or something that enriches it first.
+
+`IssueOutput` carries the issue's number, url, title, labels and author, and **not its body**. That is deliberate twice: envelopes are persisted whole into `envelopes.payload_json` and a body can be a screenshot-laden novel, but more importantly a body that arrives as a path in `artifacts` is visibly MATERIAL THE AGENT READS rather than INSTRUCTIONS THE AGENT RECEIVED. The reporter is not the operator, and `notes_for_next_agent` says so out loud.
 
 The envelope is a **manifest of claims**. Gates verify those claims after the fact — declared artifacts exist and are non-empty, declared changes appear in the diff, declared tests actually pass. See `cookbooks/update_modules.md`.
 

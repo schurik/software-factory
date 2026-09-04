@@ -56,7 +56,10 @@ Every `adw_*.py`, generated or hand-written, is a `uv` single-file script with t
 # /// script
 # dependencies = ["pydantic", "python-dotenv", "pyyaml", "rich"]
 # ///
-"""ADW Plan Build — plan the request, then implement the plan."""
+"""ADW Plan Build — plan the request, then implement the plan.
+
+Phases: engineer(request) -> planner -> builder -> git(commit)
+"""
 
 import argparse
 import sys
@@ -87,9 +90,13 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                                   gates=[gates.diff_matches_claims]))
 
     with run.phase(PhaseParams(name="commit", kind="code", owner="git",
-                               description="Commit the working tree")) as ph:
+                               description="Land the builder's changes, using the message it wrote")) as ph:
         message = build.commit_message or f"sssf({run.adw_id}): {build.summary}"
-        ph.log(sha=git_helper.commit_all(message), message=message)
+        # run.repo_root, ALWAYS. Every git_helper function names the tree it runs
+        # in and none of them defaults, because with a worktree per run there
+        # are at least two trees on disk — committing into the wrong one is the
+        # bug this signature makes unwritable.
+        ph.log(sha=git_helper.commit_all(run.repo_root, message), message=message)
 
     return run.finish()
 
@@ -103,6 +110,24 @@ if __name__ == "__main__":
     sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id))
 ```
 
+The `Phases:` line in the docstring is not decoration: the orchestrator lists every ADW by reading exactly that line at startup. An ADW without one is invisible in that table.
+
+**Two things this skeleton does not show**, because they belong to chains that produce code worth landing:
+
+- **A `run.finish(accepted=…)`** whenever the chain has an acceptance test of its own. Phases passing is not the same as the run being accepted — a test phase that ran a red suite did its job. Pass `accepted=` so the exit code, the session status and the banner are decided together and cannot disagree.
+- **An `integrate` phase** at the end, if the chain commits. `integration.integrate(run, IntegrationRequest())` lands the run's branch the way `worktree.integration` says to, and a decline is a note rather than a failure — the commits exist and the branch is kept either way.
+
+```python
+        with run.phase(PhaseParams(name="integrate", kind="code", owner="git",
+                                   description="Land the run's branch the way this "
+                                               "repository has said it wants it landed")) as ph:
+            landed = integration.integrate(run, IntegrationRequest())
+            ph.log(mode=landed.mode, landed=landed.ok, pr_url=landed.pr_url,
+                   notes=" · ".join(landed.notes))
+
+    return run.finish(accepted=verified, reason="the suite or the review never came back clean")
+```
+
 ## Non-negotiables
 
 - **`REQUIRED_AGENTS` + `agents.validate()`** — declare every agent name the script uses and validate before the first phase.
@@ -111,7 +136,7 @@ if __name__ == "__main__":
 - **The engineer request phase comes first**, always.
 - **Four-param rule** — `run.phase()` and `ph.call()` each take exactly one object; new helpers with >4 params get a data type.
 - **Stay thin** — sequencing and acceptance only; real logic goes in `adw_modules/` (`update_modules.md`).
-- **Committing is a code phase, and it needs a fallback.** `PlanOutput`, `BuildOutput`, and `DocumentOutput` each carry a `commit_message` the agent writes **for its own work product** — the spec, the code, the write-up. It defaults to empty, so always `envelope.commit_message or <fallback>`, and commit each product with the message of the agent that made it (`adw_simple_sdlc.py` commits three times and never crosses them). `git_helper.commit_all(message)` stages everything, commits, and returns the short sha; it raises a clear error when the cwd isn't a git repo or nothing changed, and that raise fails the phase.
+- **Committing is a code phase, and it needs a fallback.** `PlanOutput`, `BuildOutput`, and `DocumentOutput` each carry a `commit_message` the agent writes **for its own work product** — the spec, the code, the write-up. It defaults to empty, so always `envelope.commit_message or <fallback>`, and commit each product with the message of the agent that made it (`adw_simple_sdlc.py` commits three times and never crosses them). `git_helper.commit_all(run.repo_root, message)` stages everything, commits, and returns the short sha; it raises a clear error when that tree isn't a git repo or nothing changed, and that raise fails the phase. **The tree is the first argument and has no default** — a run works in its own worktree, so a command that inherited the process's cwd would commit into whichever tree the ADW was launched from.
 
 ## Before you ship it
 

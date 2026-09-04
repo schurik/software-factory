@@ -110,6 +110,10 @@ phases ADW_ID:
 tail ADW_ID:
     @sqlite3 {{db}} "select rowid, type, name, started_at from events where adw_id='{{ADW_ID}}' order by rowid desc limit 25;"
 
+# stop a run — agent children first, then the workflow: just kill <adw_id>
+kill ADW_ID *ARGS:
+    uv run {{skill}}/scripts/kill_run.py {{ADW_ID}} --config {{config}} "$@"
+
 # what a run has alive right now, with pids: just procs <adw_id>
 procs ADW_ID:
     @sqlite3 {{db}} "select kind, name, pid, command, started_at from processes where adw_id='{{ADW_ID}}' and ended_at is null order by id;"

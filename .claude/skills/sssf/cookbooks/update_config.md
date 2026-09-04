@@ -94,6 +94,20 @@ Three steps, all required — skipping any one fails `agents.validate()` at ADW 
 
 Then name the agent in an ADW's `REQUIRED_AGENTS` and call it.
 
+## Retune what the factory may DO, not just how it thinks
+
+Three blocks are about this repository's policy rather than any agent's
+behaviour, and they are edited by hand like everything else here:
+
+| Change | Key | Watch out |
+|---|---|---|
+| Stop a machine moving the base branch | `worktree.integration.mode: pr` | Also set `open_pr` and, if the PR should close its issue, `pr_body_template` — and drop `--fill` from `pr_command`, which is mutually exclusive with an explicit body |
+| Let issues start runs | `issues.enabled: true` + a `route` | Nothing launches without a routing label a human applied. `project` empty infers from the origin remote, which is fine from a terminal and wrong under cron |
+| Widen or narrow what an agent may touch | `writes:` per agent, `defaults.protected_files` | `tools` cannot do this job: `bash` runs `git checkout` and `write` reaches any path. Only `permissions.py` enforces, after every call |
+| Keep a successful run's worktree | `worktree.keep_on_success: true` | Useful while debugging a chain; costs disk per run otherwise |
+
+Full specs: [worktree](../references/config.md#worktree-per-run) · [integration](../references/config.md#worktreeintegration) · [issues](../references/config.md#issues) · [write permissions](../references/config.md#write-permissions--writes-and-protected_files).
+
 ## Rules that do not bend
 
 - ADW scripts name **agents**, never models. Swapping a model is a config edit and touches no Python.
