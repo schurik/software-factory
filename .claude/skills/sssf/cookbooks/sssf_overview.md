@@ -24,6 +24,7 @@ adws/
 ├── adw_integrate.py             land a finished run's branch, the way the config says to
 ├── adw_issue_sdlc.py            the same chain, but a labelled issue is the ask and hears the outcome
 ├── adw_issue_scout.py           read-only triage of an issue; comments its findings back
+├── adw_pr_review.py             answer the review threads on a run's own PR, in that same session
 ├── adw_modules/                 ALL low-level logic — ADW scripts stay thin
 │   ├── data_types.py            AgentCall, PhaseParams, Phase, Envelope + one output type per agent call
 │   ├── agents.py                load_config, validate, resolve entry → interface + model + thinking
@@ -36,6 +37,7 @@ adws/
 │   ├── quality.py               lint/typecheck/build/test blocks → QualityResult → envelope
 │   ├── changes.py               git diff vs a resolved base → ChangeSet → envelope for the documenter
 │   ├── issues.py                fetch a work item, hand it on as an envelope, write the outcome back
+│   ├── pull_requests.py         the same, one step later: read review threads, answer them, resolve them
 │   ├── prompts.py, session.py, tracer.py, console.py, git_helper.py, utils.py
 └── adw_data/
     ├── prompt_engineering/{agent}/{system.md,user.md}   tracked — edit prompts HERE, never in the skill

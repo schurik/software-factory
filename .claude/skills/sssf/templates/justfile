@@ -86,6 +86,28 @@ issues-status:
 issues-watch *ARGS:
     uv run {{skill}}/scripts/issue_watch.py loop --config {{config}} "$@"
 
+# ── answer a review ─────────────────────────────────────────────────────────
+# The other end of a branch's life. A run's pull request draws comments; this
+# joins the SAME session, works the branch it already has, and pushes onto it —
+# so the pull request is updated, never replaced. Unresolved threads are the
+# queue: a run answers them and resolves them, so nothing is worked twice.
+
+# answer the open review threads on one PR: just pr-review 17
+pr-review NUMBER *ARGS:
+    uv run adws/adw_pr_review.py {{NUMBER}} --config {{config}} "$@"
+
+# poll once and answer what has feedback: just prs
+prs:
+    uv run {{skill}}/scripts/pr_watch.py once --config {{config}}
+
+# what the review watcher would do, and whether it can: just prs-status
+prs-status:
+    @uv run {{skill}}/scripts/pr_watch.py status --config {{config}}
+
+# keep polling — the cron form; --pr <n> watches one and exits when it merges
+prs-watch *ARGS:
+    uv run {{skill}}/scripts/pr_watch.py loop --config {{config}} "$@"
+
 # ── land a run's branch ─────────────────────────────────────────────────────
 # Every run works on its own sssf/<adw_id> branch in its own worktree. Chains
 # stop at a committed branch; this is what brings it back to the base branch,

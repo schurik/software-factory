@@ -26,6 +26,9 @@ GITIGNORE_ENTRIES = [
     # One file per issue the watcher has ever claimed. Runtime, and the flock
     # is what matters — the file itself is just something to hold it on.
     "adws/adw_data/issue-locks/",
+    # Same story one step later, for pull requests the review watcher has
+    # claimed. Removed when a pull request merges; the flock is the point.
+    "adws/adw_data/pr-locks/",
     ".env",
     # One worktree per run, checked out inside the repo. Ignored rather than
     # committed for the obvious reason, and because chains that end in a commit

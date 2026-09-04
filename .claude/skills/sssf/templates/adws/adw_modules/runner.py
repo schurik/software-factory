@@ -130,6 +130,27 @@ class Run:
         # that says what this run was about.
         self.tracer.session_request(self.adw_id, f"#{context.number} {context.title}")
 
+    def record_pull_request(self, context) -> None:
+        """Bind this run to the pull request whose review feedback caused it.
+
+        The counterpart to record_issue one step later, and it is CAREFUL WITH
+        THE TRIGGER in a way that one does not have to be. A review run is
+        almost always a re-entry into a session that already has provenance: an
+        issue-triggered session whose pull request drew comments is still
+        issue-triggered, and overwriting that would hand `integration` an
+        "engineer" answer for the exact run that must never move a base branch.
+        So the trigger is only claimed when nothing better is recorded.
+
+        `pr_url` is written unconditionally, because it can only become MORE
+        true: a session learns its pull request here or in `integration`, and
+        both are the same url.
+        """
+        if self.trigger == "engineer":
+            self.trigger = "pr_review"
+            self.tracer.session_trigger(self.adw_id, self.trigger)
+        self.pr_url = context.url or self.pr_url
+        self.tracer.session_pr(self.adw_id, context.url)
+
     # ── usage (run totals mirror what the tracer accumulates in sqlite) ─────
     def add_usage(self, tokens: int, cost: float) -> None:
         self.tokens += tokens

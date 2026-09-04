@@ -172,6 +172,29 @@ def session_statuses(db_path: str | Path) -> dict[str, str]:
         conn.close()
 
 
+def session_pr_urls(db_path: str | Path) -> dict[str, str]:
+    """{adw_id: pr_url} for every session that has one, read-only. {} with no db.
+
+    The third of these module-level readers, and here for the reason the other
+    two are: `pr_watch.py` needs to ask which pull request a session became, and
+    constructing a Tracer to ask would open a WRITE connection and create an
+    events file — a maintenance tool leaving a trail in the record it is only
+    reading. Sessions without a pull request are omitted rather than returned
+    empty, because every caller filters them out anyway.
+    """
+    if not Path(db_path).exists():
+        return {}
+    conn = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
+    try:
+        return {row[0]: row[1] for row in conn.execute(
+            "SELECT adw_id, pr_url FROM sessions WHERE pr_url IS NOT NULL "
+            "AND pr_url != ''")}
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+
+
 class Tracer:
     def __init__(self, db_path: str | Path, events_jsonl: str | Path):
         ensure_dir(Path(db_path).parent)
@@ -259,6 +282,20 @@ class Tracer:
         """
         self.conn.execute("UPDATE sessions SET issue_url=?, trigger=? WHERE adw_id=?",
                           (url[:500], trigger, adw_id))
+
+    def session_trigger(self, adw_id: str, trigger: str) -> None:
+        """Record WHAT asked for this run, without touching where it came from.
+
+        `session_issue()` cannot do this job: it writes `issue_url` in the same
+        statement, so using it to mark a run as review-triggered would blank the
+        issue that started the session — and `integration.integrate()` reads
+        both. A pull request under review has no issue url to offer, and a
+        session that had one must keep it.
+        """
+        if not trigger:
+            return
+        self.conn.execute("UPDATE sessions SET trigger=? WHERE adw_id=?",
+                          (trigger, adw_id))
 
     def session_provenance(self, adw_id: str) -> tuple[str, str, str]:
         """(trigger, issue_url, pr_url) for a session, "" when unknown. Read only.

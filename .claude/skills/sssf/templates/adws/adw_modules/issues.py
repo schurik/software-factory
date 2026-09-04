@@ -35,7 +35,7 @@ import subprocess
 
 from . import git_helper
 from .data_types import (EventRecord, IssueContext, IssueOutput, IssueRef, IssueResult,
-                         IssuesConfig, IssueUpdate)
+                         IssuesConfig, IssueUpdate, PullRequestsConfig)
 from .utils import operator_env
 
 BODY_FILENAME = "issue.md"
@@ -69,7 +69,7 @@ def _run(argv: list[str], cwd) -> subprocess.CompletedProcess:
                           capture_output=True, text=True)
 
 
-def resolve_project(config: IssuesConfig, main_root) -> str:
+def resolve_project(config: IssuesConfig | PullRequestsConfig, main_root) -> str:
     """The project every command is aimed at. Config wins; else the remote.
 
     Returns "" when neither is available, and the CALLER decides what that
@@ -77,6 +77,11 @@ def resolve_project(config: IssuesConfig, main_root) -> str:
     checkout can let the CLI fall back to its own inference. Nothing here
     invents a value, because a wrong project silently watches someone else's
     backlog.
+
+    Takes either config: an issue and a pull request live in the same project,
+    and normalising a remote url is not a fact about issues. `pull_requests.py`
+    imports this rather than growing a second copy that would drift the moment
+    either one learned a new remote form.
     """
     if config.project:
         return config.project
