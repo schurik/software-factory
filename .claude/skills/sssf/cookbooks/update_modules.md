@@ -19,7 +19,7 @@ Extend `adws/adw_modules/` with new low-level logic.
 | `gates.py` | validation gates over envelope claims |
 | `permissions.py` | the write boundary — snapshots the tree, checks it after every agent call against that agent's `writes` plus `defaults.protected_files`, rolls unauthorized changes back and kills the phase. `tools` is a capability list; THIS is the boundary |
 | `worktree.py` | create-or-join the run's worktree and branch, and release it when a clean accepted run no longer needs it |
-| `integration.py` | land that branch again — merge, fast-forward ref update, or push-and-open-a-PR, per `worktree.integration`. Refusals are notes, never exceptions |
+| `integration.py` | land that branch again — merge, fast-forward ref update, or push-and-open-a-PR, per `worktree.integration`. Refusals are notes, never exceptions. `keep_published()` is the small half: a commit phase calls it to push onto a branch that is ALREADY on the remote, so an open pull request never falls behind its session |
 | `quality.py` | lint / typecheck / build / test as CODE: argv lists, not shell strings, run under the operator's own environment, adapted into an envelope so failures reach the builder through the ordinary door |
 | `issues.py` | fetch a tracked work item, adapt it into an envelope, write comments and label state back. Names no agent on the receiving end |
 | `changes.py` | deterministic change capture: resolve the base ref, `git diff` into `context_handoff/changes.diff`, adapt the `ChangeSet` into an envelope an agent can be handed |

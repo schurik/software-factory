@@ -251,3 +251,18 @@ def push(cwd: Pathish, remote: str, branch: str,
     """Push a branch. Returns the completed process — a rejected push is data."""
     args = ["push"] + (["-u"] if set_upstream else []) + [remote, branch]
     return _ask_git(cwd, *args)
+
+
+def remote_tip(cwd: Pathish, remote: str, branch: str) -> str:
+    """The sha the REMOTE-TRACKING ref holds for `branch`, "" when there is none.
+
+    Read from `refs/remotes/<remote>/<branch>`, which is local: `push` writes it,
+    so its existence is the answer to "has this branch ever been published from
+    here" and its value is the answer to "does the remote already have this
+    commit" — both without a network round trip in a phase that may have nothing
+    to do. It can be stale if someone else pushed to the branch, and the push
+    that reads it is the thing that finds out; a rejected push is data.
+    """
+    ref = f"refs/remotes/{remote}/{branch}"
+    completed = _ask_git(cwd, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    return completed.stdout.strip() if completed.returncode == 0 else ""

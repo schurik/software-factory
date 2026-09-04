@@ -19,7 +19,8 @@ fails the run.
 import argparse
 import sys
 
-from adw_modules import agents, gates, git_helper, quality, session, utils
+from adw_modules import (agents, gates, git_helper, integration, quality, session,
+                         utils)
 from adw_modules.data_types import AgentCall, BuildOutput, PhaseParams, PlanOutput
 
 REQUIRED_AGENTS = ["planner", "builder"]
@@ -83,7 +84,12 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         with run.phase(PhaseParams(name="commit", kind="code", owner="git",
                                    description="Commit the tested and quality-verified working tree")) as ph:
             message = previous.commit_message or f"sssf({run.adw_id}): {previous.summary}"
-            ph.log(sha=git_helper.commit_all(run.repo_root, message), message=message)
+            sha = git_helper.commit_all(run.repo_root, message)
+            # A session whose branch is already pushed keeps its pull request
+            # current — on a branch nobody published this is a no-op.
+            synced = integration.keep_published(run)
+            ph.log(sha=sha, message=message, pushed=synced.pushed,
+                   notes=" · ".join(synced.notes))
 
     return run.finish(accepted=verified,
                       reason=f"verify/test never came back clean after {MAX_FIX_LOOPS} fix attempt(s)")

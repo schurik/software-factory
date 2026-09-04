@@ -260,8 +260,8 @@ class Tracer:
         self.conn.execute("UPDATE sessions SET issue_url=?, trigger=? WHERE adw_id=?",
                           (url[:500], trigger, adw_id))
 
-    def session_provenance(self, adw_id: str) -> tuple[str, str]:
-        """(trigger, issue_url) for a session, "" when unknown. Read, not written.
+    def session_provenance(self, adw_id: str) -> tuple[str, str, str]:
+        """(trigger, issue_url, pr_url) for a session, "" when unknown. Read only.
 
         A run is one PROCESS but a session can span several — `just integrate
         <adw_id>` re-enters an ADW hours later — and provenance that lived only
@@ -269,11 +269,18 @@ class Tracer:
         "engineer" on an issue-triggered session and merged into the base
         branch: the one control this phase put in code rather than in config,
         defeated by the documented follow-up path.
+
+        `pr_url` rides along for the same reason and for a second one: a session
+        whose branch is already a pull request must not open a second one, and
+        the process that opened it is long gone. Without this, a later chain in
+        the same session re-ran `pr create` against a branch that already had a
+        PR, the forge refused, and an integration whose push had ALREADY updated
+        the pull request was recorded as a failed run.
         """
         row = self.conn.execute(
-            "SELECT trigger, issue_url FROM sessions WHERE adw_id=?", (adw_id,)
+            "SELECT trigger, issue_url, pr_url FROM sessions WHERE adw_id=?", (adw_id,)
         ).fetchone()
-        return (row[0] or "", row[1] or "") if row else ("", "")
+        return (row[0] or "", row[1] or "", row[2] or "") if row else ("", "", "")
 
     def session_pr(self, adw_id: str, url: str) -> None:
         """Record the pull request this run's branch became.

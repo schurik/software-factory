@@ -47,6 +47,7 @@ You run the system, observe the system, and help the user interact with it. **Yo
 Every run executes in its own git worktree, `<worktrees_dir>/<adw_id>`, on its own branch `sssf/<adw_id>`, cut from a base ref pinned at run start. **The engineer's working tree is never touched**, two runs can execute at once, and a failed run leaves its state somewhere you can open instead of somewhere in the way. Three things follow, and they surprise people who expect v1's behaviour:
 
 - **A chain's commits are on its branch, not on yours.** `just integrate <adw_id>` (or the `integrate` phase at the end of `adw_simple_sdlc`) is what lands them, the way `worktree.integration` in the config says to. A branch that has not landed is not a failed run.
+- **A branch that has been pushed stays pushed.** Once a session's branch is on the remote (`mode: pr`), every later commit phase in that session pushes to it, so an open pull request shows what the session actually contains — and integrating again updates that PR instead of trying to open a second one. Nothing publishes a branch on its own; the first push is still `just integrate <adw_id>`.
 - **A failed or killed run keeps its worktree.** So does any worktree with uncommitted work in it. `just worktrees` lists them with the state of the run that owns each; `just worktrees-prune` reclaims the ones nothing needs.
 - **The trace does not move.** `data_dir` and the db are anchored to the main checkout, so one db holds every concurrent run and survives a pruned worktree.
 

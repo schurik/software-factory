@@ -64,7 +64,7 @@ Phases: engineer(request) -> planner -> builder -> git(commit)
 import argparse
 import sys
 
-from adw_modules import agents, gates, git_helper, session, utils
+from adw_modules import agents, gates, git_helper, integration, session, utils
 from adw_modules.data_types import AgentCall, BuildOutput, PhaseParams, PlanOutput
 
 REQUIRED_AGENTS = ["planner", "builder"]        # names, never models
@@ -96,7 +96,12 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         # in and none of them defaults, because with a worktree per run there
         # are at least two trees on disk — committing into the wrong one is the
         # bug this signature makes unwritable.
-        ph.log(sha=git_helper.commit_all(run.repo_root, message), message=message)
+        sha = git_helper.commit_all(run.repo_root, message)
+        # A session whose branch is already pushed keeps its pull request
+        # current — on a branch nobody published this is a no-op.
+        synced = integration.keep_published(run)
+        ph.log(sha=sha, message=message, pushed=synced.pushed,
+               notes=" · ".join(synced.notes))
 
     return run.finish()
 
@@ -127,6 +132,8 @@ The `Phases:` line in the docstring is not decoration: the orchestrator lists ev
 
     return run.finish(accepted=verified, reason="the suite or the review never came back clean")
 ```
+
+**Every commit phase pairs `commit_all` with `keep_published`, including in a chain that integrates at the end.** The two answer different questions: `integrate` decides where a branch GOES, once; `keep_published` keeps a branch that has already gone there current, every time the chain commits. Without it, a chain joined onto a reviewed session with `--adw-id` commits onto a branch whose pull request then shows less than the session contains — and nothing says so. It pushes only when the branch is already on the remote, so it can never publish a branch behind the engineer's back.
 
 ## Non-negotiables
 

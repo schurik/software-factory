@@ -65,7 +65,9 @@ def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
     # Read AFTER session_start, so a brand-new session has its row to read from
     # and a joined one has the first process's answer rather than this one's
     # default. An issue-triggered session that a later ADW re-enters must still
-    # know it was issue-triggered — integration.py refuses to merge on that.
+    # know it was issue-triggered — integration.py refuses to merge on that —
+    # and a session whose branch is already a pull request must know THAT, or it
+    # proposes the branch a second time instead of pushing to the PR it has.
     run.adopt_provenance(*tracer.session_provenance(adw_id))
     tracer.session_workspace(adw_id, workspace)
     # This process is the run. Record it before any phase opens, so a run that

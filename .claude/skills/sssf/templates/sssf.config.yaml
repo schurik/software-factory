@@ -115,7 +115,11 @@ worktree:
     mode: merge                    # none | merge | pr
     merge_flags: ["--no-ff"]       # mode: merge — the run stays legible as one merge
     remote: origin                 # mode: pr — where the branch is pushed
-    open_pr: false                 # mode: pr — also run pr_command after pushing
+    # mode: pr — also run pr_command after pushing. Repeatable either way: once
+    # a branch is on the remote, every later commit phase in that session pushes
+    # to it, and integrating again updates the pull request rather than opening
+    # a second one. Nothing publishes a branch on its own.
+    open_pr: false
     pr_command: ["gh", "pr", "create", "--fill"]
     # Passed as --body, rendered with {adw_id}, {branch}, {base_ref} and — on an
     # issue-triggered run — {issue_number} and {issue_url}. `Closes #<n>` here is

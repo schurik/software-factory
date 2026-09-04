@@ -65,6 +65,11 @@ class Run:
         self.trigger = "engineer"
         self.issue_number = 0
         self.issue_url = ""
+        # Where this session's work already went. Empty until an integration
+        # opens a pull request; read back from the trace by every later process
+        # in the session, because a branch that is already a PR gets pushed to,
+        # never proposed a second time.
+        self.pr_url = ""
         # ...unless the session already knows better. A joined run inherits the
         # provenance the first process recorded; without this every re-entry
         # would claim to be engineer-triggered. session.ensure() fills it in.
@@ -86,12 +91,16 @@ class Run:
         self._agent_map_path.write_text(json.dumps(self.agent_map, indent=2))
 
     # ── issue provenance (set by an issue phase, read by integration) ──────
-    def adopt_provenance(self, trigger: str, issue_url: str) -> None:
+    def adopt_provenance(self, trigger: str, issue_url: str, pr_url: str = "") -> None:
         """Take on what the session already recorded, without re-writing it.
 
         The counterpart to record_issue: that one is a run LEARNING it came from
         an issue, this one is a later process being TOLD. Nothing is written
         back, because nothing changed.
+
+        `pr_url` is the same story told forwards: the first process opened the
+        pull request, and every process after it has to know that the branch is
+        under review — integration pushes to it instead of opening another one.
         """
         if trigger:
             self.trigger = trigger
@@ -99,6 +108,8 @@ class Run:
             self.issue_url = issue_url
             tail = issue_url.rstrip("/").rsplit("/", 1)[-1]
             self.issue_number = int(tail) if tail.isdigit() else 0
+        if pr_url:
+            self.pr_url = pr_url
 
     def record_issue(self, context) -> None:
         """Bind this run to the work item that caused it, in memory and in the db.
