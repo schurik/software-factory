@@ -249,10 +249,13 @@ class VerifyOutput(EnvelopeBase):
 
 
 class IssueOutput(EnvelopeBase):
-    """A tracked work item, shaped as an envelope so the planner can consume it.
+    """A tracked work item, shaped as an envelope so an agent can consume it.
 
     Same adapter idea as VerifyOutput and ChangesOutput: code fetches the issue,
-    the planner receives it through the one door every agent handoff uses.
+    and whichever agent comes next receives it through the one door every agent
+    handoff uses. WHICH agent is the ADW's business, not this type's — a scout
+    triaging it, a planner specifying it, or a refinement agent enriching it
+    before either are all the same handoff, and none of them needs a variant.
 
     The BODY IS NOT A FIELD, and that is deliberate twice over. Envelopes are
     persisted whole into `envelopes.payload_json`, and an issue body can be a

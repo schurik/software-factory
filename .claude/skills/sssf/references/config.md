@@ -164,7 +164,7 @@ Where work items come from, and which chain each label asks for. **Off by defaul
 
 1. **The routing label is the authorization** — a human applied it, and the watcher never looks at an issue without one.
 2. **`trusted_authors`**, checked in the issue phase, before any agent is spawned.
-3. **The body is an artifact, not a field** — it reaches the planner as `artifacts[0]` framed as a user's description of a problem, never as instructions. It is also absent from the persisted envelope.
+3. **The body is an artifact, not a field** — it reaches the consuming agent as `artifacts[0]` framed as a user's description of a problem, never as instructions. It is also absent from the persisted envelope. Which agent that is, is the ADW's choice: a scout, a planner, or something that enriches the issue first.
 4. **`writes:` and `protected_files`** are unchanged but now load-bearing: an agent editing the machinery that judges it is rolled back by `permissions.py`.
 5. **`force_pr`** — the base branch is not reachable from this path.
 
