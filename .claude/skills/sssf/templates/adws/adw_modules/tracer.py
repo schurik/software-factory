@@ -36,7 +36,11 @@ CREATE TABLE IF NOT EXISTS sessions (
   -- 'issue'); `issue_url` is canonical rather than a number, because a number
   -- means nothing without the project it belongs to.
   trigger       TEXT,
-  issue_url     TEXT
+  issue_url     TEXT,
+  -- Where the run's branch ended up, recorded by the integration phase. The
+  -- URL is the pointer; WHY a branch did not land stays in that phase's notes,
+  -- because a refusal is a paragraph and this is a column.
+  pr_url        TEXT
 );
 CREATE TABLE IF NOT EXISTS phases (
   phase_id      TEXT PRIMARY KEY,
@@ -115,7 +119,8 @@ MIGRATIONS = [("agent_sessions", "color", "TEXT"),
               ("sessions", "base_ref", "TEXT"),
               ("sessions", "base_commit", "TEXT"),
               ("sessions", "trigger", "TEXT"),
-              ("sessions", "issue_url", "TEXT")]
+              ("sessions", "issue_url", "TEXT"),
+              ("sessions", "pr_url", "TEXT")]
 
 
 def session_statuses(db_path: str | Path) -> dict[str, str]:
@@ -224,6 +229,19 @@ class Tracer:
         """
         self.conn.execute("UPDATE sessions SET issue_url=?, trigger=? WHERE adw_id=?",
                           (url[:500], trigger, adw_id))
+
+    def session_pr(self, adw_id: str, url: str) -> None:
+        """Record the pull request this run's branch became.
+
+        Written from integration.integrate() rather than from an ADW, so no
+        chain can land a branch and forget to say where it went. Empty urls are
+        ignored: a merge and a refusal both produce none, and overwriting a real
+        url with "" on a second integration attempt would lose the pointer.
+        """
+        if not url:
+            return
+        self.conn.execute("UPDATE sessions SET pr_url=? WHERE adw_id=?",
+                          (url[:500], adw_id))
 
     def session_finish(self, adw_id: str, ok: bool) -> None:
         self.conn.execute(

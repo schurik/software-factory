@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, shallowRef, watch } from 'vue'
-import type { EventRow, SessionSummary } from '../lib/types'
-import { archiveSession, fetchEvents } from '../lib/api'
+import type { EventRow, PrStatus, SessionSummary } from '../lib/types'
+import { archiveSession, fetchEvents, fetchPrStatus } from '../lib/api'
 import { axisTicks, fmtDate, fmtOffset, ts } from '../lib/format'
 import { agentColor, dotColor, eventLabel } from '../lib/events'
 import { hrefFor } from '../lib/router'
@@ -62,8 +62,13 @@ async function pull() {
 
 onMounted(() => {
   void pull()
+  void pullPrStatus()
   if (props.session.status === 'running') timer = setInterval(() => void pull(), 500)
 })
+
+// A run that finishes may have just opened its PR, so ask once more when the
+// url appears — but never on every poll.
+watch(() => props.session.pr_url, (url) => { if (url) void pullPrStatus() })
 
 onUnmounted(stopPolling)
 
@@ -90,11 +95,57 @@ const issue = computed(() => {
   return { url: s.issue_url, label: /^\d+$/.test(tail) ? `#${tail}` : 'issue' }
 })
 
-// The card is an <a>; so is this chip. Without stopping the click the browser
-// would follow the outer link instead — the card and the issue are two places.
-function openIssue(event: MouseEvent) {
+// The card is an <a>; so are these chips. Without stopping the click the
+// browser would follow the outer link instead — the card, the issue and the
+// pull request are three different places.
+function openLink(event: MouseEvent) {
   event.stopPropagation()
 }
+
+// The pull request the run's branch became. The url comes from the trace, so it
+// is known the moment the integration phase ran; the STATE does not, and is
+// asked of the forge separately — see below.
+const pr = computed(() => {
+  const url = props.session.pr_url
+  if (!url) return null
+  const tail = url.replace(/\/+$/, '').split('/').at(-1) ?? ''
+  return { url, label: /^\d+$/.test(tail) ? `PR #${tail}` : 'PR' }
+})
+
+// Live state, fetched once per card. Deliberately NOT on the 500ms poll: a PR
+// changes on human timescales, the server caches for a minute anyway, and a
+// list of twenty cards must not turn into forty gh calls a second.
+const prState = shallowRef<PrStatus | null>(null)
+
+async function pullPrStatus() {
+  if (!pr.value) return
+  prState.value = await fetchPrStatus(props.session.adw_id)
+}
+
+// One word, and the color that goes with it. Merged reads as done rather than
+// as success — the run's own status already answered whether the WORK passed,
+// and these are different questions.
+const prPill = computed(() => {
+  const state = prState.value
+  if (!state?.available) return null
+  if (state.draft && state.state === 'OPEN') return { text: 'draft', tone: 'dim' }
+  if (state.state === 'MERGED') return { text: 'merged', tone: 'done' }
+  if (state.state === 'CLOSED') return { text: 'closed', tone: 'bad' }
+  if (state.checks === 'FAILURE') return { text: 'checks failed', tone: 'bad' }
+  if (state.checks === 'PENDING') return { text: 'checks running', tone: 'wait' }
+  if (state.review === 'CHANGES_REQUESTED') return { text: 'changes requested', tone: 'wait' }
+  if (state.review === 'APPROVED') return { text: 'approved', tone: 'good' }
+  if (state.state === 'OPEN') return { text: 'open', tone: 'good' }
+  return null
+})
+
+const prTitle = computed(() => {
+  const state = prState.value
+  if (!state) return pr.value?.url ?? ''
+  if (!state.available) return state.reason ?? pr.value?.url ?? ''
+  return [state.title, state.state, state.checks && `checks ${state.checks.toLowerCase()}`,
+          state.review].filter(Boolean).join(' · ')
+})
 
 const range = computed(() => {
   const s = props.session
@@ -217,6 +268,7 @@ const hiddenRowCount = computed(() =>
     </button>
     <span class="card-id">{{ session.adw_id }}</span>
     <span class="card-adw" :title="session.adw_name ?? ''">{{ session.adw_name ?? '—' }}</span>
+    <div v-if="issue || pr" class="card-links">
     <a
       v-if="issue"
       class="card-issue"
@@ -224,9 +276,22 @@ const hiddenRowCount = computed(() =>
       target="_blank"
       rel="noopener noreferrer"
       :title="`started from ${issue.url}`"
-      @click="openIssue"
+      @click="openLink"
       >{{ issue.label }}</a
     >
+    <a
+      v-if="pr"
+      class="card-pr"
+      :href="pr.url"
+      target="_blank"
+      rel="noopener noreferrer"
+      :title="prTitle"
+      @click="openLink"
+    >
+      {{ pr.label }}
+      <span v-if="prPill" class="pr-pill" :class="prPill.tone">{{ prPill.text }}</span>
+    </a>
+    </div>
     <span class="card-req" :title="session.request ?? ''">{{ session.request }}</span>
 
     <div v-if="rows.length" class="tl">
@@ -281,8 +346,11 @@ const hiddenRowCount = computed(() =>
 .card {
   /* Uniform size: the grid fixes the width, this fixes the height — content
      clamps and truncates rather than resizing the card. Grew by one 40px row
-     slot when the timeline went from three to four. */
-  height: 420px;
+     slot when the timeline went from three to four, and by a 22px chip row
+     plus its gap when provenance (issue, pull request) arrived. Runs with
+     neither pay 32px of whitespace for the uniformity; a grid whose cards
+     changed height with their metadata would cost more than that to read. */
+  height: 452px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -370,14 +438,24 @@ const hiddenRowCount = computed(() =>
   white-space: nowrap;
 }
 
+/* Where this run came from and where it went, on ONE row. Stacked, the two
+   chips cost a line the fixed-height card does not have, and the footer falls
+   off the bottom edge. */
+.card-links {
+  /* flex: none, like every other header row: the card is a column with a fixed
+     height, and a row that may shrink gets crushed to nothing by it. */
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* Amber, because it is the one thing on the card that did not come from the
    engineer at the keyboard. Sits beside the ADW name: same question — what
    produced this run — answered from the other side. */
 .card-issue {
   flex: none;
-  /* The card stacks its header in a column, so without this the chip would
-     stretch to the full card width — flex: none only holds the main axis. */
-  align-self: flex-start;
+  
   font-family: var(--mono);
   font-size: 14px;
   color: var(--amber);
@@ -391,6 +469,57 @@ const hiddenRowCount = computed(() =>
 .card-issue:hover {
   border-color: var(--amber);
   background: rgba(232, 182, 74, 0.1);
+}
+
+/* Violet, so the two provenance chips read as one row of the same kind while
+   staying distinguishable at a glance: amber came in, violet went out. */
+.card-pr {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--violet);
+  border: 1px solid rgba(148, 163, 255, 0.35);
+  border-radius: 5px;
+  padding: 1px 6px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.card-pr:hover {
+  border-color: var(--violet);
+  background: rgba(148, 163, 255, 0.1);
+}
+
+/* Absent entirely when the forge could not be asked — a pill that said
+   "unknown" would take the same space to say nothing. */
+.pr-pill {
+  font-size: 12px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.pr-pill.good {
+  color: var(--green);
+}
+
+.pr-pill.bad {
+  color: var(--red);
+}
+
+.pr-pill.wait {
+  color: var(--amber);
+}
+
+.pr-pill.done {
+  color: var(--purple);
+}
+
+.pr-pill.dim {
+  color: var(--faint);
 }
 
 .card-req {

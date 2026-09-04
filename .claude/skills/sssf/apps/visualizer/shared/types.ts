@@ -50,6 +50,39 @@ export interface Session {
   trigger: string | null;
   /** Canonical URL of the work item that caused this run, when there was one. */
   issue_url: string | null;
+  /**
+   * The pull request this run's branch became, written by the integration
+   * phase. Null covers three different endings — the run merged instead of
+   * opening one, integration refused, or the chain never got that far — and
+   * the integrate phase's notes are where that is spelled out.
+   */
+  pr_url: string | null;
+}
+
+/**
+ * Live state of a pull request, asked of the forge at view time rather than
+ * read from the trace — which knows only the url the run recorded, and cannot
+ * know that the PR was merged an hour later.
+ *
+ * Every field is optional because this is best-effort: the server answers
+ * `available: false` when there is no forge CLI, no url, or the call failed,
+ * and the UI then shows the url alone rather than a wrong state.
+ */
+export interface PrStatus {
+  available: boolean;
+  url?: string;
+  /** OPEN | MERGED | CLOSED, as the forge spells it. */
+  state?: string;
+  draft?: boolean;
+  title?: string;
+  /** SUCCESS | FAILURE | PENDING — rolled up across the head commit's checks. */
+  checks?: string;
+  /** APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED, when the forge reports one. */
+  review?: string;
+  /** Why there is no state, when available is false. Shown as a tooltip only. */
+  reason?: string;
+  /** Seconds this answer may be reused before the server asks again. */
+  ttl_seconds?: number;
 }
 
 /**
@@ -308,6 +341,8 @@ export interface HealthResponse {
   db: string;
   journal_mode: string;
   sessions: number;
+  /** Whether a forge CLI is reachable, so the UI can skip asking for PR state. */
+  forge?: boolean;
 }
 
 export interface ApiError {

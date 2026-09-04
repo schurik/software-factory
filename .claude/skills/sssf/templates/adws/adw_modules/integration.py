@@ -190,5 +190,8 @@ def _open_pr(run, result: IntegrationResult, params: IntegrationRequest) -> Inte
         return result
     result.pr_url = next((line for line in completed.stdout.split()
                           if line.startswith("http")), "")
+    # Recorded here, not in the ADW: this is the only place a pr url exists, and
+    # a chain that landed a branch must not be able to forget where it went.
+    run.tracer.session_pr(run.adw_id, result.pr_url)
     result.notes.append(f"opened a pull request{': ' + result.pr_url if result.pr_url else ''}")
     return result

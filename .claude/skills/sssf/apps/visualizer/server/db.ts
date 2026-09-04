@@ -158,7 +158,8 @@ export class SssfDb {
                 total_tokens, total_cost,
                 ${this.optionalColumn("sessions", "archived")},
                 ${this.optionalColumn("sessions", "trigger")},
-                ${this.optionalColumn("sessions", "issue_url")}
+                ${this.optionalColumn("sessions", "issue_url")},
+                ${this.optionalColumn("sessions", "pr_url")}
            FROM sessions
           WHERE COALESCE(${this.hasColumn("sessions", "archived") ? "archived" : "0"}, 0) = 0
           ORDER BY started_at DESC, rowid DESC
@@ -212,7 +213,8 @@ export class SssfDb {
                   status, engineer, started_at, ended_at,
                   total_tokens, total_cost,
                   ${this.optionalColumn("sessions", "trigger")},
-                  ${this.optionalColumn("sessions", "issue_url")}
+                  ${this.optionalColumn("sessions", "issue_url")},
+                  ${this.optionalColumn("sessions", "pr_url")}
              FROM sessions WHERE adw_id = ?`,
         )
         .get(adwId) ?? null

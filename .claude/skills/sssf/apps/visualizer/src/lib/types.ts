@@ -17,6 +17,7 @@ export type {
   UsageBreakdown,
   ToolCallPayload,
   AgentPrompts,
+  PrStatus,
   PromptsResponse,
   HealthResponse,
   SessionStatus,

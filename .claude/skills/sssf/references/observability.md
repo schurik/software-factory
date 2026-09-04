@@ -74,7 +74,11 @@ sessions (
   trigger       TEXT,              -- engineer | issue. NULL only on rows older
                                    -- than the column: a run nobody can classify
                                    -- and a run somebody typed are different answers
-  issue_url     TEXT               -- the work item that caused it, when there was one
+  issue_url     TEXT,              -- the work item that caused it, when there was one
+  pr_url        TEXT               -- the pull request its branch became. NULL covers
+                                   -- three endings — merged instead, integration
+                                   -- refused, or the chain never got that far — and
+                                   -- the integrate phase's notes say which
 );
 
 phases (
