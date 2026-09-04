@@ -143,6 +143,11 @@ How a run's branch gets back to its base. Configuration rather than code, becaus
 
 A refusal fails the *integration*, not the *run*: the phase ran and reported, the commits exist, the branch is kept, and `just integrate <adw_id>` finishes the job later.
 
+**`pr` mode is repeatable, and a published branch stays published.** A session does not end when its pull request is opened — `just plan-build --adw-id <id>` commits onto the same branch hours later — so two things hold:
+
+- **Every commit phase pushes, if the branch is already on the remote.** `integration.keep_published(run)` runs right after `commit_all` and pushes only when `refs/remotes/<remote>/<branch>` already exists, i.e. when an earlier integration published this branch. On a branch nobody pushed it does nothing: putting a branch on the remote for the first time stays the engineer's call. A rejected push (someone else moved the branch) is a note in the commit phase's log, not a failed phase — the commits are on the branch either way.
+- **Integrating a second time updates the pull request; it never opens another.** The push is what carries the new commits, and `pr_command` is skipped once the session has a `pr_url`. If the trace has none but the forge refuses because a PR already exists, the url in that refusal is taken and recorded — a push that updated a pull request is reported as the success it is, not as a failed run.
+
 ### `issues`
 
 Where work items come from, and which chain each label asks for. **Off by default**, because this is the one path where the prompt is written by whoever can file an issue rather than by the engineer at the keyboard.

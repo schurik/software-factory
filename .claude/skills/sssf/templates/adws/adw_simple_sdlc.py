@@ -73,9 +73,18 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     baseline = git_helper.rev(run.repo_root, "HEAD")   # pinned before this run commits anything
 
     def commit(ph, envelope) -> None:
-        """Commit what the preceding phase produced, in that agent's own words."""
+        """Commit what the preceding phase produced, in that agent's own words.
+
+        Then keep an already-published branch published. This chain integrates
+        at the end, but not every run of it is the first: joined with a pinned
+        --adw-id onto a session whose branch is already a pull request, each
+        commit here has to reach the reviewer, not just the branch.
+        """
         message = envelope.commit_message or f"sssf({run.adw_id}): {envelope.summary}"
-        ph.log(sha=git_helper.commit_all(run.repo_root, message), message=message)
+        sha = git_helper.commit_all(run.repo_root, message)
+        synced = integration.keep_published(run)
+        ph.log(sha=sha, message=message, pushed=synced.pushed,
+               notes=" · ".join(synced.notes))
 
     def record(ph, result) -> None:
         """Log a deterministic block's verdict — the same shape every ADW uses."""

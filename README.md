@@ -362,6 +362,7 @@ Honest edges, because knowing them is cheaper than discovering them.
 | An agent edits something it should not | Detected and rolled back after the call, and the phase fails | Expected. Widen that agent's `writes` if the change was legitimate |
 | Commit phase has nothing to commit | `commit_all` raises if the tree is not a git repo or nothing changed | `git init` with one commit first. A no-op build fails the phase rather than committing nothing |
 | A green run left your branch unchanged | Runs commit to `sssf/<adw_id>` in their own worktree, not to your branch | Expected. `just integrate <adw_id>` lands it; `just worktrees` shows what is still around |
+| A pull request missing a later commit | A session keeps working after its PR is opened — a chain joined with `--adw-id` commits onto the same branch | Fixed: every commit phase pushes a branch that is already on the remote, and `just integrate <adw_id>` run again updates that PR instead of opening a second one. Read the commit phase's `pushed`/`notes` if it did not go out |
 | `install.py --force` | Overwrites **all** stamped files, config and prompts included | Commit before you force |
 | `coding_agent: claude_code` | Schema-valid, but `agent_cc.py` raises | v1 is Pi only |
 

@@ -153,6 +153,8 @@ just worktrees                   # every run worktree, and the state of the run 
 just worktrees-prune             # reclaim the ones whose run ended cleanly
 ```
 
+Once a branch has been pushed (`mode: pr`), later commits in the same session go out with it: each commit phase pushes to the branch it already published, and `just integrate <adw_id>` run again updates that pull request rather than opening a second one. So a chain joined onto a reviewed session with `--adw-id` does not leave the PR behind — the commit phase's log line says `pushed: True` and names the pull request.
+
 Integration can decline for a good reason — the engineer's checkout is mid-edit, or the run left uncommitted work in its worktree — and says which in its phase log. That is not a failed run: the commits exist and the branch is kept, so the same command finishes the job once the reason is gone. Report the decline and its reason rather than retrying it.
 
 ## Report
