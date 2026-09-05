@@ -8,7 +8,7 @@ Each phase is a self-contained work item with its own document. Read this page f
 
 ## Where we start from
 
-Upstream SSSF is a Claude Code skill at `.claude/skills/sssf/` that stamps a deterministic Python control plane into any repository. Its core decision — **code owns sequencing, retries and acceptance; the agent owns only the work inside one bounded phase** — is the right one, and it is the expensive part to get right. It is already built:
+Upstream SSSF is an agent skill (`skills/sssf/`, installable into Claude Code, pi, Codex CLI or opencode) that stamps a deterministic Python control plane into any repository. Its core decision — **code owns sequencing, retries and acceptance; the agent owns only the work inside one bounded phase** — is the right one, and it is the expensive part to get right. It is already built:
 
 | Capability | Where it lives today |
 |---|---|
@@ -18,7 +18,7 @@ Upstream SSSF is a Claude Code skill at `.claude/skills/sssf/` that stamps a det
 | Claims verified after the fact, not trusted | `adw_modules/gates.py` |
 | Write boundary enforced with rollback | `adw_modules/permissions.py` |
 | Streaming trace written while the run is in flight | `adw_modules/tracer.py` → SQLite (WAL) + JSONL |
-| Live trace UI | `.claude/skills/sssf/apps/visualizer/` (Bun + Vue) |
+| Live trace UI | `skills/sssf/apps/visualizer/` (Bun + Vue) |
 | Per-repo extensibility | `scripts/install.py` stamps templates into any repo |
 
 The decision taken was therefore **extend, not rewrite**, and to treat this as a **hard fork**: upstream is a starting point, not a supplier. There is no obligation to keep merges from it clean.
@@ -82,7 +82,7 @@ Named here so nobody plans around their absence by accident:
 
 ## Constraints every phase must respect
 
-The ten hard rules in `.claude/skills/sssf/SKILL.md` apply to everything generated here. The ones that bite most often:
+The ten hard rules in `skills/sssf/SKILL.md` apply to everything generated here. The ones that bite most often:
 
 - **Rule 2 — the synced triad.** An output type in `data_types.py`, its JSON example in the agent's `user.md` `## Report` section, and `output_type=` at every call site are *one* contract. Change one, change all three in the same edit.
 - **Rule 4 — the four-param rule.** More than four parameters means introduce a concrete data type. `AgentCall` and `PhaseParams` are the pattern.
