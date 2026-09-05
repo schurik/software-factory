@@ -56,29 +56,31 @@ The factory is an **agent skill** — a `SKILL.md` with scripts and templates be
 
 ### One command, any agent
 
+The [skills CLI](https://github.com/vercel-labs/skills) installs it into every agent you have:
+
 ```bash
-git clone https://github.com/schurik/software-factory
-cd software-factory
-scripts/install-skill.sh --agent pi          # or claude | codex | opencode | agents | all
+npx skills add schurik/software-factory        # -g for user scope instead of this repo
 ```
 
-It symlinks `skills/sssf/` into that agent's skills directory, so `git pull` here updates every agent at once. `--copy` if the link would outlive this checkout, `--scope project --project <dir>` to install for one repo instead of all of them, `--force` to replace an existing entry.
+It drops the skill in `.agents/skills/sssf` and symlinks that into each agent it detects — Claude Code, Codex, opencode, Cursor, Cline and ~70 others — so there is one copy to update and `npx skills update` updates it everywhere. No manifest, no registry: the CLI finds `skills/sssf/SKILL.md` in this repo on its own.
 
-| `--agent` | user scope | project scope |
+pi is the one agent that reads `~/.agents/skills` and `.agents/skills` itself, so `npx skills add -g schurik/software-factory` covers it with no symlink at all.
+
+Prefer to do it by hand? The skill is a plain directory; copy or symlink `skills/sssf` into whatever your agent scans:
+
+| Agent | user scope | project scope |
 |---|---|---|
-| `claude` | `~/.claude/skills` | `<project>/.claude/skills` |
-| `pi` | `~/.pi/agent/skills` | `<project>/.pi/skills` |
-| `codex` | `~/.codex/skills` | `<project>/.codex/skills` |
-| `opencode` | `~/.config/opencode/skills` | `<project>/.opencode/skills` |
-| `agents` | `~/.agents/skills` | `<project>/.agents/skills` |
-
-`agents` is the vendor-neutral directory that pi and opencode both read — one install, two agents. opencode also reads the `claude` and `agents` locations, so it usually needs no install of its own.
+| Claude Code | `~/.claude/skills` | `<project>/.claude/skills` |
+| pi | `~/.pi/agent/skills` | `<project>/.pi/skills` |
+| Codex CLI | `~/.codex/skills` | `<project>/.codex/skills` |
+| opencode | `~/.config/opencode/skills` | `<project>/.opencode/skills` |
+| pi + opencode | `~/.agents/skills` | `<project>/.agents/skills` |
 
 Then, in the repo you want the factory in, ask for it however your agent spells a skill:
 
 | Agent | Invocation |
 |---|---|
-| Claude Code | `/sssf:sssf install` (plugin) or `/sssf install` (plain skill) |
+| Claude Code | `/sssf install` (skill) or `/sssf:sssf install` (plugin) |
 | pi | `/skill:sssf install` |
 | Codex CLI, opencode | "use the sssf skill to install the factory" |
 
@@ -86,14 +88,12 @@ There is no bare `/install` command anywhere. The agent reads the skill's own `c
 
 ### Claude Code plugin
 
-This repository is also a Claude Code plugin marketplace, which adds versioning and updates on top of the same skill:
+This repository is also a Claude Code plugin marketplace, over the very same skill. Take this path instead of the CLI if you want pinned versions, `claude plugin update`, and a `.claude/settings.json` your team can commit:
 
 ```bash
 claude plugin marketplace add schurik/software-factory
 claude plugin install sssf@sssf            # add --scope project to commit it for the team
 ```
-
-To pin it for everyone who clones a repo, commit this to that repo's `.claude/settings.json`:
 
 ```json
 {
@@ -104,11 +104,11 @@ To pin it for everyone who clones a repo, commit this to that repo's `.claude/se
 }
 ```
 
-Developing on the skill itself? Point Claude Code at your checkout instead of GitHub: `claude plugin marketplace add /path/to/software-factory`, or `claude --plugin-dir /path/to/software-factory` for a one-off session. This checkout also carries `.agents/skills/sssf`, so pi and opencode pick the skill up from the repo with nothing installed at all.
+Developing on the skill itself? Point Claude Code at your checkout instead of GitHub: `claude plugin marketplace add /path/to/software-factory`, or `claude --plugin-dir /path/to/software-factory` for a one-off session. `npx skills add .` does the same for every other agent.
 
-### Manual Install
+### Start to finish, without an agent
 
-`install-skill.sh` only moves a directory. Do it by hand if you prefer — the target below is Claude Code's, and the table above has the rest.
+The agentic path above stops at "ask your agent to install the factory". This is the same thing typed out, when you would rather see every step.
 
 **Prereqs:** [`uv`](https://docs.astral.sh/uv/), [`pi`](https://github.com/mariozechner/pi-coding-agent), `sqlite3`, and an API key for whichever providers your roster names (see below). [`bun`](https://bun.sh) only if you want the visualizer.
 
@@ -349,9 +349,7 @@ software-factory/
 │       └── adws/
 │           ├── adw_*.py                # the twelve starter workflows
 │           └── adw_modules/            # ALL low-level logic, ADW scripts stay thin
-├── scripts/install-skill.sh            # link the skill into claude / pi / codex / opencode
-├── .agents/skills/sssf                 # symlink: pi and opencode read the skill from a checkout
-└── .claude-plugin/                     # the Claude Code plugin envelope, over the same skill
+└── .claude-plugin/                     # the Claude Code plugin envelope, over that same skill
     ├── plugin.json
     └── marketplace.json                # `/plugin marketplace add schurik/software-factory`
 ```
