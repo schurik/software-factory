@@ -1,12 +1,26 @@
 ---
 name: sssf
-description: Super Simple Software Factory — deploy and operate repeatable agents+code workflows (ADWs) in any codebase. Use when the user says /sssf install, wants to create/run/update an ADW, manage the agent roster in sssf.config.yaml, or observe running agent workflows. Keywords - sssf, software factory, ADW, AI developer workflow, agent pipeline, install factory.
+description: Super Simple Software Factory — deploy and operate repeatable agents+code workflows (ADWs) in any codebase. Use when the user asks to install the factory (/sssf:sssf install in Claude Code, /skill:sssf install in pi, or plain words in any other agent), wants to create/run/update an ADW, manage the agent roster in sssf.config.yaml, or observe running agent workflows. Keywords - sssf, software factory, ADW, AI developer workflow, agent pipeline, install factory.
 argument-hint: "[install | create adw | run adw | update config | ...]"
 ---
 
 # Super Simple Software Factory (SSSF)
 
 Reusable combination of **agents plus code**: deterministic Python ADW scripts own sequencing, retries, and acceptance; coding agents (Pi or Claude Code, chosen per agent) work inside bounded phases; typed JSON envelopes carry context between them; everything streams into SQLite for the polled visualizer. Agent proposes, code disposes.
+
+## `<skill>` in every command below
+
+The directory this `SKILL.md` lives in. You read this file, so you already know
+that path — substitute it, never the literal `<skill>`. It is not the repository
+you are installing into: those commands run from the **target repo root**, and
+`<skill>` only ever addresses the generators and the trace UI that ship here.
+
+Where it usually is, by harness: `${CLAUDE_PLUGIN_ROOT}/skills/sssf` when this
+came from the Claude Code plugin (Claude Code expands that variable; nothing
+else does), otherwise the skills directory that harness scans —
+`~/.claude/skills/sssf`, `~/.pi/agent/skills/sssf`, `~/.codex/skills/sssf`,
+`~/.config/opencode/skills/sssf`, `~/.agents/skills/sssf`, or the project-scoped
+twin of any of those.
 
 ## Startup
 
@@ -59,7 +73,7 @@ It is isolation, not a sandbox — an agent with `bash` can leave the worktree, 
 
 | Request | Cookbook |
 |---|---|
-| `/sssf install`, set up the factory in this repo | [cookbooks/install.md](cookbooks/install.md) |
+| install / set up the factory in this repo | [cookbooks/install.md](cookbooks/install.md) |
 | create a new ADW / workflow | [cookbooks/create_adw.md](cookbooks/create_adw.md) |
 | land a run's branch, clean up worktrees | [references/config.md](references/config.md#worktreeintegration) |
 | start runs from tracked issues, run the watcher | [references/config.md](references/config.md#issues) |

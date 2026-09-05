@@ -1,0 +1,22 @@
+{
+  "name": "sssf",
+  "displayName": "Super Simple Software Factory",
+  "version": "1.0.0",
+  "description": "Deploy and operate repeatable agents+code workflows (ADWs) in any codebase: deterministic Python owns sequencing, retries and acceptance; coding agents work inside bounded phases; typed JSON envelopes cross the seams; every event streams into SQLite.",
+  "author": {
+    "name": "schurik",
+    "url": "https://github.com/schurik"
+  },
+  "homepage": "https://github.com/schurik/software-factory",
+  "repository": "https://github.com/schurik/software-factory",
+  "license": "MIT",
+  "keywords": [
+    "sssf",
+    "software-factory",
+    "adw",
+    "ai-developer-workflow",
+    "agent-orchestration",
+    "sdlc",
+    "observability"
+  ]
+}

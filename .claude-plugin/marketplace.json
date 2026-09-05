@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "sssf",
+  "owner": {
+    "name": "schurik",
+    "url": "https://github.com/schurik/software-factory"
+  },
+  "metadata": {
+    "description": "Super Simple Software Factory — repeatable agents-plus-code workflows, as an agent skill.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "sssf",
+      "source": "./",
+      "description": "Deploy and operate repeatable agents+code workflows (ADWs) in any codebase: deterministic Python owns sequencing, retries and acceptance; coding agents work inside bounded phases; every event streams into SQLite.",
+      "version": "1.0.0",
+      "author": { "name": "schurik" },
+      "homepage": "https://github.com/schurik/software-factory",
+      "license": "MIT",
+      "keywords": [
+        "sssf",
+        "software-factory",
+        "adw",
+        "ai-developer-workflow",
+        "agent-orchestration",
+        "sdlc",
+        "observability"
+      ]
+    }
+  ]
+}

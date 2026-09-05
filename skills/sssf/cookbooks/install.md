@@ -1,6 +1,8 @@
 # Install
 
-`/sssf install` — stamp the entire factory out of the skill and into the current working directory.
+Stamp the entire factory out of the skill and into the current working directory.
+Reached however this harness names it — `/sssf:sssf install` in Claude Code,
+`/skill:sssf install` in pi, or plain words in any agent that just read this file.
 
 ## Ask first, stamp second
 
@@ -31,10 +33,14 @@ and a flag would hide that decision in a shell history.
 ## Run it
 
 ```bash
-uv run .claude/skills/sssf/scripts/install.py
+uv run <skill>/scripts/install.py
 ```
 
-Run from the **target repo root** — the cwd is where everything lands. If the skill lives in your user scope, the path is `~/.claude/skills/sssf/scripts/install.py`.
+`<skill>` is the directory this skill lives in — see the note at the top of
+`SKILL.md`, and substitute the real path.
+
+Run it from the **target repo root**: the cwd is where everything lands, and it
+is never the skill's own directory.
 
 ## What gets stamped
 
@@ -62,14 +68,20 @@ Re-running is safe. `install.py` skips **every** file that already exists — yo
 
 ## Post-install checklist
 
-1. **Env** — `cp .env.sample .env`, then set `OPENROUTER_API_KEY` in `.env` for the starter (Pi) roster. An agent on `coding_agent: claude_code` needs no key here — the `claude` CLI brings its own auth, and a subscription is enough; set `CLAUDE_PATH` only if the binary is not on PATH.
-2. **Pi is installed and on PATH** — `pi --version`. Set `PI_PATH` in `.env` if it is not.
-3. **The model resolves** — the config's default `gemini-3.6-flash` must be a registered id in `~/.pi/agent/models.json`. Check with `pi --list-models` or read the file directly; see `references/config.md` for model resolution.
-4. **Gitignore** — `install.py` appends `adws/adw_data/sessions/`, `adws/adw_data/sssf.db*`, `.env`, `.sssf-worktrees/`, `adws/adw_data/issue-locks/`, `__pycache__/` and `*.pyc`; confirm they landed. The worktree entry earns its place twice: chains that commit call `git add -A`, so without it a run's first commit would try to add the tree it is running in.
-5. **Git repo** — ADWs that end in a commit phase call `git_helper.commit_all`, which raises if the cwd is not a git repository. Run `git init` and make a first commit before using `adw_plan_build.py`, `adw_plan_build_test.py`, or `adw_simple_sdlc.py`. `adw_document.py` needs one too: it measures the change with `git diff` against a base ref (`main` by default, `--base` to override).
-6. **Quality commands** — replace the `_placeholder(...)` calls in `adws/adw_modules/quality.py` with this repo's real argv, and delete the blocks you do not want. Skipping this does not fail anything, which is the problem: the placeholders exit 0, so a chain reports a green suite it never ran.
-7. **Integration** — set `worktree.integration.mode` to what this repo agreed above. On `pr`, also decide `open_pr` (pushing is safe everywhere; opening a PR needs an authenticated forge CLI) and, if you want the PR to close its issue on merge, `pr_body_template`.
-8. **Smoke test** — `just demo` runs two cheap read-only workflows back to back, or run the smallest ADW directly:
+1. **`SSSF_SKILL`** — the stamped `justfile` runs the operational scripts
+   (`just issues`, `just prs`, `just kill`, `just worktrees`, `just obs`) out of
+   the skill rather than out of this repo, and every agent keeps its skills
+   somewhere different, so it guesses nothing: put the `SSSF_SKILL=` line
+   `install.py` printed into `.env`. Those five recipes fail with that message
+   until you do; every ADW recipe runs without it, because ADWs are stamped code.
+2. **Env** — `cp .env.sample .env`, then set `OPENROUTER_API_KEY` in `.env` for the starter (Pi) roster. An agent on `coding_agent: claude_code` needs no key here — the `claude` CLI brings its own auth, and a subscription is enough; set `CLAUDE_PATH` only if the binary is not on PATH.
+3. **Pi is installed and on PATH** — `pi --version`. Set `PI_PATH` in `.env` if it is not.
+4. **The model resolves** — the config's default `gemini-3.6-flash` must be a registered id in `~/.pi/agent/models.json`. Check with `pi --list-models` or read the file directly; see `references/config.md` for model resolution.
+5. **Gitignore** — `install.py` appends `adws/adw_data/sessions/`, `adws/adw_data/sssf.db*`, `.env`, `.sssf-worktrees/`, `adws/adw_data/issue-locks/`, `__pycache__/` and `*.pyc`; confirm they landed. The worktree entry earns its place twice: chains that commit call `git add -A`, so without it a run's first commit would try to add the tree it is running in.
+6. **Git repo** — ADWs that end in a commit phase call `git_helper.commit_all`, which raises if the cwd is not a git repository. Run `git init` and make a first commit before using `adw_plan_build.py`, `adw_plan_build_test.py`, or `adw_simple_sdlc.py`. `adw_document.py` needs one too: it measures the change with `git diff` against a base ref (`main` by default, `--base` to override).
+7. **Quality commands** — replace the `_placeholder(...)` calls in `adws/adw_modules/quality.py` with this repo's real argv, and delete the blocks you do not want. Skipping this does not fail anything, which is the problem: the placeholders exit 0, so a chain reports a green suite it never ran.
+8. **Integration** — set `worktree.integration.mode` to what this repo agreed above. On `pr`, also decide `open_pr` (pushing is safe everywhere; opening a PR needs an authenticated forge CLI) and, if you want the PR to close its issue on merge, `pr_body_template`.
+9. **Smoke test** — `just demo` runs two cheap read-only workflows back to back, or run the smallest ADW directly:
 
 ```bash
 just demo                                                    # both, end to end
