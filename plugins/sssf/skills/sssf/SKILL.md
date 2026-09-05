@@ -1,6 +1,6 @@
 ---
 name: sssf
-description: Super Simple Software Factory — deploy and operate repeatable agents+code workflows (ADWs) in any codebase. Use when the user says /sssf install, wants to create/run/update an ADW, manage the agent roster in sssf.config.yaml, or observe running agent workflows. Keywords - sssf, software factory, ADW, AI developer workflow, agent pipeline, install factory.
+description: Super Simple Software Factory — deploy and operate repeatable agents+code workflows (ADWs) in any codebase. Use when the user says /sssf:sssf install (or /sssf install), wants to create/run/update an ADW, manage the agent roster in sssf.config.yaml, or observe running agent workflows. Keywords - sssf, software factory, ADW, AI developer workflow, agent pipeline, install factory.
 argument-hint: "[install | create adw | run adw | update config | ...]"
 ---
 
@@ -59,7 +59,7 @@ It is isolation, not a sandbox — an agent with `bash` can leave the worktree, 
 
 | Request | Cookbook |
 |---|---|
-| `/sssf install`, set up the factory in this repo | [cookbooks/install.md](cookbooks/install.md) |
+| `/sssf:sssf install`, set up the factory in this repo | [cookbooks/install.md](cookbooks/install.md) |
 | create a new ADW / workflow | [cookbooks/create_adw.md](cookbooks/create_adw.md) |
 | land a run's branch, clean up worktrees | [references/config.md](references/config.md#worktreeintegration) |
 | start runs from tracked issues, run the watcher | [references/config.md](references/config.md#issues) |

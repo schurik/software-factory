@@ -12,7 +12,13 @@ set positional-arguments
 # swaps the whole roster for one run.
 config := env_var_or_default("SSSF_CONFIG", "adws/adw_sssf_config/sssf.config.yaml")
 db     := "adws/adw_data/sssf.db"
-skill  := ".claude/skills/sssf"
+# Where the sssf skill itself lives — the operational scripts (issue_watch,
+# pr_watch, kill_run, worktrees) and the trace UI are read from there, not from
+# this repo. Installed as the `sssf` plugin the skill lives in Claude Code's
+# plugin directory, so set SSSF_SKILL in `.env` to that path; the default below
+# is the hand-copied, project-scoped layout. `just` resolves it per recipe, in
+# the shell, so cron sees the same value `.env` gives an interactive run.
+skill  := '"${SSSF_SKILL:-.claude/skills/sssf}"'
 
 # list every recipe
 default:
