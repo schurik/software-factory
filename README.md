@@ -1,6 +1,6 @@
 # Super Simple Software Factory
 
-> **Repeatable agents-plus-code workflows, packaged as one Claude Code plugin, stamped into any repo.**
+> **Repeatable agents-plus-code workflows, packaged as one agent skill, stamped into any repo.**
 > Deterministic Python owns the graph. Coding agents are bounded nodes inside it.
 
 📺 Full breakdown on YouTube: **[Super Simple Software Factory](https://youtu.be/haUfb1ievTE)**
@@ -18,7 +18,7 @@ A software factory does one thing: it gives you more leverage on your prompt. Ho
 Everyone can get an agent to write code once. Almost nobody gets the same result twice. This fixes that by moving the control plane out of the prompt and into Python. An ADW script (AI Developer Workflow) owns sequencing, retries, and acceptance. Agents work inside named phases. Typed JSON envelopes carry context across the seams. Every event streams into SQLite while it is still happening. **Agent proposes, code disposes.**
 
 > [!NOTE]
-> **This branch is the plugin alone**, which is the thing you install. For a repo with the factory already stamped into it, a demo app it planned, built, tested, reviewed, and documented, and the real traces from those runs, see the **[`example` branch](../../tree/example)**.
+> **This branch is the skill alone**, which is the thing you install. For a repo with the factory already stamped into it, a demo app it planned, built, tested, reviewed, and documented, and the real traces from those runs, see the **[`example` branch](../../tree/example)**.
 
 ---
 
@@ -50,29 +50,50 @@ The bill for skipping this is not only tokens. It is cost, speed, and consistenc
 
 ## Install
 
-Two steps: get the plugin into your setup, then stamp the factory.
+Two steps: get the skill into your agent, then stamp the factory.
 
-This repository is a **Claude Code plugin marketplace**. The factory ships as one plugin, `sssf`, so an agent can install it for you instead of you copying directories around.
+The factory is an **agent skill** — a `SKILL.md` with scripts and templates beside it. That format is read by Claude Code, [pi](https://github.com/mariozechner/pi-coding-agent), Codex CLI and opencode alike; the only thing that differs is which directory each one scans. So there is nothing to port: put the directory where your agent looks.
 
-### Plugin Install (recommended)
+### One command, any agent
 
-Inside Claude Code:
-
+```bash
+git clone https://github.com/schurik/software-factory
+cd software-factory
+scripts/install-skill.sh --agent pi          # or claude | codex | opencode | agents | all
 ```
-/plugin marketplace add schurik/software-factory
-/plugin install sssf@sssf
-```
 
-Or from any shell, which is also the form to hand another agent:
+It symlinks `skills/sssf/` into that agent's skills directory, so `git pull` here updates every agent at once. `--copy` if the link would outlive this checkout, `--scope project --project <dir>` to install for one repo instead of all of them, `--force` to replace an existing entry.
+
+| `--agent` | user scope | project scope |
+|---|---|---|
+| `claude` | `~/.claude/skills` | `<project>/.claude/skills` |
+| `pi` | `~/.pi/agent/skills` | `<project>/.pi/skills` |
+| `codex` | `~/.codex/skills` | `<project>/.codex/skills` |
+| `opencode` | `~/.config/opencode/skills` | `<project>/.opencode/skills` |
+| `agents` | `~/.agents/skills` | `<project>/.agents/skills` |
+
+`agents` is the vendor-neutral directory that pi and opencode both read — one install, two agents. opencode also reads the `claude` and `agents` locations, so it usually needs no install of its own.
+
+Then, in the repo you want the factory in, ask for it however your agent spells a skill:
+
+| Agent | Invocation |
+|---|---|
+| Claude Code | `/sssf:sssf install` (plugin) or `/sssf install` (plain skill) |
+| pi | `/skill:sssf install` |
+| Codex CLI, opencode | "use the sssf skill to install the factory" |
+
+There is no bare `/install` command anywhere. The agent reads the skill's own `cookbooks/install.md` and does the rest.
+
+### Claude Code plugin
+
+This repository is also a Claude Code plugin marketplace, which adds versioning and updates on top of the same skill:
 
 ```bash
 claude plugin marketplace add schurik/software-factory
 claude plugin install sssf@sssf            # add --scope project to commit it for the team
 ```
 
-Then, in the repo you want the factory in, type **`/sssf:sssf install`**. Plugin components are namespaced `plugin:skill`, so the plugin is `sssf`, the skill is `sssf`, and `install` is the argument. There is no bare `/install` command. The agent reads the skill's own `cookbooks/install.md` and does the rest.
-
-To pin the marketplace and the plugin for everyone who clones a repo, commit this to its `.claude/settings.json`:
+To pin it for everyone who clones a repo, commit this to that repo's `.claude/settings.json`:
 
 ```json
 {
@@ -83,22 +104,22 @@ To pin the marketplace and the plugin for everyone who clones a repo, commit thi
 }
 ```
 
-Developing on the plugin itself? Point Claude Code at your checkout instead of GitHub: `claude plugin marketplace add /path/to/software-factory`, or run `claude --plugin-dir /path/to/software-factory/plugins/sssf` for a one-off session.
+Developing on the skill itself? Point Claude Code at your checkout instead of GitHub: `claude plugin marketplace add /path/to/software-factory`, or `claude --plugin-dir /path/to/software-factory` for a one-off session. This checkout also carries `.agents/skills/sssf`, so pi and opencode pick the skill up from the repo with nothing installed at all.
 
 ### Manual Install
 
-The skill is a plain directory, so nothing forces you through the plugin path.
+`install-skill.sh` only moves a directory. Do it by hand if you prefer — the target below is Claude Code's, and the table above has the rest.
 
 **Prereqs:** [`uv`](https://docs.astral.sh/uv/), [`pi`](https://github.com/mariozechner/pi-coding-agent), `sqlite3`, and an API key for whichever providers your roster names (see below). [`bun`](https://bun.sh) only if you want the visualizer.
 
 ```bash
 # 1. get the skill into the target repo
 mkdir -p .claude/skills
-cp -r /path/to/software-factory/plugins/sssf/skills/sssf .claude/skills/
+cp -r /path/to/software-factory/skills/sssf .claude/skills/
 
 # 2. stamp the factory (run from the target repo ROOT, the cwd is where everything lands)
 uv run .claude/skills/sssf/scripts/install.py
-cp .env.sample .env                              # then set OPENROUTER_API_KEY
+cp .env.sample .env                              # set SSSF_SKILL (install.py prints it) + OPENROUTER_API_KEY
 pi --version                                     # confirm pi is on PATH, or set PI_PATH in .env
 git init && git commit --allow-empty -m init     # chains that end in a commit phase need a repo
 
@@ -154,7 +175,7 @@ There are three actors here, and the design keeps them separate on purpose: **th
   <img src="images/03_skill_stamp.svg" alt="The sssf skill directory on the left stamping config, adws, and prompt_engineering into three different target repos" width="780">
 </p>
 
-Everything lives in `plugins/sssf/skills/sssf/` — installed, that is `${CLAUDE_PLUGIN_ROOT}/skills/sssf/`. `SKILL.md` carries the hard rules and routes each request to one of nine cookbooks. `references/` holds the deep specs, `scripts/` holds the generators, `templates/` holds exactly what gets stamped.
+Everything lives in `skills/sssf/` — after an install, wherever your agent keeps its skills. `SKILL.md` carries the hard rules and routes each request to one of nine cookbooks. `references/` holds the deep specs, `scripts/` holds the generators, `templates/` holds exactly what gets stamped.
 
 | What lands in your repo | Where it comes from | Tracked |
 |---|---|---|
@@ -299,10 +320,10 @@ That one cursor query is the entire transport. Live view and full history are th
 
 Files stay the raw record (`raw_output.jsonl`, `envelope.json`, `agent_map.json`). The db is the queryable mirror. Losing it loses nothing you cannot rebuild.
 
-The skill ships a read-only UI for this db at `skills/sssf/apps/visualizer/` inside the plugin: Vue and Vite served by Bun on port 4600, with sessions, a trace waterfall, and per-phase tool-call detail.
+The skill ships a read-only UI for this db at `skills/sssf/apps/visualizer/`: Vue and Vite served by Bun on port 4600, with sessions, a trace waterfall, and per-phase tool-call detail.
 
 ```bash
-cd "${CLAUDE_PLUGIN_ROOT}/skills/sssf/apps/visualizer" && bun install
+cd "$SSSF_SKILL/apps/visualizer" && bun install     # SSSF_SKILL is in the stamped .env
 SSSF_DB=/abs/path/to/your-repo/adws/adw_data/sssf.db bun run server/index.ts &
 bunx vite
 ```
@@ -314,23 +335,25 @@ It resolves its target through `--db`, then `SSSF_DB`, then `<cwd>/adws/adw_data
 ## What is in this branch
 
 ```
-software-factory/                          # a plugin marketplace holding one plugin
-├── .claude-plugin/marketplace.json        # the catalog: `/plugin marketplace add schurik/software-factory`
-└── plugins/sssf/                          # the deployable factory, and nothing else
-    ├── .claude-plugin/plugin.json         # the plugin manifest
-    └── skills/sssf/
-        ├── SKILL.md                       # hard rules + request routing table
-        ├── cookbooks/                     # 9 orchestrator playbooks, loaded lazily
-        ├── references/                    # config / handoff / observability specs
-        ├── scripts/                       # install.py, make_config.py, make_adw.py
-        ├── apps/visualizer/               # the read-only trace UI (Vue + Vite on Bun)
-        └── templates/                     # EXACTLY what install.py stamps
-            ├── sssf.config.yaml           # the starter roster
-            ├── prompt_engineering/{agent}/ # system.md + user.md per agent
-            ├── harness_engineering/       # pi extensions
-            └── adws/
-                ├── adw_*.py               # the twelve starter workflows
-                └── adw_modules/           # ALL low-level logic, ADW scripts stay thin
+software-factory/
+├── skills/sssf/                        # THE PRODUCT — one agent skill, no harness in it
+│   ├── SKILL.md                        # hard rules + request routing table
+│   ├── cookbooks/                      # 9 orchestrator playbooks, loaded lazily
+│   ├── references/                     # config / handoff / observability specs
+│   ├── scripts/                        # install.py, make_config.py, make_adw.py
+│   ├── apps/visualizer/                # the read-only trace UI (Vue + Vite on Bun)
+│   └── templates/                      # EXACTLY what install.py stamps
+│       ├── sssf.config.yaml            # the starter roster
+│       ├── prompt_engineering/{agent}/ # system.md + user.md per agent
+│       ├── harness_engineering/        # pi extensions
+│       └── adws/
+│           ├── adw_*.py                # the twelve starter workflows
+│           └── adw_modules/            # ALL low-level logic, ADW scripts stay thin
+├── scripts/install-skill.sh            # link the skill into claude / pi / codex / opencode
+├── .agents/skills/sssf                 # symlink: pi and opencode read the skill from a checkout
+└── .claude-plugin/                     # the Claude Code plugin envelope, over the same skill
+    ├── plugin.json
+    └── marketplace.json                # `/plugin marketplace add schurik/software-factory`
 ```
 
 The skill is also what an agent reads to *operate* the factory. `SKILL.md` is the central idea, and the cookbooks are lazily loaded recipes it pulls in one at a time: set up the factory, create an ADW, modify a chain, add an agent, run and monitor. If you can teach an agent to do something, teach it, then go build the thing it cannot.

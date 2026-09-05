@@ -14,11 +14,12 @@ config := env_var_or_default("SSSF_CONFIG", "adws/adw_sssf_config/sssf.config.ya
 db     := "adws/adw_data/sssf.db"
 # Where the sssf skill itself lives — the operational scripts (issue_watch,
 # pr_watch, kill_run, worktrees) and the trace UI are read from there, not from
-# this repo. Installed as the `sssf` plugin the skill lives in Claude Code's
-# plugin directory, so set SSSF_SKILL in `.env` to that path; the default below
-# is the hand-copied, project-scoped layout. `just` resolves it per recipe, in
-# the shell, so cron sees the same value `.env` gives an interactive run.
-skill  := '"${SSSF_SKILL:-.claude/skills/sssf}"'
+# this repo. Every agent keeps its skills somewhere else (.claude/skills,
+# ~/.pi/agent/skills, ~/.codex/skills, ~/.config/opencode/skills, ~/.agents/skills),
+# so there is no default worth guessing: install.py prints the path it ran from
+# and .env is where it goes. Resolved in the recipe shell, not at parse time, so
+# cron sees exactly what an interactive run sees.
+skill  := '"${SSSF_SKILL:?not set - put the path install.py printed into .env}"'
 
 # list every recipe
 default:

@@ -6,13 +6,13 @@
     "url": "https://github.com/schurik/software-factory"
   },
   "metadata": {
-    "description": "Super Simple Software Factory — repeatable agents-plus-code workflows, packaged as a Claude Code plugin.",
+    "description": "Super Simple Software Factory — repeatable agents-plus-code workflows, as an agent skill.",
     "version": "1.0.0"
   },
   "plugins": [
     {
       "name": "sssf",
-      "source": "./plugins/sssf",
+      "source": "./",
       "description": "Deploy and operate repeatable agents+code workflows (ADWs) in any codebase: deterministic Python owns sequencing, retries and acceptance; coding agents work inside bounded phases; every event streams into SQLite.",
       "version": "1.0.0",
       "author": { "name": "schurik" },

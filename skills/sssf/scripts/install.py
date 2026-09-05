@@ -99,18 +99,17 @@ def main() -> int:
         print(f"    + {s}")
     if skipped:
         print(f"  skipped (already exist, use --force to overwrite): {len(skipped)}")
-    # The justfile's operational recipes (issues, prs, kill, worktrees, obs)
-    # run scripts out of the skill, not out of this repo, and default to the
-    # hand-copied `.claude/skills/sssf`. Installed as a plugin the skill sits
-    # somewhere else entirely, so say where — a recipe that silently resolves
-    # to a path that does not exist is the worst version of this.
-    default_skill = root / ".claude" / "skills" / "sssf"
-    if SKILL_ROOT != default_skill:
-        print("\n  the skill is not at .claude/skills/sssf, so set this in .env:")
-        print(f"     SSSF_SKILL={SKILL_ROOT}")
+    # The justfile's operational recipes (issues, prs, kill, worktrees, obs) run
+    # scripts out of the skill, not out of this repo, and every agent keeps its
+    # skills in a different place — so the justfile guesses nothing and this is
+    # the only moment anyone knows the answer. Printed every time, not only when
+    # it looks unusual: a recipe that silently resolves to a path that does not
+    # exist is the worst version of this.
+    print("\nthe skill is here — this line goes in .env:")
+    print(f"  SSSF_SKILL={SKILL_ROOT}")
 
     print("\nnext steps:")
-    print("  1. cp .env.sample .env   # then set the key(s) your roster needs")
+    print("  1. cp .env.sample .env   # set SSSF_SKILL above, plus your roster's key(s)")
     print("  2. just demo             # two cheap read-only runs, end to end")
     print("  3. just sessions         # what just happened")
     print("  4. just obs              # the trace UI, needs bun")

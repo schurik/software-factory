@@ -1,6 +1,8 @@
 # Install
 
-`/sssf:sssf install` — stamp the entire factory out of the skill and into the current working directory.
+Stamp the entire factory out of the skill and into the current working directory.
+Reached however this harness names it — `/sssf:sssf install` in Claude Code,
+`/skill:sssf install` in pi, or plain words in any agent that just read this file.
 
 ## Ask first, stamp second
 
@@ -31,15 +33,14 @@ and a flag would hide that decision in a shell history.
 ## Run it
 
 ```bash
-uv run "${CLAUDE_PLUGIN_ROOT}/skills/sssf/scripts/install.py"
+uv run <skill>/scripts/install.py
 ```
 
-Run from the **target repo root** — the cwd is where everything lands, and it is
-never the plugin's own directory. `${CLAUDE_PLUGIN_ROOT}` is the plugin's install
-directory, expanded for you when the skill is loaded from the `sssf` plugin. If
-the skill was copied in by hand instead, the path is wherever it was copied to —
-`.claude/skills/sssf/scripts/install.py` for a project-scoped copy,
-`~/.claude/skills/sssf/scripts/install.py` for a user-scoped one.
+`<skill>` is the directory this skill lives in — see the note at the top of
+`SKILL.md`, and substitute the real path.
+
+Run it from the **target repo root**: the cwd is where everything lands, and it
+is never the skill's own directory.
 
 ## What gets stamped
 
@@ -69,10 +70,10 @@ Re-running is safe. `install.py` skips **every** file that already exists — yo
 
 1. **`SSSF_SKILL`** — the stamped `justfile` runs the operational scripts
    (`just issues`, `just prs`, `just kill`, `just worktrees`, `just obs`) out of
-   the skill, and defaults to `.claude/skills/sssf`. When the skill came from
-   the `sssf` plugin it is somewhere else, so put the path `install.py` printed
-   into `.env` as `SSSF_SKILL=`. The ADW recipes need nothing — they run code
-   that was stamped into the repo.
+   the skill rather than out of this repo, and every agent keeps its skills
+   somewhere different, so it guesses nothing: put the `SSSF_SKILL=` line
+   `install.py` printed into `.env`. Those five recipes fail with that message
+   until you do; every ADW recipe runs without it, because ADWs are stamped code.
 2. **Env** — `cp .env.sample .env`, then set `OPENROUTER_API_KEY` in `.env` for the starter (Pi) roster. An agent on `coding_agent: claude_code` needs no key here — the `claude` CLI brings its own auth, and a subscription is enough; set `CLAUDE_PATH` only if the binary is not on PATH.
 3. **Pi is installed and on PATH** — `pi --version`. Set `PI_PATH` in `.env` if it is not.
 4. **The model resolves** — the config's default `gemini-3.6-flash` must be a registered id in `~/.pi/agent/models.json`. Check with `pi --list-models` or read the file directly; see `references/config.md` for model resolution.

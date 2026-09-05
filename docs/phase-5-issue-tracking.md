@@ -148,7 +148,7 @@ Every command is then passed the resolved value explicitly (`gh issue list --rep
 
 ### 6. The trigger, deliberately outside the factory
 
-`docs/README.md` already places the queue and worker layer *above* the factory, not inside it. Keep it there: `plugins/sssf/skills/sssf/scripts/issue_watch.py`, alongside `worktrees.py`, run by cron, a CI schedule, or by hand:
+`docs/README.md` already places the queue and worker layer *above* the factory, not inside it. Keep it there: `skills/sssf/scripts/issue_watch.py`, alongside `worktrees.py`, run by cron, a CI schedule, or by hand:
 
 1. List open issues carrying `states.queued` in the resolved `project`, and fail loudly at startup if it could not be resolved — a watcher that polls nothing looks identical to a watcher with nothing to do.
 2. For each hit, take a `flock` on a file per issue, then flip `queued → running`. **The flip is the claim; the file lock is the exclusion** — the forge has no conditional label change, so `--remove-label queued` succeeds whether or not the issue still carries it and two concurrent watchers would otherwise both launch. The lock covers one machine, which is what one-watcher-per-repo-from-cron needs; two machines would still both claim, and nothing at the forge would prevent it. The labels remain state a human can read and reset.
