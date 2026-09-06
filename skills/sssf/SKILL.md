@@ -6,7 +6,7 @@ argument-hint: "[install | create adw | run adw | update config | ...]"
 
 # Super Simple Software Factory (SSSF)
 
-Reusable combination of **agents plus code**: deterministic Python ADW scripts own sequencing, retries, and acceptance; coding agents (Pi or Claude Code, chosen per agent) work inside bounded phases; typed JSON envelopes carry context between them; everything streams into SQLite for the polled visualizer. Agent proposes, code disposes.
+Reusable combination of **agents plus code**: deterministic Python ADW scripts own sequencing, retries, and acceptance; coding agents (on the pi or Claude Code harness, chosen at install and overridable per agent) work inside bounded phases; typed JSON envelopes carry context between them; everything streams into SQLite for the polled visualizer. Agent proposes, code disposes.
 
 ## `<skill>` in every command below
 
@@ -81,11 +81,12 @@ It is isolation, not a sandbox — an agent with `bash` can leave the worktree, 
 | modify an existing ADW chain | [cookbooks/update_adw.md](cookbooks/update_adw.md) |
 | create the config / agent roster | [cookbooks/create_config.md](cookbooks/create_config.md) |
 | add or retune an agent (model, thinking, tools, prompts) | [cookbooks/update_config.md](cookbooks/update_config.md) |
+| move an agent to another harness, or add a harness (Codex, …) | [references/harnesses.md](references/harnesses.md) |
 | extend adw_modules with new low-level logic | [cookbooks/update_modules.md](cookbooks/update_modules.md) |
 | run / monitor an ADW | [cookbooks/how_to_prompt_for_the_eng.md](cookbooks/how_to_prompt_for_the_eng.md) **first**, then [cookbooks/run_adw.md](cookbooks/run_adw.md) |
 | turn a request into an ADW prompt | [cookbooks/how_to_prompt_for_the_eng.md](cookbooks/how_to_prompt_for_the_eng.md) |
 
-Deep specs, when needed: [references/config.md](references/config.md) · [references/handoff.md](references/handoff.md) · [references/observability.md](references/observability.md)
+Deep specs, when needed: [references/config.md](references/config.md) · [references/harnesses.md](references/harnesses.md) · [references/handoff.md](references/handoff.md) · [references/observability.md](references/observability.md)
 
 ## Hard rules (enforced across everything the factory generates)
 
@@ -103,12 +104,14 @@ Deep specs, when needed: [references/config.md](references/config.md) · [refere
 
 ## Scope
 
-Two coding-agent backends, selectable **per agent**, and one chain may mix them:
+Two **harnesses**, and the install asks which one this repository runs on:
 
-- `coding_agent: pi` — `pi -p --mode json`. `model` is `provider/model-id`, resolved against `pi --list-models`, and needs that provider's key in `.env`. Starter default: `gemini-3.6-flash` via openrouter, thinking `medium`.
-- `coding_agent: claude_code` — `claude -p`. `model` is an alias (`opus`, `sonnet`, `haiku`) or a full id; the CLI brings its own auth, so a Claude subscription runs the factory with no API key at all.
+- `harness: pi` — `pi -p --mode json`. `model` is `provider/model-id`, resolved against `pi --list-models`, and needs that provider's key in `.env`. Its starter prompts tell the planner and scout to fan out with the `subagent_*` tools its `subagents.ts` extension registers.
+- `harness: claude_code` — `claude -p`. `model` is an alias (`opus`, `sonnet`, `haiku`) or a full id; the CLI brings its own auth, so a Claude subscription runs the factory with no API key at all. No subagent tools, so its prompts do not mention any.
 
-`model`, `thinking`, `tools` and `harness_engineering` each mean something backend-specific, and validation applies the right rule per agent — see [references/config.md](references/config.md#backends). Everything downstream is backend-agnostic: gates, `permissions.py`, the trace schema and the visualizer cannot tell which one produced a phase.
+The choice decides **what gets stamped**: that harness's roster, prompt set, `harness_engineering/` assets and `.env.sample`. A roster may still name a different harness per agent, and one chain may mix them — but an agent moved between harnesses needs its prompt moved too.
+
+`model`, `thinking`, `tools`, `harness_engineering` and `harness_options` each mean something harness-specific, and validation applies the right rule per agent — see [references/harnesses.md](references/harnesses.md), which also covers adding a third (Codex, …): one module in `adw_modules/harnesses/` plus one directory in `templates/harnesses/`, and nothing else. Everything downstream is harness-agnostic: gates, `permissions.py`, the trace schema and the visualizer cannot tell which one produced a phase.
 
 `claude_code` agents run with `safe_mode: true` by default — no `CLAUDE.md`, skills, plugins, hooks or MCP servers — because a run that depends on whose machine it executed on is the failure this factory exists to remove. That is config, not code; a repository that wants its own `CLAUDE.md` sets it false.
 

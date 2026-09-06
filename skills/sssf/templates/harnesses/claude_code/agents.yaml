@@ -1,0 +1,107 @@
+# ── the roster: one agent, one prompt, one purpose ───────────────────────────
+#
+# Written for the claude_code harness. Every `model:` is an alias or a full Claude model
+# id, the tool names are Claude Code's, and nothing here fans out to subagents: the
+# planner and the scout do their own recon, which is why their prompts carry no
+# `## Subagents` section. (Claude Code's built-in `Task` tool can fan out — name it in
+# an agent's `tools:` and tell the agent about it in its system.md if you want that.)
+#
+# To move ONE agent to pi, give it a harness and a model of that shape — the rest of its
+# entry is unchanged, and it can hand its envelope to a claude_code agent in the same
+# chain:
+#
+#   - name: builder
+#     harness: pi
+#     model: google/gemini-3.6-flash   # provider/id — NEVER a bare alias
+#     tools: [read, bash, edit, write, grep, find, ls]   # pi's vocabulary
+#
+agents:
+  - name: planner
+    model: opus
+    thinking: high
+    color: "#a78bfa"                 # optional hex — the agent's lane color in the visualizer
+    purpose: Turn a request into a plan the builder can implement without asking questions.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/planner/system.md
+      user: adws/adw_data/prompt_engineering/planner/user.md
+    writes:                          # the plan is the only thing it may leave in the repo
+      - specs/
+    tools:                           # full recon + write for plan.md; no Edit — the planner
+      - Read                         # never touches repo files
+      - Grep
+      - Glob
+      - Bash
+      - Write
+
+  - name: builder
+    color: "#22d3ee"
+    purpose: Implement the plan exactly; report every changed file in the envelope.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/builder/system.md
+      user: adws/adw_data/prompt_engineering/builder/user.md
+    # No `writes` key: unrestricted, and the only agent that is. It still cannot
+    # touch defaults.protected_files — the builder does not get to edit its own grader.
+    tools:                           # the only agent that mutates the repo — everything on
+      - Read
+      - Grep
+      - Glob
+      - Bash
+      - Edit
+      - Write
+
+  - name: scout
+    model: haiku
+    thinking: low
+    color: "#fbbf24"
+    purpose: Find and report where things live; change nothing.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/scout/system.md
+      user: adws/adw_data/prompt_engineering/scout/user.md
+    writes: []                       # read-only, and now actually read-only: its findings
+                                     # go to context_handoff/, which is runtime, not the repo
+    tools:                           # search-heavy recon; Write only so scout_findings.md
+      - Read                         # lands without a bash heredoc
+      - Grep
+      - Glob
+      - Bash
+      - Write
+
+  # No tester agent: running the suite is a known command, so it is a kind="code"
+  # phase over adw_modules/quality.py. See SKILL.md hard rule 8.
+
+  - name: reviewer
+    model: opus
+    thinking: high
+    color: "#fb7185"
+    purpose: Confirm that what was built is what was asked for; change nothing.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/reviewer/system.md
+      user: adws/adw_data/prompt_engineering/reviewer/user.md
+    writes: []                       # a reviewer that cannot fix cannot quietly fix — the
+                                     # claim the tool list only implied, now enforced
+    tools:                           # full read surface; Write only for review.md, no Edit
+      - Read
+      - Grep
+      - Glob
+      - Bash
+      - Write
+
+  - name: documenter
+    model: haiku
+    color: "#e879f9"
+    purpose: Write up the change that was just made, from the diff; document only.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/documenter/system.md
+      user: adws/adw_data/prompt_engineering/documenter/user.md
+    writes:                          # documentation only — "document only" is a rule now,
+      - app_docs/                    # not a line in a prompt the model may drift from.
+      - docs/                        # Markdown anywhere, because docs live next to the
+      - "**/*.md"                    # code they describe as often as in a docs folder.
+      - "*.md"
+    tools:                           # reads the diff and the code; writes/edits documentation only
+      - Read
+      - Grep
+      - Glob
+      - Bash
+      - Write
+      - Edit

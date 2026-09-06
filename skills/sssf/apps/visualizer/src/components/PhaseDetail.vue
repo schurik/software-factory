@@ -389,11 +389,11 @@ function togglePanel(id: string) {
           @toggle="toggleSection('config')"
         >
           <div class="cfg">
-            <div v-if="agentConfig.coding_agent" class="cfg-row">
-              <span class="cfg-k">coding agent</span>
+            <div v-if="agentConfig.harness" class="cfg-row">
+              <span class="cfg-k">harness</span>
               <span class="cfg-chip">
                 <SquareTerminal class="cfg-icon" :size="18" :stroke-width="2" />
-                {{ agentConfig.coding_agent }}
+                {{ agentConfig.harness }}
               </span>
             </div>
             <div v-if="agentConfig.model" class="cfg-row">

@@ -12,11 +12,11 @@ Edit the agent's entry in place:
     thinking: high                   # was medium
 ```
 
-Write the model as `provider/model-id`, never a bare id. The same model is usually carried by several providers, and an ambiguous pattern raises in `agents.validate()` — grounding every agent that inherits it. See `references/config.md`.
+**The shape of `model` belongs to the agent's harness.** On `pi` write it as `provider/model-id`, never a bare id: the same model is usually carried by several providers, and an ambiguous pattern raises in `agents.validate()` — grounding every agent that inherits it. On `claude_code` write an alias (`opus`, `sonnet`, `haiku`) or a full id, and a `provider/id` pattern is rejected outright. See [references/harnesses.md](../references/harnesses.md).
 
-Thinking levels are Pi's reasoning effort: `off | minimal | low | medium | high | xhigh | max`. It only bites when the model is registered with `reasoning: true` in `~/.pi/agent/models.json`.
+Thinking is one ladder — `off | minimal | low | medium | high | xhigh | max` — read differently per harness: pi's reasoning effort, honored when the model is registered with `reasoning: true` in `~/.pi/agent/models.json`; Claude Code's `--effort`, where `off` and `minimal` both collapse to `low`.
 
-**A model change means a fresh session.** `agent_map.json` records the model each coding-agent session was created with. When a joined run (`--adw-id`) finds the config's model no longer matches the recorded one, that agent starts a **new** session rather than resuming — the map is updated, never a bad resume. Thinking changes do not invalidate a session; model changes do. Expect the agent to lose its accumulated context window on the first run after the change.
+**A model change means a fresh session.** `agent_map.json` records the model and the harness each coding-agent session was created with. When a joined run (`--adw-id`) finds the config's model no longer matches the recorded one, that agent starts a **new** session rather than resuming — the map is updated, never a bad resume. Thinking changes do not invalidate a session; model and harness changes do. Expect the agent to lose its accumulated context window on the first run after the change.
 
 ## Recolor an agent's lane
 
@@ -65,7 +65,7 @@ Narrow by role, not by reflex:
       - .pi/extensions/json_guard.ts    # a pi extension FILE PATH
 ```
 
-Entries are pi extension **file paths**, passed through as `pi -e <path>`, applied to that agent only. Reach for an output-tightening extension when an agent keeps wrapping its envelope in prose and burning correction retries. The starter roster ships with none — this is an escape hatch, not a default.
+Entries are harness-specific. On `pi` they are extension **file paths**, passed through as `pi -e <path>`; on `claude_code` they are `mcp:<file.json>` / `agents:<json-or-file>` / `plugin:<dir-or-zip>` entries, and `safe_mode: true` suppresses all three (validation refuses that combination rather than loading nothing). Applied to that agent only. Reach for an output-tightening extension when an agent keeps wrapping its envelope in prose and burning correction retries. The pi roster ships one — `subagents.ts` on the planner and the scout, with its four tools named in their `tools:` lists; the claude_code roster ships none.
 
 **Adding a tool-registering extension is a two-part edit.** The extension path goes in `harness_engineering`, *and* the tool name it registers goes in that agent's `tools` list:
 
@@ -84,12 +84,32 @@ Entries are pi extension **file paths**, passed through as `pi -e <path>`, appli
 
 Skip the second half and it fails silently: extension loaded, run green, tool never available to the model. Extensions that only shape output or register flags — no new tool — need no `tools` change.
 
+## Move an agent to another harness
+
+Four edits, and the roster will not start if you skip one:
+
+```yaml
+  - name: reviewer
+    harness: claude_code             # was pi
+    model: sonnet                    # alias or full id — a provider/id pattern is rejected
+    tools: [Read, Grep, Glob, Bash, Write]   # Claude Code's names (pi's are mapped too)
+    harness_options:                 # merged key by key over defaults.harness_options.claude_code
+      permission_mode: bypassPermissions
+```
+
+1. `harness:` and a `model:` of that harness's shape.
+2. `tools:` in a vocabulary that harness has. `subagent_*` exists only on pi — an unmapped name is a validation error, never a silent drop.
+3. `harness_engineering:` entries of that harness's kind, or none. Pi's `.ts` extensions have no Claude Code equivalent.
+4. **The agent's prompt.** `system.md` was stamped for the old harness. The pi planner and scout carry a `## Subagents` section describing tools the new harness does not have — delete it, or the agent spends its turn trying to call them.
+
+The agent starts a fresh session after the move: a pi session id is not a UUID, and Claude Code would refuse it outright.
+
 ## Add a new agent
 
 Three steps, all required — skipping any one fails `agents.validate()` at ADW startup, before anything spawns:
 
 1. **Prompts.** Create `adws/adw_data/prompt_engineering/{name}/system.md` (Purpose + Instructions — the agent's static identity, nothing else) and `user.md` (an h3 per incoming datum: `{{prompt}}`, `{{previous_envelope}}`, `{{context_handoff_dir}}`, then the task, then a `## Report` section showing the exact output JSON). Copy an existing pair as the shape.
-2. **Config entry.** Name, purpose, prompt refs, plus anything that differs from `defaults`.
+2. **Config entry.** Name, purpose, prompt refs, plus anything that differs from `defaults` — including `harness:` if it does not run on the roster's default one.
 3. **An output type.** Every agent call parses against a concrete Pydantic model in `adw_modules/data_types.py`. If none of `PlanOutput`, `BuildOutput`, `ScoutOutput`, `ReviewOutput`, `DocumentOutput` fits the new agent's report, add one — see `update_modules.md`. The user prompt's `Report` section must show exactly that JSON shape.
 
 Then name the agent in an ADW's `REQUIRED_AGENTS` and call it.

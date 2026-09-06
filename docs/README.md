@@ -12,7 +12,7 @@ Upstream SSSF is an agent skill (`skills/sssf/`, installable into Claude Code, p
 
 | Capability | Where it lives today |
 |---|---|
-| One coding-agent session per agent, with its own system prompt | `adw_modules/agents.py`, `adw_modules/agent_pi.py` |
+| One coding-agent session per agent, with its own system prompt | `adw_modules/agents.py`, `adw_modules/harnesses/` |
 | Per-agent model, effort, tools, prompts, write permissions | `adws/adw_sssf_config/sssf.config.yaml` |
 | Typed artifact handoff between agents | `EnvelopeBase` subclasses in `adw_modules/data_types.py`, plus `context_handoff/` |
 | Claims verified after the fact, not trusted | `adw_modules/gates.py` |
@@ -40,7 +40,7 @@ These are settled; the phase documents assume them rather than re-argue them.
 | Decision | Choice |
 |---|---|
 | Relationship to upstream | Hard fork. Core modules may be restructured. |
-| Coding-agent backend | Both Pi and Claude Code, first-class, selectable per agent |
+| Coding-agent harness | Both Pi and Claude Code, first-class; chosen at install, selectable per agent (Phase 6) |
 | Central store | Convex DB with Convex HTTP actions, as a new standalone Convex project in `convex/` |
 | Execution environment | Local, with a git worktree and branch per run as the first step |
 | Document language | English, matching the rest of the repository |
@@ -54,6 +54,7 @@ These are settled; the phase documents assume them rather than re-argue them.
 | 3 | [Convex trace store](phase-3-convex-trace-store.md) | One queryable place for every run from every repo | not started |
 | 4 | [Learning loop](phase-4-learning-loop.md) | Past runs improve future runs | not started |
 | 5 | [Issue tracking](phase-5-issue-tracking.md) | A run starts from an issue, and reports back to it | **built** — see its *As built* section |
+| 6 | [Harness split](phase-6-harness-split.md) | A harness is one module plus one template directory — its own roster, prompts and options; the install asks which | **built** — see its *As built* section |
 
 ### Dependency order
 

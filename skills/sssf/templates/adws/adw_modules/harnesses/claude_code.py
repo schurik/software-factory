@@ -1,8 +1,8 @@
-"""Claude Code coding agent backend.
+"""The Claude Code harness.
 
 Runs `claude -p --output-format stream-json --verbose` and tails its NDJSON
-stdout line by line — structurally the same read loop `agent_pi` already had,
-so events land in the trace while the agent is still working.
+stdout line by line — structurally the same read loop the pi harness already
+had, so events land in the trace while the agent is still working.
 
 Two things differ from pi and shape everything below:
 
@@ -14,11 +14,15 @@ Two things differ from pi and shape everything below:
    why it is derived rather than minted from `new_id`.
 2. **A default `claude -p` reads the operator's world** — CLAUDE.md, skills,
    plugins, hooks, MCP servers. A run that depends on whose machine it ran on
-   is the failure the factory exists to remove, so `ClaudeCodeConfig` pins it
-   off by default. See that model in data_types.py for what each switch costs.
+   is the failure the factory exists to remove, so `Options` below pins it off
+   by default. Those are this harness's `harness_options:` block, and they are
+   config rather than code: a repository that genuinely wants its own CLAUDE.md
+   loaded says so there.
 
-One of two backends behind the same names — `NAME`, `resolve_model`,
-`reachable`, `validate_agent`, `new_session_id`, `ToolCallTracker`, `run`.
+One harness behind the names `__init__.py` documents — `NAME`, `Options`,
+`resolve_model`, `reachable`, `validate_agent`, `new_session_id`,
+`ToolCallTracker`, `run`. Its templates (roster, prompts, env sample) live in
+the skill under `templates/harnesses/claude_code/`.
 """
 
 from __future__ import annotations
@@ -31,14 +35,59 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Optional
 
-from .data_types import (AgentConfig, AgentRequest, AgentResult, ClaudeCodeConfig,
-                         UsageBreakdown)
-from .tool_calls import ToolCallLedger
-from .utils import operator_env
+from pydantic import BaseModel, ConfigDict, Field
+
+from ..data_types import AgentConfig, AgentRequest, AgentResult, UsageBreakdown
+from ..tool_calls import ToolCallLedger
+from ..utils import operator_env
 
 NAME = "claude_code"
 
 CLAUDE_PATH = os.environ.get("CLAUDE_PATH", "claude")
+
+
+class Options(BaseModel):
+    """`harness_options` for a Claude Code agent: determinism and permissions.
+
+    A default `claude -p` discovers whatever the operator has lying around —
+    CLAUDE.md, skills, plugins, hooks, MCP servers — which makes a run depend
+    on whose machine it executed on. That is the exact failure the factory
+    exists to remove, so the defaults below pin it off. They are configuration
+    rather than code because some repositories genuinely do want their own
+    CLAUDE.md loaded, and that is their decision to make.
+
+    `extra="forbid"`: an unknown key here is a typo or a block written for
+    another harness, and either one is worth failing validation over — a
+    silently ignored `safe_mode` is a run that read the operator's world
+    without saying so.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # --safe-mode: no CLAUDE.md, skills, plugins, hooks, MCP servers, custom
+    # agents or commands. Auth, model selection, built-in tools and permissions
+    # keep working, so a Claude subscription still authenticates.
+    safe_mode: bool = True
+    # --bare is stricter still (it also skips LSP and background prefetches),
+    # but it forces ANTHROPIC_API_KEY / apiKeyHelper auth and never reads OAuth
+    # or the keychain — so turning it on takes a subscription-authenticated
+    # roster offline. Off by default for that reason; safe_mode covers the
+    # determinism half without the auth cost.
+    bare: bool = False
+    setting_sources: list[str] = Field(default_factory=list)   # user | project | local
+    strict_mcp_config: bool = True                             # only MCP servers we pass
+    # A non-interactive run has to answer its own permission prompts. This is
+    # only acceptable because two other things are true: permissions.py
+    # fingerprints the tree before the call and rolls back every write outside
+    # the agent's `writes:` allowlist afterwards, and the run happens in its own
+    # worktree. The factory is not careless here; it verifies after the fact.
+    # `bypassPermissions` is refused by the CLI when running as root — use
+    # `acceptEdits` there, and know that it silently denies whatever it would
+    # otherwise have prompted for.
+    permission_mode: str = "bypassPermissions"
+    add_dirs: list[str] = Field(default_factory=list)          # --add-dir, beyond cwd
+    max_budget_usd: float = 0.0                                # 0 = no ceiling
+
 
 # Deterministic session ids: the same adw_id + agent + model always resolves to
 # the same UUID, so a re-run pinned to an adw_id lands on the session it left.
@@ -64,7 +113,7 @@ TOOL_MAP = {
 }
 
 # Claude Code's own tool names pass through untouched, so a roster written for
-# this backend can name them directly instead of going through pi's words.
+# this harness can name them directly instead of going through pi's words.
 CLAUDE_TOOLS = {
     "Read", "Write", "Edit", "Bash", "BashOutput", "KillShell", "Glob", "Grep",
     "NotebookEdit", "WebFetch", "WebSearch", "Task", "TodoWrite", "SlashCommand",
@@ -153,8 +202,14 @@ def map_tools(tools: Optional[list[str]]) -> Optional[list[str]]:
 
 
 def validate_agent(agent: AgentConfig) -> list[str]:
-    """Backend-specific config problems for one agent. Empty list = fine."""
+    """Harness-specific config problems for one agent. Empty list = fine."""
     problems = []
+    try:
+        options = Options(**agent.harness_options)
+    except Exception as error:
+        # Nothing below can be checked against options that would not parse, so
+        # this one problem is the whole report for this agent.
+        return [f"harness_options: {error}"]
     try:
         map_tools(agent.tools)
     except ValueError as error:
@@ -165,10 +220,9 @@ def validate_agent(agent: AgentConfig) -> list[str]:
     if agent.thinking not in EFFORT_MAP:
         problems.append(f"thinking {agent.thinking!r} is not one of "
                         f"{' | '.join(EFFORT_MAP)}")
-    options = agent.claude_code
     if agent.harness_engineering and (options.safe_mode or options.bare):
         problems.append(
-            "harness_engineering is set, but claude_code.safe_mode (or .bare) is on, "
+            "harness_engineering is set, but harness_options.safe_mode (or .bare) is on, "
             "which suppresses MCP servers, plugins and custom agents — verified: "
             "`--agents` passed under --safe-mode does not reach the session. Turn the "
             "switch off for this agent, or drop the harness entries.")
@@ -178,17 +232,17 @@ def validate_agent(agent: AgentConfig) -> list[str]:
                 f"harness_engineering {entry!r}: on Claude Code an entry is "
                 f"`mcp:<file.json>`, `agents:<json-or-file>` or `plugin:<dir-or-zip>`. "
                 f"Pi's TypeScript extensions have no equivalent here — the two "
-                f"backends do not share this key.")
+                f"harnesses do not share this key.")
     if options.permission_mode not in ("acceptEdits", "auto", "bypassPermissions",
                                        "manual", "dontAsk", "plan"):
-        problems.append(f"claude_code.permission_mode {options.permission_mode!r} is not "
+        problems.append(f"harness_options.permission_mode {options.permission_mode!r} is not "
                         f"a mode the CLI accepts")
     if options.permission_mode in ("manual", "plan"):
-        problems.append(f"claude_code.permission_mode {options.permission_mode!r} needs a "
+        problems.append(f"harness_options.permission_mode {options.permission_mode!r} needs a "
                         f"human at a terminal; a factory run has nobody to ask")
     for source in options.setting_sources:
         if source not in ("user", "project", "local"):
-            problems.append(f"claude_code.setting_sources {source!r} is not one of "
+            problems.append(f"harness_options.setting_sources {source!r} is not one of "
                             f"user | project | local")
     return problems
 
@@ -235,7 +289,7 @@ class ToolCallTracker:
 
     The record shape is tool_calls.py's, identical to the pi tracker's, which
     is what lets `agents._event_forwarder`, the tracer and the visualizer stay
-    untouched by this backend existing.
+    untouched by this harness existing.
     """
 
     def __init__(self) -> None:
@@ -272,7 +326,7 @@ def _result_usage(event: dict) -> UsageBreakdown:
 
     Claude Code reports `total_cost_usd` and nothing per component, so the four
     component costs stay at zero rather than being invented from a split the
-    CLI never published. Any cross-backend cost view has to tolerate that:
+    CLI never published. Any cross-harness cost view has to tolerate that:
     `total_cost` reconciles, `input_cost` and friends are pi-only.
     """
     usage = event.get("usage") or {}
@@ -336,7 +390,7 @@ def _harness_flag(entry: str) -> Optional[list[str]]:
             "plugin": ["--plugin-dir", value]}.get(kind)
 
 
-def _argv(request: AgentRequest, model: str, options: ClaudeCodeConfig) -> list[str]:
+def _argv(request: AgentRequest, model: str, options: Options) -> list[str]:
     """The full command line for one turn. Kept separate so it can be read."""
     cmd = [CLAUDE_PATH, "-p", "--output-format", "stream-json", "--verbose",
            "--model", model,
@@ -473,7 +527,7 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
         _warn_once(f"effort:{request.thinking}",
                    f"thinking {request.thinking!r} has no Claude Code equivalent; "
                    f"running at effort {EFFORT_MAP[request.thinking]!r}", on_event)
-    options = request.claude_code
+    options = Options(**request.options)
     result = AgentResult(session_id=request.native_session_id or request.session_id)
 
     returncode, stderr = _stream(_argv(request, model, options), request, result,

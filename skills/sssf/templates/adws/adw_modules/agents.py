@@ -15,7 +15,7 @@ from typing import Optional
 
 import yaml
 
-from . import agent_cc, agent_pi, git_helper, permissions, prompts
+from . import git_helper, harnesses, permissions, prompts
 from .data_types import (AgentCall, AgentConfig, AgentRequest, AgentResult,
                          AgentSession, EnvelopeBase, EventRecord, GateCheck,
                          GateReport, Phase, SSSFConfig, UsageBreakdown)
@@ -23,37 +23,40 @@ from .utils import anchor
 
 JSON_FIX_ATTEMPTS = 2      # continue-with-correction attempts for malformed JSON
 
-# The whole of the backend seam. A module qualifies by exposing NAME,
-# resolve_model, reachable, validate_agent, new_session_id, ToolCallTracker and
-# run — nothing else in the factory knows which one is running.
-BACKENDS = {agent_pi.NAME: agent_pi, agent_cc.NAME: agent_cc}
-
 
 class GateFailure(RuntimeError):
     pass
 
 
-def backend(agent: AgentConfig):
-    """The coding-agent module this agent runs on."""
+def harness_for(agent: AgentConfig):
+    """The harness module this agent runs on. The whole of the seam is here:
+    `adw_modules/harnesses/__init__.py` documents the names a module must
+    expose, and nothing else in the factory knows which one is running."""
     try:
-        return BACKENDS[agent.coding_agent]
+        return harnesses.HARNESSES[agent.harness]
     except KeyError:
-        raise SystemExit(f"agent {agent.name!r}: coding_agent "
-                         f"{agent.coding_agent!r} is not one of "
-                         f"{' | '.join(sorted(BACKENDS))}") from None
+        raise SystemExit(f"agent {agent.name!r}: harness {agent.harness!r} is not "
+                         f"one of {' | '.join(harnesses.NAMES)}") from None
 
 
 # ── config ───────────────────────────────────────────────────────────────────
 
 def load_config(path: str = "adws/adw_sssf_config/sssf.config.yaml") -> SSSFConfig:
+    """Read the roster, merging each agent over `defaults` key by key."""
     raw = yaml.safe_load(Path(path).read_text()) or {}
     defaults = raw.get("defaults", {}) or {}
     for agent in raw.get("agents", []) or []:
-        for key in ("coding_agent", "model", "thinking", "color", "tools", "writes",
-                    "claude_code"):
+        for key in ("harness", "model", "thinking", "color", "tools", "writes"):
             if key in defaults:
                 agent.setdefault(key, defaults[key])
         agent.setdefault("harness_engineering", defaults.get("harness_engineering", []))
+        # `defaults.harness_options` is keyed by harness name; an agent's own
+        # block is flat, for the harness it actually runs on. So the inherited
+        # half is looked up by that name, and the agent's keys win INDIVIDUALLY
+        # — overriding `permission_mode` must not silently drop `safe_mode`.
+        inherited = (defaults.get("harness_options") or {}).get(agent.get("harness"), {})
+        agent["harness_options"] = {**(inherited or {}),
+                                    **(agent.get("harness_options") or {})}
     return SSSFConfig(**raw)
 
 
@@ -72,7 +75,7 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
     and its prompts live — not in the run's worktree, and not in whatever
     directory the ADW was launched from.
 
-    Everything backend-specific is asked of the backend: pi resolves a model
+    Everything harness-specific is asked of the harness: pi resolves a model
     against its catalog and Claude Code accepts an alias, pi's tool names are
     lowercase and Claude Code's are not, and only one of the two can load a
     TypeScript extension. The shape here — collect every problem, raise one
@@ -90,18 +93,18 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
         except SystemExit as e:
             problems.append(str(e))
             continue
-        driver = BACKENDS.get(agent.coding_agent)
+        driver = harnesses.HARNESSES.get(agent.harness)
         if driver is None:
-            problems.append(f"agent {name!r}: coding_agent {agent.coding_agent!r} is not "
-                            f"one of {' | '.join(sorted(BACKENDS))}")
+            problems.append(f"agent {name!r}: harness {agent.harness!r} is not "
+                            f"one of {' | '.join(harnesses.NAMES)}")
             continue
         for label, ref in (("system", agent.prompt_engineering.system),
                            ("user", agent.prompt_engineering.user)):
             if not anchor(root, ref).is_file():
                 problems.append(f"agent {name!r}: {label} prompt not found: {ref}")
-        # Model and tool vocabularies belong to the backend: pi resolves against
+        # Model and tool vocabularies belong to the harness: pi resolves against
         # its catalog, Claude Code takes an alias. Applying either rule to the
-        # other backend is how a valid roster gets rejected — or worse, a
+        # other harness is how a valid roster gets rejected — or worse, a
         # nonsense one accepted.
         try:
             driver.resolve_model(agent.model)
@@ -110,7 +113,7 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
         problems += [f"agent {name!r}: {problem}"
                      for problem in driver.validate_agent(agent)]
         try:
-            driver.reachable()      # cached per backend; one probe per process
+            driver.reachable()      # cached per harness; one probe per process
         except RuntimeError as e:
             problems.append(f"agent {name!r}: {e}")
     if problems:
@@ -120,7 +123,7 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
 # ── execution ────────────────────────────────────────────────────────────────
 
 def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
-    """One agent call: render prompts -> backend run -> typed parse -> gates -> envelope."""
+    """One agent call: render prompts -> harness run -> typed parse -> gates -> envelope."""
     agent = resolve(run.cfg, phase.params.owner)
     agent_dir = run.session_dir / agent.name
     agent_dir.mkdir(parents=True, exist_ok=True)
@@ -150,14 +153,14 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     prompts.save(agent_dir / "prompts", "system.md", system_text)
     prompts.save(agent_dir / "prompts", "user.md", user_text)
 
-    driver = backend(agent)
+    driver = harness_for(agent)
     session = _agent_session(run, agent, driver)
     run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
                                  type="agent_start", name=agent.name,
                                  payload={"model": agent.model, "thinking": agent.thinking,
                                           "color": agent.color,
                                           "session_id": session.session_id,
-                                          "coding_agent": agent.coding_agent,
+                                          "harness": agent.harness,
                                           "purpose": agent.purpose,
                                           "tools": agent.tools,  # None = all tools
                                           "harness_engineering": agent.harness_engineering}))
@@ -180,7 +183,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
             session_id=session.session_id,
             # absolute: these are read by the coding-agent subprocess, which
             # runs in repo_root
-            session_dir=str((agent_dir / f"{agent.coding_agent}_sessions").resolve()),
+            session_dir=str((agent_dir / f"{agent.harness}_sessions").resolve()),
             raw_output_path=str((agent_dir / "raw_output.jsonl").resolve()),
             runtime_dir=str(run.session_dir.resolve()),
             tools=agent.tools,
@@ -188,14 +191,14 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
             cwd=str(run.repo_root),
             native_session_id=session.native_session_id,
             resume=session.started,
-            claude_code=agent.claude_code,
+            options=agent.harness_options,
         )
         result = driver.run(
             request,
             on_event=forward,
             on_spawn=lambda pid: run.tracer.process_start(
                 run.adw_id, "agent", agent.name, pid,
-                f"{agent.coding_agent} {agent.name} {agent.model}"),
+                f"{agent.harness} {agent.name} {agent.model}"),
             on_exit=lambda pid: run.tracer.process_end(run.adw_id, pid))
         run.add_usage(result.tokens, result.cost)
         spent.merge(result.usage)
@@ -303,13 +306,12 @@ def _agent_session(run, agent: AgentConfig, driver) -> AgentSession:
 
     The pre-existing rule is that a session is reused only while the MODEL is
     unchanged — a context window built by one model is not one another model
-    should inherit. The backend is now part of that identity for the same
+    should inherit. The harness is part of that identity for the same
     reason, and more bluntly: a pi session id is not a UUID and Claude Code
     would refuse it outright.
     """
     entry = run.agent_map.get(agent.name) or {}
-    if entry.get("model") == agent.model and \
-            entry.get("coding_agent", "pi") == agent.coding_agent:
+    if entry.get("model") == agent.model and entry.get("harness") == agent.harness:
         return AgentSession(session_id=entry["session_id"],
                             native_session_id=entry.get("native_session_id", ""),
                             started=bool(entry.get("started")))
@@ -321,7 +323,7 @@ def _remember(run, agent: AgentConfig, session: AgentSession) -> None:
     """Write this agent's session state into the run's agent map."""
     run.save_agent_map(agent.name, {"session_id": session.session_id,
                                     "model": agent.model,
-                                    "coding_agent": agent.coding_agent,
+                                    "harness": agent.harness,
                                     "native_session_id": session.native_session_id,
                                     "started": session.started})
 
@@ -329,7 +331,7 @@ def _remember(run, agent: AgentConfig, session: AgentSession) -> None:
 def _event_forwarder(run, phase: Phase, agent_name: str, driver):
     """One tool_call event per real tool call, with its exact args and result.
 
-    The tracker comes from the backend; the record shape does not (it is
+    The tracker comes from the harness; the record shape does not (it is
     tool_calls.py's, identical for both), which is what keeps the tracer, the
     trace schema and the visualizer out of this phase entirely.
     """

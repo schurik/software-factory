@@ -1,0 +1,90 @@
+# sssf.config.yaml — the factory's agent roster. One agent, one prompt, one purpose.
+#
+# GENERATED at install time for the **claude_code** harness, out of three files in the
+# skill:
+#   harnesses/claude_code/defaults.yaml + config/base.yaml + harnesses/claude_code/agents.yaml
+# It is yours the moment it is stamped — edit it here, never back inside the skill.
+#
+# `harness: claude_code` runs `claude -p --output-format stream-json --verbose`. Its
+# `model` is an alias (`opus`, `sonnet`, `haiku`) or a full model id, and the CLI brings
+# its own auth — a Claude subscription runs this roster with no API key at all.
+# Another harness's agent can be added by hand (`harness: pi`, with a `provider/model-id`
+# model and that provider's key in `.env`) — one chain may mix them, and everything
+# downstream of the agent call cannot tell which ran a phase. What is NOT shared:
+# `model`, `thinking`, `tools` and `harness_engineering` each mean something
+# harness-specific, and validation applies the right rule per agent.
+defaults:
+  harness: claude_code
+  model: sonnet                    # alias (opus | sonnet | haiku) or a full id
+                                   # (claude-sonnet-5). A pi `provider/model-id` pattern
+                                   # is REJECTED at validation, not sent to the CLI.
+  thinking: medium                 # off | minimal | low | medium | high | xhigh | max
+                                   # mapped to --effort, whose ladder starts two rungs
+                                   # higher: `off` and `minimal` both collapse to `low`,
+                                   # warned once per run and visible in the trace.
+  harness_engineering: []          # claude_code: `mcp:<file.json>`, `agents:<json-or-file>`
+                                   # or `plugin:<dir-or-zip>`. NOT interchangeable with
+                                   # pi's `-e <file.ts>` extensions, and suppressed by
+                                   # safe_mode below — validation says so rather than
+                                   # letting an entry load nothing.
+  # Roster-wide allowlist; any agent may override with its own list. Claude Code's own
+  # tool names are written directly here; pi's lowercase names are also accepted and
+  # mapped (read->Read, find->Glob, ls->Glob — Claude Code has no `ls`, and mapping it
+  # to Bash would hand a read-only agent a shell). A name that maps to NEITHER is a
+  # validation error, never a silent drop: an agent that quietly lost a capability looks
+  # like a model that gave up.
+  tools:
+    - Read                         # read file contents
+    - Bash                         # execute bash commands
+    - Edit                         # find/replace edits
+    - Write                        # create/overwrite files
+    - Grep                         # search file contents
+    - Glob                         # find files by glob, and list directories
+  # Per-harness settings, keyed by harness name, and an agent inherits only the block
+  # for the harness it runs on — key by key, so overriding one setting never drops the
+  # rest. An unknown key here is a validation error rather than a setting that quietly
+  # does nothing.
+  #
+  # A default `claude -p` discovers whatever the operator happens to have — CLAUDE.md,
+  # skills, plugins, hooks, MCP servers — so the same roster behaves differently on two
+  # machines. That is the failure this factory exists to remove, so it is pinned off
+  # here. It is CONFIG, not code: a repository that genuinely wants its own CLAUDE.md
+  # loaded sets safe_mode: false, and that is its call.
+  harness_options:
+    claude_code:
+      safe_mode: true              # --safe-mode: no CLAUDE.md, skills, plugins, hooks, MCP
+                                   # servers or custom agents. Auth still works, so a
+                                   # subscription-authenticated roster keeps running.
+                                   # Turn it OFF for an agent that uses harness_engineering
+                                   # — safe mode suppresses exactly those things.
+      bare: false                  # --bare is stricter still, but forces ANTHROPIC_API_KEY
+                                   # auth and never reads OAuth or the keychain — turning it
+                                   # on takes a subscription-only setup offline.
+      setting_sources: []          # user | project | local — empty ignores all settings files
+      strict_mcp_config: true      # only MCP servers this config passes explicitly
+      # A non-interactive run has to answer its own permission prompts. That is only
+      # acceptable because two other things are true: adw_modules/permissions.py
+      # fingerprints the tree before the call and rolls back every write outside the
+      # agent's `writes:` allowlist afterwards, and the run happens in its own worktree.
+      # The factory is not careless here — it verifies after the fact, like everything else.
+      # The CLI REFUSES bypassPermissions when running as root; use acceptEdits there, and
+      # know that acceptEdits silently denies whatever it would otherwise have prompted for.
+      permission_mode: bypassPermissions
+      add_dirs: []                 # extra --add-dir roots. The run's worktree and the
+                                   # session runtime are added automatically.
+      max_budget_usd: 0            # per-call ceiling; 0 = none
+  # Off-limits to every agent that does not name them in its own `writes`.
+  # `tools` alone cannot protect these: Bash runs `git checkout`, and Write
+  # reaches any path. An agent must not be able to edit the machinery that
+  # decides whether its own work passed. Enforced in adw_modules/permissions.py.
+  #
+  # `writes:` per agent says what it may change IN THE REPO. It never restricts
+  # the session runtime under data_dir — context_handoff/, envelopes, prompts,
+  # raw output. Every agent can always write its own report; `writes: []` means
+  # read-only with respect to the repo, not mute.
+  protected_files:
+    - adws/adw_modules/
+    - adws/adw_sssf_config/
+    - adws/adw_*.py
+  data_dir: adws/adw_data          # runtime home: {data_dir}/sessions/{adw_id}/{agent_name}/
+

@@ -178,7 +178,7 @@ export interface GateCheck {
 export interface AgentSession {
   adw_id: string;
   agent: string;
-  coding_agent: string | null;
+  harness: string | null;
   model: string | null;
   session_id: string | null;
   /**
@@ -209,7 +209,7 @@ export interface AgentStartPayload {
   thinking?: string;
   session_id?: string;
   color?: string;
-  coding_agent?: string;
+  harness?: string;
   purpose?: string;
   /** Tool allowlist; null means all tools. Absent on pre-config-payload rows. */
   tools?: string[] | null;
@@ -294,7 +294,7 @@ export interface SessionDetail {
    * One entry per agent that has run OR is running under this adw_id — lane
    * labels come from here. Finished agents come from the agent_sessions table;
    * an agent still in flight has no row there yet, so its entry is built from
-   * its agent_start event (coding_agent is null until it finishes).
+   * its agent_start event (harness is null until it finishes).
    */
   agents: AgentSession[];
 }

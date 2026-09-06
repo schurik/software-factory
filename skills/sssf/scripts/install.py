@@ -5,10 +5,12 @@
 """/install — stamp the SSSF factory from the skill into the cwd. Idempotent.
 
 Usage:
-    uv run <skill>/scripts/install.py [--force]
+    uv run <skill>/scripts/install.py [--harness pi|claude_code] [--force]
 
-Stamps: adws/ (modules + starter ADWs), adws/adw_data/prompt_engineering/
-(4 starter agents), adws/adw_sssf_config/sssf.config.yaml, .env.sample,
+Asks which harness if the flag is not given (see `_harness.choose`), then
+stamps THAT harness's world: adws/ (modules + starter ADWs), its prompt set
+under adws/adw_data/prompt_engineering/, its harness_engineering/ assets, a
+sssf.config.yaml assembled for it, its .env.sample, the justfile, and the
 .gitignore entries (including the per-run worktree directory).
 Existing files are skipped unless --force.
 """
@@ -18,8 +20,11 @@ import shutil
 import sys
 from pathlib import Path
 
-SKILL_ROOT = Path(__file__).resolve().parent.parent
-TEMPLATES = SKILL_ROOT / "templates"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _harness                                    # noqa: E402  (path set above)
+
+SKILL_ROOT = _harness.SKILL_ROOT
+TEMPLATES = _harness.TEMPLATES
 
 GITIGNORE_ENTRIES = [
     "adws/adw_data/sessions/",
@@ -70,30 +75,49 @@ def ensure_gitignore(root: Path, stamped: list) -> None:
         stamped.append(f"{gitignore} (+{len(missing)} entries)")
 
 
+def write_config(harness: str, dest: Path, force: bool,
+                 stamped: list, skipped: list) -> None:
+    """The one stamped file that is assembled rather than copied."""
+    if dest.exists() and not force:
+        skipped.append(str(dest))
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(_harness.render_config(harness))
+    stamped.append(str(dest))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--harness", help="which coding-agent harness this roster runs "
+                                          "on; asked interactively if omitted")
     parser.add_argument("--force", action="store_true", help="overwrite existing files")
     args = parser.parse_args()
+
+    # Asked BEFORE anything is written: the harness decides which prompts, which
+    # roster and which env sample get stamped, so an abort here leaves the repo
+    # untouched rather than half-installed.
+    harness = _harness.choose(args.harness)
+    harness_templates = TEMPLATES / "harnesses" / harness
 
     root = Path.cwd()
     stamped, skipped = [], []
 
     stamp(TEMPLATES / "adws", root / "adws", args.force, stamped, skipped)
-    stamp(TEMPLATES / "prompt_engineering",
+    stamp(harness_templates / "prompt_engineering",
           root / "adws" / "adw_data" / "prompt_engineering", args.force, stamped, skipped)
-    stamp(TEMPLATES / "harness_engineering",
+    stamp(harness_templates / "harness_engineering",
           root / "adws" / "adw_data" / "harness_engineering", args.force, stamped, skipped)
-    stamp(TEMPLATES / "sssf.config.yaml",
-          root / "adws" / "adw_sssf_config" / "sssf.config.yaml",
+    write_config(harness, root / "adws" / "adw_sssf_config" / "sssf.config.yaml",
+                 args.force, stamped, skipped)
+    stamp(harness_templates / "env.sample", root / ".env.sample",
           args.force, stamped, skipped)
-    stamp(TEMPLATES / "env.sample", root / ".env.sample", args.force, stamped, skipped)
     # The recipes are part of the operating experience, and several cookbooks
     # plus the run banner tell you to use them, so a stamped repo has to have
     # them. Skipped like any other file if the repo already has a justfile.
     stamp(TEMPLATES / "justfile", root / "justfile", args.force, stamped, skipped)
     ensure_gitignore(root, stamped)
 
-    print(f"sssf installed into {root}")
+    print(f"sssf installed into {root} on the {harness} harness")
     print(f"  stamped: {len(stamped)} file(s)")
     for s in stamped:
         print(f"    + {s}")
@@ -108,8 +132,15 @@ def main() -> int:
     print("\nthe skill is here — this line goes in .env:")
     print(f"  SSSF_SKILL={SKILL_ROOT}")
 
+    # The harness ships its own post-install steps in about.md, so a new
+    # harness brings its instructions with it instead of editing this script.
+    _, steps = _harness.about(harness)
+    if steps:
+        print(f"\nbefore the first run ({harness}):\n")
+        print(steps)
+
     print("\nnext steps:")
-    print("  1. cp .env.sample .env   # set SSSF_SKILL above, plus your roster's key(s)")
+    print("  1. cp .env.sample .env   # set SSSF_SKILL above, plus whatever it asks for")
     print("  2. just demo             # two cheap read-only runs, end to end")
     print("  3. just sessions         # what just happened")
     print("  4. just obs              # the trace UI, needs bun")
