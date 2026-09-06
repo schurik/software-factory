@@ -27,10 +27,10 @@ adws/
 ├── adw_pr_review.py             answer the review threads on a run's own PR, in that same session
 ├── adw_modules/                 ALL low-level logic — ADW scripts stay thin
 │   ├── data_types.py            AgentCall, PhaseParams, Phase, Envelope + one output type per agent call
-│   ├── agents.py                load_config, validate, resolve entry → interface + model + thinking
+│   ├── agents.py                load_config, validate, resolve entry → harness + model + thinking
 │   ├── runner.py                the Run object: run.phase(PhaseParams) → ph.call(AgentCall)
-│   ├── agent_pi.py              Pi backend  ·  agent_cc.py  Claude Code backend
-│   ├── tool_calls.py            the normalized tool-call record both backends emit
+│   ├── harnesses/               one module per harness — pi.py · claude_code.py · the registry
+│   ├── tool_calls.py            the normalized tool-call record every harness emits
 │   ├── gates.py                 gate(envelope, run) -> GateReport — one check per item verified
 │   ├── permissions.py           the write boundary: unauthorized changes rolled back, phase dies
 │   ├── worktree.py              a git worktree + branch per run  ·  integration.py  lands it again
@@ -40,10 +40,10 @@ adws/
 │   ├── pull_requests.py         the same, one step later: read review threads, answer them, resolve them
 │   ├── prompts.py, session.py, tracer.py, console.py, git_helper.py, utils.py
 └── adw_data/
-    ├── prompt_engineering/{agent}/{system.md,user.md}   tracked — edit prompts HERE, never in the skill
+    ├── prompt_engineering/{agent}/{system.md,user.md}   tracked — stamped for YOUR harness; edit HERE, never in the skill
     │                                planner · builder · scout · reviewer · documenter
     ├── sessions/{adw_id}/                               gitignored runtime
-    │   ├── agent_map.json       agent → coding-agent session_id + model
+    │   ├── agent_map.json       agent → harness session_id + model
     │   ├── context_handoff/     the one place agents write files for the agents that follow
     │   └── {agent}/{prompts/, raw_output.jsonl, envelope.json}
     └── sssf.db                  gitignored SQLite trace db the visualizer polls
@@ -53,7 +53,7 @@ adws/
 
 **A run can start from a tracked issue.** Off by default. When `issues.enabled` is on, `scripts/issue_watch.py` polls for a routing label a human applied, claims the issue, and launches the ADW that label maps to. Fetching the issue is a `kind="code"` phase, and its result reaches the next agent as an ordinary envelope — the body arrives as an ARTIFACT framed as a user's description of a problem, never as instructions, because on this one path the prompt is written by whoever can file an issue. `issues.force_pr` keeps such a run off the base branch whatever the integration mode says.
 
-**Two backends, chosen per agent.** `coding_agent: pi` runs `pi -p --mode json` (model is `provider/model-id`, needs that provider's key); `coding_agent: claude_code` runs `claude -p` (model is an alias or a full id, and the CLI brings its own auth, so a subscription needs no key). One chain may mix them, and everything downstream — gates, permissions, the trace, the visualizer — cannot tell which ran a phase. Starter default: `pi`, `gemini-3.6-flash`, thinking `medium`.
+**Two harnesses, and the install picks one.** `harness: pi` runs `pi -p --mode json` (model is `provider/model-id`, needs that provider's key); `harness: claude_code` runs `claude -p` (model is an alias or a full id, and the CLI brings its own auth, so a subscription needs no key). The installer asks which, and stamps that harness's roster, prompts, extensions and `.env.sample` — the prompts differ because the harnesses do: the pi planner and scout are told to fan out with `subagent_*`, which Claude Code has no tools for. A roster may still mix harnesses per agent, and everything downstream — gates, permissions, the trace, the visualizer — cannot tell which ran a phase. Adding a third (Codex, …) is one module plus one template directory: [references/harnesses.md](../references/harnesses.md).
 
 ## The phase model
 

@@ -261,7 +261,7 @@ export class SssfDb {
 
     const completed = this.db
       .query<AgentSession, string[]>(
-        `SELECT adw_id, agent, coding_agent, model, session_id, ${color},
+        `SELECT adw_id, agent, harness, model, session_id, ${color},
                 ${ctxUsed}, ${ctxWindow}, created_at, last_used_at
            FROM agent_sessions WHERE adw_id IN (${placeholders})
           ORDER BY created_at, agent`,
@@ -299,7 +299,7 @@ export class SssfDb {
       append(row.adw_id, {
         adw_id: row.adw_id,
         agent: row.agent,
-        coding_agent: null,
+        harness: null,
         model: payload.model ?? null,
         session_id: payload.session_id ?? null,
         color: payload.color ?? null,

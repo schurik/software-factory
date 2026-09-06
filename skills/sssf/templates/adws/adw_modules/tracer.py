@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS processes (
 CREATE TABLE IF NOT EXISTS agent_sessions (
   adw_id        TEXT REFERENCES sessions,
   agent         TEXT,
-  coding_agent  TEXT, model TEXT, color TEXT,
+  harness       TEXT, model TEXT, color TEXT,
   session_id    TEXT,
   context_tokens INTEGER,           -- window occupancy after the agent's last turn
   context_window INTEGER,           -- the model's ceiling; 0/NULL = unknown
@@ -433,7 +433,7 @@ class Tracer:
         """
         ts = now_iso()
         self.conn.execute(
-            "INSERT INTO agent_sessions (adw_id, agent, coding_agent, model, color,"
+            "INSERT INTO agent_sessions (adw_id, agent, harness, model, color,"
             " session_id, context_tokens, context_window, created_at, last_used_at)"
             " VALUES (?,?,?,?,?,?,?,?,?,?)"
             " ON CONFLICT(adw_id, agent) DO UPDATE SET model=excluded.model,"
@@ -441,6 +441,6 @@ class Tracer:
             " context_tokens=excluded.context_tokens,"
             " context_window=excluded.context_window,"
             " last_used_at=excluded.last_used_at",
-            (adw_id, agent.name, agent.coding_agent, agent.model, agent.color,
+            (adw_id, agent.name, agent.harness, agent.model, agent.color,
              session_id, context_tokens, context_window, ts, ts),
         )

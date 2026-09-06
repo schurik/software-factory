@@ -1,13 +1,15 @@
-"""Pi coding agent backend.
+"""The pi harness.
 
 Runs `pi -p --mode json` and tails its JSONL stdout line by line, forwarding
 each event to a callback WHILE the agent works (the streaming crack, solved
 by construction). `--session-id` creates-or-continues, so running and
 continuing an agent are the same call: same session id = same context window.
 
-One of two backends behind the same five names — `NAME`, `resolve_model`,
-`reachable`, `validate_agent`, `ToolCallTracker`, `run` — which is all
-`agents.py` dispatches on. See `agent_cc.py` for the other.
+One harness behind the names `__init__.py` documents — `NAME`, `Options`,
+`resolve_model`, `reachable`, `validate_agent`, `new_session_id`,
+`ToolCallTracker`, `run` — which is all `agents.py` dispatches on. Its
+templates (roster, prompts, extensions, env sample) live in the skill under
+`templates/harnesses/pi/`.
 """
 
 from __future__ import annotations
@@ -19,11 +21,27 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Optional
 
-from .data_types import AgentConfig, AgentRequest, AgentResult, UsageBreakdown
-from .tool_calls import ToolCallLedger
-from .utils import new_id, operator_env
+from pydantic import BaseModel, ConfigDict
+
+from ..data_types import AgentConfig, AgentRequest, AgentResult, UsageBreakdown
+from ..tool_calls import ToolCallLedger
+from ..utils import new_id, operator_env
 
 NAME = "pi"
+
+
+class Options(BaseModel):
+    """`harness_options` for a pi agent — empty, and deliberately strict.
+
+    Pi is configured through argv and the environment (`PI_PATH`,
+    `PI_MODELS_PATH`, the provider key its `model` names), so there is nothing
+    per-agent to carry here yet. `extra="forbid"` is the point: a claude_code
+    block pasted onto a pi agent fails validation instead of being silently
+    ignored, which is exactly the mistake a mixed roster invites.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
 
 PI_PATH = os.environ.get("PI_PATH", "pi")
 MODELS_JSON = os.environ.get("PI_MODELS_PATH",
@@ -100,8 +118,12 @@ def reachable() -> None:
 
 
 def validate_agent(agent: AgentConfig) -> list[str]:
-    """Backend-specific config problems for one agent. Empty list = fine."""
+    """Harness-specific config problems for one agent. Empty list = fine."""
     problems = []
+    try:
+        Options(**agent.harness_options)
+    except Exception as error:
+        problems.append(f"harness_options: {error}")
     if agent.thinking not in THINKING_LEVELS:
         problems.append(f"thinking {agent.thinking!r} is not one of "
                         f"{' | '.join(THINKING_LEVELS)}")
@@ -124,7 +146,7 @@ def _turn_usage(usage: dict, total_tokens: int) -> UsageBreakdown:
 
     `total_tokens` is passed in rather than re-derived: the caller already
     computes it pi's way (totalTokens, else the sum of the parts). Pi is the
-    backend that reports cost per component, so all five cost fields are real.
+    harness that reports cost per component, so all five cost fields are real.
     """
     cost = usage.get("cost") or {}
     return UsageBreakdown(
@@ -192,9 +214,9 @@ class ToolCallTracker:
     result, so that is where a record is emitted — one trace event per real
     tool call, the moment it returns, instead of three shapeless ones.
 
-    `observe` returns a LIST because the other backend can close several calls
+    `observe` returns a LIST because another harness can close several calls
     in one event; the record shape itself lives in tool_calls.py, which is what
-    keeps the two backends indistinguishable downstream.
+    keeps every harness indistinguishable downstream.
     """
 
     def __init__(self) -> None:

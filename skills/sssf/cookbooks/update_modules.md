@@ -10,12 +10,13 @@ Extend `adws/adw_modules/` with new low-level logic.
 
 | Module | Owns |
 |---|---|
-| `data_types.py` | Every Pydantic model: `AgentCall`, `PhaseParams`, `Phase`, `EnvelopeBase` + one output type per agent call, the config models (`AgentConfig`, `ClaudeCodeConfig`, `SSSFConfig`), `EventRecord`, and the backend-agnostic `AgentRequest`/`AgentResult`/`AgentSession` (`PiRequest`/`PiResult` remain as aliases) |
+| `data_types.py` | Every Pydantic model: `AgentCall`, `PhaseParams`, `Phase`, `EnvelopeBase` + one output type per agent call, the config models (`AgentConfig`, `ConfigDefaults`, `SSSFConfig`), `EventRecord`, and the harness-agnostic `AgentRequest`/`AgentResult`/`AgentSession`. A harness's own options model lives in that harness, not here |
 | `agents.py` | `load_config`, `validate`, resolving an entry → coding-agent interface + model + thinking + harness extensions |
 | `runner.py` | the `Run` object; `run.phase(PhaseParams)` context manager; `ph.call(AgentCall)` |
-| `agent_pi.py` | the Pi backend — non-interactive `pi -p --mode json`, JSONL stream tailed live, model resolved against `~/.pi/agent/models.json`; `--session-id` creates-or-continues, so running and continuing an agent are the same call |
-| `agent_cc.py` | the Claude Code backend — non-interactive `claude -p --output-format stream-json`, same live tail; `--session-id` is create-ONLY so the first call creates and every later one `--resume`s, determinism switches (`safe_mode`, `setting_sources`, `strict_mcp_config`) come from `claude_code:` in the config, and `commands_changed` is filtered before it can reach the trace |
-| `tool_calls.py` | the normalized tool-call record and its ledger — one shape per completed call, whichever backend ran it. Adding a third backend means writing a tracker that fills this in, and nothing else |
+| `harnesses/__init__.py` | the harness registry — the names a harness module must expose, and the explicit imports that make one selectable. See [references/harnesses.md](../references/harnesses.md) before adding one |
+| `harnesses/pi.py` | the pi harness — non-interactive `pi -p --mode json`, JSONL stream tailed live, model resolved against `~/.pi/agent/models.json`; `--session-id` creates-or-continues, so running and continuing an agent are the same call |
+| `harnesses/claude_code.py` | the Claude Code harness — non-interactive `claude -p --output-format stream-json`, same live tail; `--session-id` is create-ONLY so the first call creates and every later one `--resume`s, determinism switches (`safe_mode`, `setting_sources`, `strict_mcp_config`) are its `Options` model, read from `harness_options:` in the config, and `commands_changed` is filtered before it can reach the trace |
+| `tool_calls.py` | the normalized tool-call record and its ledger — one shape per completed call, whichever harness ran it. Adding a third harness means writing a tracker that fills this in, and nothing else |
 | `gates.py` | validation gates over envelope claims |
 | `permissions.py` | the write boundary — snapshots the tree, checks it after every agent call against that agent's `writes` plus `defaults.protected_files`, rolls unauthorized changes back and kills the phase. `tools` is a capability list; THIS is the boundary |
 | `worktree.py` | create-or-join the run's worktree and branch, and release it when a clean accepted run no longer needs it |

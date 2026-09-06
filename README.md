@@ -200,8 +200,8 @@ There is no DSL here. No framework to learn. It is Python, YAML, agents, and a s
 
 ```yaml
 defaults:
-  coding_agent: pi                 # v1 runs pi only, claude_code is schema-valid and stubbed
-  model: google/gemini-3.6-flash   # provider/model-id, a bare id can match several providers
+  harness: pi                      # pi | claude_code — asked at install, overridable per agent
+  model: google/gemini-3.6-flash   # pi: provider/model-id, a bare id can match several providers
   thinking: medium                 # off | minimal | low | medium | high | xhigh | max
   protected_files:                 # no agent may edit the machinery that grades it
     - adws/adw_modules/
@@ -306,7 +306,7 @@ The output contract lives in three places and they are one thing: the type in `d
   <img src="images/06_trace_path.svg" alt="Running agents to tracer.py to a WAL SQLite db with seven tables, read by a cursor poll query, with no websocket and no ingest endpoint" width="780">
 </p>
 
-One data path, no exceptions: **agents write to SQLite, readers poll SQLite.** `agent_pi.py` tails the coding agent's JSONL stdout line by line and the tracer inserts each event while the agent is still working, so tool calls are visible mid-run instead of batched at the end.
+One data path, no exceptions: **agents write to SQLite, readers poll SQLite.** The harness module (`adw_modules/harnesses/pi.py`, `claude_code.py`) tails the coding agent's JSONL stdout line by line and the tracer inserts each event while the agent is still working, so tool calls are visible mid-run instead of batched at the end.
 
 Ten event types land across seven tables: `sessions`, `phases`, `events`, `envelopes`, `gate_results`, `agent_sessions`, and `processes` (adw_id to pid, so a stuck run can be found and stopped). Every event logs against both its `adw_id` and its `phase_id`, and `parent_id` nests spans, so an agent phase expands into its own tool calls.
 
@@ -419,7 +419,7 @@ Honest edges, because knowing them is cheaper than discovering them.
 | A green run left your branch unchanged | Runs commit to `sssf/<adw_id>` in their own worktree, not to your branch | Expected. `just integrate <adw_id>` lands it; `just worktrees` shows what is still around |
 | A pull request missing a later commit | A session keeps working after its PR is opened — a chain joined with `--adw-id` commits onto the same branch | Fixed: every commit phase pushes a branch that is already on the remote, and `just integrate <adw_id>` run again updates that PR instead of opening a second one. Read the commit phase's `pushed`/`notes` if it did not go out |
 | `install.py --force` | Overwrites **all** stamped files, config and prompts included | Commit before you force |
-| `coding_agent: claude_code` | Schema-valid, but `agent_cc.py` raises | v1 is Pi only |
+| An agent moved to another harness keeps its old prompt | Prompts are stamped per harness — pi's planner and scout are told to use `subagent_*` tools Claude Code does not have | Edit that agent's `system.md` when you move it; validation catches the `tools:` half, not the prose |
 
 Also missing on purpose, so you know what to add: a sandbox around the agent. A branch per run and a merge step ship in this fork — every run works in its own git worktree on `sssf/<adw_id>` and lands through a configurable integration phase (`docs/phase-2-worktree-per-run.md`) — but a worktree is isolation, not containment. An agent with `bash` can still walk out of it, and `permissions.py` is what actually holds the line.
 

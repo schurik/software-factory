@@ -39,7 +39,7 @@ On **Claude Code** it is the same part-sum in that CLI's vocabulary — `input_t
 
 Both are NULL on rows written before the columns existed, and the lane draws no bar rather than a misleading empty one.
 
-**Cost is not symmetric between backends.** Pi reports a per-component breakdown; Claude Code reports `total_cost_usd` and nothing else. `usage.total_cost` reconciles on both, while `input_cost`, `output_cost`, `cache_read_cost` and `cache_write_cost` stay at zero for a Claude Code agent — left empty deliberately, rather than invented from a split the CLI never published.
+**Cost is not symmetric between harnesses.** Pi reports a per-component breakdown; Claude Code reports `total_cost_usd` and nothing else. `usage.total_cost` reconciles on both, while `input_cost`, `output_cost`, `cache_read_cost` and `cache_write_cost` stay at zero for a Claude Code agent — left empty deliberately, rather than invented from a split the CLI never published.
 
 Two caveats worth knowing. Pi adds an *estimate* for any messages trailing the last assistant usage; in a batch (`-p`) run the session ends on that message, so the two agree. And if auto-compaction fires as the very last act of a run, the recorded number is the pre-compaction size — pi itself reports `null` in that window rather than guessing.
 
@@ -55,9 +55,9 @@ The gate event payload carries `attempt` too, so the `gate_results` table and th
 
 **Provenance survives a session, not just a process.** `just integrate <adw_id>` re-enters an ADW hours later, and `session.ensure()` reads `trigger`/`issue_url` back into the Run at start. Without that, a second process would default to `engineer` and `issues.force_pr` would let an issue-triggered run merge into the base branch — the one control that phase put in code rather than in config, defeated by the documented follow-up path.
 
-**Streaming is solved by construction.** Both backends tail their CLI's JSONL stdout line by line and the tracer inserts each event into `sssf.db` **while the agent is still working** — never batched at phase end (verified in the first smoke run of each: tool calls visible mid-run). Everything downstream is a poll → render.
+**Streaming is solved by construction.** Every harness tails its CLI's JSONL stdout line by line and the tracer inserts each event into `sssf.db` **while the agent is still working** — never batched at phase end (verified in the first smoke run of each: tool calls visible mid-run). Everything downstream is a poll → render.
 
-**One tool-call shape, whichever backend ran it.** `adw_modules/tool_calls.py` owns the record — `tool`, `tool_call_id`, `args`, `ok`, `label`, `result_snippet`, and the call's real span — and each backend has a tracker that folds its own event vocabulary into it. Pi announces a `toolCall` block and closes with `tool_execution_end`; Claude Code announces a `tool_use` block in an `assistant` message and closes with `tool_result` blocks in the following `user` message, several at once when calls ran in parallel. Neither the trace schema nor the visualizer knows the difference.
+**One tool-call shape, whichever harness ran it.** `adw_modules/tool_calls.py` owns the record — `tool`, `tool_call_id`, `args`, `ok`, `label`, `result_snippet`, and the call's real span — and each harness has a tracker that folds its own event vocabulary into it. Pi announces a `toolCall` block and closes with `tool_execution_end`; Claude Code announces a `tool_use` block in an `assistant` message and closes with `tool_result` blocks in the following `user` message, several at once when calls ran in parallel. Neither the trace schema nor the visualizer knows the difference.
 
 **Claude Code noise is dropped before it is written anywhere** — not just before the tracer, but before the raw-output file too. `system/commands_changed` is the reason: ~20 KB of skill and slash-command listings on every invocation, which would dwarf the actual tool calls in `events.payload_json`. `active_goal`, `autocompact_state`, `post_turn_summary`, `task_summary` and `thinking_tokens` go with it. `system/init` (session id, model, cwd, tools), `assistant`, `user`, `result` and `rate_limit_event` are all kept — the last one because a stalled run is exactly when you want to know a rate limit was hit.
 
@@ -146,10 +146,10 @@ processes (                        -- adw_id → pid, so a stuck run can be stop
 agent_sessions (                   -- the queryable mirror of agent_map.json
   adw_id        TEXT REFERENCES sessions,
   agent         TEXT,
-  coding_agent  TEXT, model TEXT, color TEXT,   -- color: the config's lane swatch
+  harness       TEXT, model TEXT, color TEXT,   -- color: the config's lane swatch
   session_id    TEXT,
   context_tokens INTEGER,           -- window occupancy after the agent's last turn
-  context_window INTEGER,           -- the model's ceiling, per backend
+  context_window INTEGER,           -- the model's ceiling, per harness
   created_at    TEXT, last_used_at TEXT,
   PRIMARY KEY (adw_id, agent)
 );

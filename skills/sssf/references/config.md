@@ -1,27 +1,31 @@
 # Config Reference
 
-The full `sssf.config.yaml` spec: every field, how defaults merge, and how model / thinking / tools / extensions map onto **each** coding agent — `pi` and `claude_code` are both real, and selectable per agent.
+The full `sssf.config.yaml` spec: every field, how defaults merge, and how model / thinking / tools / extensions map onto **each** harness — `pi` and `claude_code` are both real, and selectable per agent. The harness seam itself, and how to add a third, is [references/harnesses.md](harnesses.md).
 
 It lives at **`adws/adw_sssf_config/sssf.config.yaml`** — the default path every `adw_*.py` and the justfile resolve, and where `install.py` / `make_config.py` stamp it. Pass `--config <path>` to any ADW (or set `SSSF_CONFIG` for the justfile) to run against a different roster.
+
+The stamped file is **generated for the harness the install chose**, out of three files in the skill: `templates/harnesses/<harness>/defaults.yaml`, the harness-agnostic `templates/config/base.yaml`, and `templates/harnesses/<harness>/agents.yaml`. Once stamped it is an ordinary file and yours to edit — including adding an agent on the other harness.
 
 ## Shape
 
 ```yaml
 defaults:
-  coding_agent: pi
+  harness: pi
   model: google/gemini-3.6-flash        # pi: ALWAYS provider/model-id
   thinking: medium
   harness_engineering: []
   tools: [read, bash, edit, write, grep, find, ls]
   data_dir: adws/adw_data
-  claude_code:                          # claude_code agents only; pi ignores it
-    safe_mode: true
-    bare: false
-    setting_sources: []
-    strict_mcp_config: true
-    permission_mode: bypassPermissions
-    add_dirs: []
-    max_budget_usd: 0
+  harness_options:                      # keyed BY HARNESS; an agent inherits only its own
+    pi: {}
+    claude_code:
+      safe_mode: true
+      bare: false
+      setting_sources: []
+      strict_mcp_config: true
+      permission_mode: bypassPermissions
+      add_dirs: []
+      max_budget_usd: 0
 
 observability:
   db: adws/adw_data/sssf.db
@@ -56,7 +60,7 @@ worktree:
 
 agents:
   - name: planner
-    coding_agent: pi
+    harness: pi
     model: google/gemini-3.6-flash        # ALWAYS provider/model-id
     thinking: high
     color: "#a78bfa"
@@ -71,11 +75,11 @@ agents:
       - bash
 
   - name: reviewer
-    coding_agent: claude_code
+    harness: claude_code
     model: sonnet                         # claude_code: an alias or a full model id
     thinking: high                        # -> --effort high
-    claude_code:
-      permission_mode: bypassPermissions
+    harness_options:                      # flat: this agent's harness only, merged
+      permission_mode: bypassPermissions  # key by key over defaults.harness_options.claude_code
     prompt_engineering:
       system: adws/adw_data/prompt_engineering/reviewer/system.md
       user: adws/adw_data/prompt_engineering/reviewer/user.md
@@ -84,7 +88,9 @@ agents:
       - grep
 ```
 
-Both agents above run in the same chain and hand each other the same typed envelopes. Nothing downstream — gates, permissions, the trace schema, the visualizer — knows which backend produced a phase.
+Both agents above run in the same chain and hand each other the same typed envelopes. Nothing downstream — gates, permissions, the trace schema, the visualizer — knows which harness produced a phase.
+
+One thing a mixed roster does NOT get for free: **prompts are stamped per harness.** The pi planner's `system.md` tells it to fan out with `subagent_*`; move that agent to `claude_code` and those tools do not exist. Edit the agent's prompt when you move it — see [harnesses.md](harnesses.md#why-the-prompts-are-per-harness-not-shared).
 
 ## Fields
 
@@ -92,12 +98,12 @@ Both agents above run in the same chain and hand each other the same typed envel
 
 | Field | Type | Meaning |
 |---|---|---|
-| `coding_agent` | `pi` \| `claude_code` | Which backend runs the agent. Both are implemented (`agent_pi.py`, `agent_cc.py`) and selectable per agent; one chain may mix them. |
-| `model` | string | Backend-specific. Pi: `provider/model-id`, resolved against `pi --list-models`. Claude Code: an alias (`opus`, `sonnet`, `haiku`) or a full id (`claude-sonnet-5`) — a `provider/id` pattern is **rejected at validation**. |
+| `harness` | `pi` \| `claude_code` | Which harness runs the agent — a name in `adw_modules/harnesses/`. Both ship, selectable per agent; one chain may mix them. Adding a third is [harnesses.md](harnesses.md#adding-a-harness-codex-or-whatever-is-next). |
+| `model` | string | Harness-specific. Pi: `provider/model-id`, resolved against `pi --list-models`. Claude Code: an alias (`opus`, `sonnet`, `haiku`) or a full id (`claude-sonnet-5`) — a `provider/id` pattern is **rejected at validation**. |
 | `thinking` | enum | Reasoning effort — see below. Default `medium`. |
 | `color` | hex string | Lane color for every agent that does not set its own. Default empty — the visualizer falls back to its own palette. |
-| `harness_engineering` | list[string] | Coding-agent extensions, and **not interchangeable between backends**. Pi: TypeScript extension paths (`-e`). Claude Code: `mcp:<file.json>`, `agents:<json-or-file>`, `plugin:<dir-or-zip>`. |
-| `claude_code` | block | Determinism and permission settings for `claude_code` agents — see [Claude Code determinism](#claude-code-determinism). Inert for pi. |
+| `harness_engineering` | list[string] | Coding-agent extensions, and **not interchangeable between harnesses**. Pi: TypeScript extension paths (`-e`). Claude Code: `mcp:<file.json>`, `agents:<json-or-file>`, `plugin:<dir-or-zip>`. |
+| `harness_options` | map | Per-harness settings, **keyed by harness name**: `{pi: {...}, claude_code: {...}}`. An agent inherits only the block for the harness it runs on. The shape belongs to the harness module (`harnesses.<name>.Options`), which rejects unknown keys — see [Claude Code determinism](#claude-code-determinism) for the one harness that has any. |
 | `tools` | list[string] | Roster-wide tool allowlist. Every agent that omits its own `tools` inherits this. Unset = all tools usable. |
 | `protected_files` | list[string] | Paths **no** agent may modify unless it names them in its own `writes`. Default: `adws/adw_modules/`, `adws/adw_sssf_config/`, `adws/adw_*.py` — an agent must not be able to edit the machinery that decides whether its work passed. |
 | `data_dir` | path | Runtime home. Sessions land at `{data_dir}/sessions/{adw_id}/{agent_name}/`. Default `adws/adw_data`. **Resolved against the MAIN checkout, never against a run's worktree** — see [Worktree per run](#worktree-per-run). |
@@ -229,7 +235,8 @@ The trigger sits *above* the factory: `<skill>/scripts/pr_watch.py` (`just prs`,
 | `prompt_engineering.system` | yes | Path to the system prompt — who the agent is, its single purpose, its output contract. |
 | `prompt_engineering.user` | yes | Path to the default user prompt — the task template with `{{prompt}}`, `{{previous_envelope}}`, `{{context_handoff_dir}}`. |
 | `color` | no | Hex swatch (`"#a78bfa"`) for this agent's lane in the visualizer. Travels config → `agent_sessions.color` → `/api/sessions/:adw_id`, and rides the `agent_start` event so a lane is colored while the agent is still running. Unset = the UI's fallback palette. |
-| `coding_agent`, `model`, `thinking`, `color`, `harness_engineering`, `claude_code` | no | Override the corresponding `defaults` key. `claude_code` is replaced as a whole block, not merged key by key. |
+| `harness`, `model`, `thinking`, `color`, `harness_engineering` | no | Override the corresponding `defaults` key. |
+| `harness_options` | no | This agent's settings for **its own** harness — a flat block, not keyed by name. Merged **key by key** over `defaults.harness_options[<this agent's harness>]`, so overriding one setting never drops the rest. An unknown key fails validation rather than doing nothing quietly. |
 | `tools` | no | Allowlist. **Omitting the key means all tools usable.** A capability list, not a boundary — see `writes`. |
 | `writes` | no | What this agent may modify **in the repo**, enforced after every call. Omitted = unrestricted (still barred from `protected_files`). `[]` = no repo writes at all. A list = only those paths: a trailing `/` is a directory prefix, `*` matches within one path segment, `**` crosses segments, anything else is an exact path. Naming a `protected_files` path here is what unlocks it. **The session runtime under `data_dir` is always writable** — `writes: []` means read-only with respect to the repo, not unable to write its own report. |
 
@@ -254,25 +261,15 @@ Worktrees are skipped — both roots become the same directory, and everything b
 
 ## Defaults merging
 
-`agents.py` merges each entry **over** `defaults`, key by key. An entry states only what differs; anything unset inherits. `agents.validate(cfg, REQUIRED_AGENTS)` then confirms every name an ADW declares exists, has both prompt files present on disk, and — **asking the agent's own backend, not one hard-coded rule** — that its model, tools, thinking level and `harness_engineering` entries are ones that backend can actually honor, and that the backend's CLI is on PATH. Any miss fails the run immediately, with every problem listed at once: **no agent is ever spawned against a half-valid config.**
+`agents.py` merges each entry **over** `defaults`, key by key — including `harness_options`, whose inherited half is looked up by the agent's harness name. An entry states only what differs; anything unset inherits. `agents.validate(cfg, REQUIRED_AGENTS)` then confirms every name an ADW declares exists, has both prompt files present on disk, and — **asking the agent's own harness, not one hard-coded rule** — that its model, tools, thinking level, `harness_options` and `harness_engineering` entries are ones that harness can actually honor, and that its CLI is on PATH. Any miss fails the run immediately, with every problem listed at once: **no agent is ever spawned against a half-valid config.**
 
 Validation still checks that a model is *written* correctly, not that its provider answers or that its key is set. A missing credential surfaces when that agent runs, not at startup.
 
-## Backends
+## Harnesses
 
-| | `coding_agent: pi` | `coding_agent: claude_code` |
-|---|---|---|
-| Command | `pi -p --mode json` | `claude -p --output-format stream-json --verbose` |
-| Binary | `PI_PATH`, default `pi` | `CLAUDE_PATH`, default `claude` |
-| Auth | the provider key named by `model`'s provider half, from `.env` | the CLI's own — `claude auth`, so a **subscription needs no key** |
-| `model` | `provider/model-id`, resolved against `pi --list-models` | an alias (`opus`, `sonnet`, `haiku`) or a full id (`claude-sonnet-5`) |
-| `thinking` | `--thinking <level>` | `--effort <level>`; `off` and `minimal` collapse to `low` |
-| `tools` | lowercase pi names | mapped from pi's names, or Claude Code names written directly |
-| `harness_engineering` | `-e <file.ts>`, repeatable | `mcp:` / `agents:` / `plugin:` entries |
-| Sessions | `--session-id`, create-or-continue | `--session-id` to create, `--resume` after that |
-| Cost detail | per component **and** total | total only |
+Which CLI runs an agent, and everything that differs because of it — model shape, tool vocabulary, `thinking`, sessions, options, and the prompt set the installer stamps. The comparison table and the contract a harness module implements live in **[references/harnesses.md](harnesses.md)**; the sections below cover the config keys those differences show up in.
 
-The seam is one function (`agents.execute` → `driver.run`) and one record shape (`adw_modules/tool_calls.py`). Everything downstream — gates, `permissions.py`, the trace schema, the visualizer — is backend-agnostic and stayed untouched when the second backend landed.
+The seam is one function (`agents.execute` → `driver.run`) and one record shape (`adw_modules/tool_calls.py`). Everything downstream — gates, `permissions.py`, the trace schema, the visualizer — is harness-agnostic.
 
 ## Thinking levels
 
@@ -306,7 +303,7 @@ Other consequences worth knowing:
 - A model must be in the catalog before any agent can name it. An unknown id fails at resolution, before spawn. `pi --list-models` is the catalog the resolver actually reads.
 - **Ambiguity can appear without you touching the config.** Registering a new provider that carries a model you already use turns a formerly-fine bare pattern ambiguous. If a roster stops validating and nobody edited it, that is why.
 - Provider credentials come from the environment, not the config — the key that matches the provider you named (`GEMINI_API_KEY` for `google/...`, `OPENROUTER_API_KEY` for `openrouter/...`).
-- The resolved model is recorded per session in `agent_map.json` and mirrored into the `agent_sessions` table. **Changing an agent's model invalidates its session**: a joined run starts that agent fresh instead of resuming a context window built by a different model. Changing its `coding_agent` does the same, and more bluntly — a pi session id is not a UUID, and Claude Code would refuse it outright.
+- The resolved model is recorded per session in `agent_map.json` and mirrored into the `agent_sessions` table. **Changing an agent's model invalidates its session**: a joined run starts that agent fresh instead of resuming a context window built by a different model. Changing its `harness` does the same, and more bluntly — a pi session id is not a UUID, and Claude Code would refuse it outright.
 
 ### Claude Code — an alias or a full id
 
@@ -323,13 +320,13 @@ Claude Code takes an alias (opus, sonnet, haiku) or a full model id (claude-sonn
 
 Pi's `--session-id` creates *or* continues, so running an agent and continuing it are the same call. Claude Code's is **create-only** — a second use fails with `Session ID <uuid> is already in use` — and continuing takes `--resume <uuid>` instead. Every agent phase does more than one send in practice (a JSON retry, a gate correction), so this is not an edge case.
 
-`agent_map.json` carries the state that settles it: `session_id`, `model`, `coding_agent`, `native_session_id`, and `started`. The first send creates and flips `started`; every send after that resumes. The map is written **the moment a session exists**, not at the end of the phase, so a run that dies mid-phase does not leave behind a session it can neither create nor resume.
+`agent_map.json` carries the state that settles it: `session_id`, `model`, `harness`, `native_session_id`, and `started`. The first send creates and flips `started`; every send after that resumes. The map is written **the moment a session exists**, not at the end of the phase, so a run that dies mid-phase does not leave behind a session it can neither create nor resume.
 
-Claude Code ids are derived, not random — `uuid5(namespace, "<adw_id>:<agent>:<model>")` — so a re-run pinned to the same `--adw-id` lands on the session it left. If the map is lost but the session still exists, the create fails and the backend resumes it instead of dying.
+Claude Code ids are derived, not random — `uuid5(namespace, "<adw_id>:<agent>:<model>")` — so a re-run pinned to the same `--adw-id` lands on the session it left. If the map is lost but the session still exists, the create fails and the harness resumes it instead of dying.
 
 ## Claude Code determinism
 
-A default `claude -p` auto-discovers the operator's `CLAUDE.md`, skills, plugins, hooks and MCP servers. A probe run in the SSSF repository loaded 30+ skills that had nothing to do with the task — which makes a factory run depend on whose machine it executed on, the exact failure the factory exists to eliminate. The `claude_code:` block pins it off, and is **configuration rather than code** because some repositories genuinely do want their own `CLAUDE.md` loaded.
+A default `claude -p` auto-discovers the operator's `CLAUDE.md`, skills, plugins, hooks and MCP servers. A probe run in the SSSF repository loaded 30+ skills that had nothing to do with the task — which makes a factory run depend on whose machine it executed on, the exact failure the factory exists to eliminate. The `harness_options.claude_code` block pins it off, and is **configuration rather than code** because some repositories genuinely do want their own `CLAUDE.md` loaded.
 
 | Field | Default | Flag | Meaning |
 |---|---|---|---|
@@ -352,7 +349,7 @@ Two sharp edges:
 
 ## Tools
 
-`tools` is written in **pi's vocabulary** and translated per backend. Pi's seven builtin tool names:
+`tools` is written in **pi's vocabulary** and translated per harness. Pi's seven builtin tool names:
 
 | Tool | Purpose | Pi's own default |
 |---|---|---|
@@ -382,9 +379,9 @@ Claude Code's tool names differ in case and in spelling, so `agent_cc.py` maps t
 | `find` | `Glob` | |
 | `ls` | `Glob` | Claude Code has no directory-listing tool. It maps to `Glob`, the read-only equivalent, and deliberately **not** to `Bash` — handing a read-only agent a shell to make one tool name resolve would turn a mapping table into a privilege escalation. `find` and `ls` therefore collapse onto one entry. |
 
-Claude Code's own names (`Read`, `Bash`, `WebFetch`, `Task`, `TodoWrite`, …) pass through untouched, so a roster written for this backend can name them directly instead of going through pi's words.
+Claude Code's own names (`Read`, `Bash`, `WebFetch`, `Task`, `TodoWrite`, …) pass through untouched, so a roster written for this harness can name them directly instead of going through pi's words — and the stamped claude_code roster does.
 
-**A name that maps to neither is a validation error, not a silent drop.** `--tools` filtering is exactly where capabilities disappear quietly, and an agent that lost one looks like a model that stopped trying. Pi's `subagent_*` tools are the case you will hit first: they come from a pi extension and have no Claude Code equivalent, so an agent moving backends has to drop them and its `harness_engineering` entry together.
+**A name that maps to neither is a validation error, not a silent drop.** `--tools` filtering is exactly where capabilities disappear quietly, and an agent that lost one looks like a model that stopped trying. Pi's `subagent_*` tools are the case you will hit first: they come from a pi extension and have no Claude Code equivalent, so an agent moving harnesses has to drop them, its `harness_engineering` entry, and the `## Subagents` section of its system prompt together.
 
 ## Write permissions — `writes` and `protected_files`
 
@@ -460,7 +457,7 @@ Rule: **every entry in `harness_engineering` that registers a tool must have tha
 
 ## Harness engineering
 
-**This key is backend-specific and the two halves do not translate.** Nothing tries to unify them; each backend validates its own entries and rejects the other's.
+**This key is harness-specific and the two halves do not translate.** Nothing tries to unify them; each harness validates its own entries and rejects the other's.
 
 **Pi:** entries are extension **file paths**, passed through as `pi -e <path>`, one flag per entry, scoped to that agent only. This is where per-agent harness changes live — e.g. an output-tightening extension for an agent that keeps wrapping its envelope in prose. The starter roster ships with none.
 

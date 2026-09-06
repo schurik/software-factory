@@ -1,4 +1,4 @@
-"""The normalized tool-call record every backend must produce.
+"""The normalized tool-call record every harness must produce.
 
 One record per COMPLETED tool call, with the same keys whatever ran it:
 
@@ -6,8 +6,8 @@ One record per COMPLETED tool call, with the same keys whatever ran it:
     started_at, ended_at, duration_ms
 
 That shape is the contract `agents._event_forwarder` writes to the trace and
-the visualizer reads back, so it lives here rather than inside one backend.
-A backend's tracker parses its own event vocabulary and does its bookkeeping
+the visualizer reads back, so it lives here rather than inside one harness.
+A harness's tracker parses its own event vocabulary and does its bookkeeping
 through `ToolCallLedger`; nothing downstream can tell which one ran.
 """
 
@@ -43,7 +43,7 @@ def label(tool: str, args: dict) -> str:
 
 
 class ToolCallLedger:
-    """Open calls, keyed by the backend's own call id, closed into one record.
+    """Open calls, keyed by the harness's own call id, closed into one record.
 
     A tool call is announced by one event and answered by a later one, and only
     the answer carries the result — so a record is emitted at `close`, the

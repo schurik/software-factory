@@ -351,45 +351,14 @@ class PromptEngineering(BaseModel):
     user: str                       # path to user.md
 
 
-class ClaudeCodeConfig(BaseModel):
-    """Determinism and permission settings for `coding_agent: claude_code`.
-
-    A default `claude -p` discovers whatever the operator has lying around —
-    CLAUDE.md, skills, plugins, hooks, MCP servers — which makes a run depend
-    on whose machine it executed on. That is the exact failure the factory
-    exists to remove, so the defaults below pin it off. They are configuration
-    rather than code because some repositories genuinely do want their own
-    CLAUDE.md loaded, and that is their decision to make.
-    """
-
-    # --safe-mode: no CLAUDE.md, skills, plugins, hooks, MCP servers, custom
-    # agents or commands. Auth, model selection, built-in tools and permissions
-    # keep working, so a Claude subscription still authenticates.
-    safe_mode: bool = True
-    # --bare is stricter still (it also skips LSP and background prefetches),
-    # but it forces ANTHROPIC_API_KEY / apiKeyHelper auth and never reads OAuth
-    # or the keychain — so turning it on takes a subscription-authenticated
-    # roster offline. Off by default for that reason; safe_mode covers the
-    # determinism half without the auth cost.
-    bare: bool = False
-    setting_sources: list[str] = Field(default_factory=list)   # user | project | local
-    strict_mcp_config: bool = True                             # only MCP servers we pass
-    # A non-interactive run has to answer its own permission prompts. This is
-    # only acceptable because two other things are true: permissions.py
-    # fingerprints the tree before the call and rolls back every write outside
-    # the agent's `writes:` allowlist afterwards, and the run happens in its own
-    # worktree. The factory is not careless here; it verifies after the fact.
-    # `bypassPermissions` is refused by the CLI when running as root — use
-    # `acceptEdits` there, and know that it silently denies whatever it would
-    # otherwise have prompted for.
-    permission_mode: str = "bypassPermissions"
-    add_dirs: list[str] = Field(default_factory=list)          # --add-dir, beyond cwd
-    max_budget_usd: float = 0.0                                # 0 = no ceiling
-
-
 class AgentConfig(BaseModel):
     name: str
-    coding_agent: Literal["pi", "claude_code"] = "pi"
+    # The harness this agent runs on — a name in adw_modules/harnesses. A plain
+    # str, not a Literal: a new harness is one module plus one template
+    # directory, and a closed list here would make it a third edit in shared
+    # code. `agents.validate()` checks the name against the registry and lists
+    # what exists, which is the error a Literal would have given anyway.
+    harness: str = "pi"
     model: str = "google/gemini-3.6-flash"
     thinking: str = "medium"        # off | minimal | low | medium | high | xhigh | max
     color: str = ""                 # hex swatch for this agent's lane in the UI
@@ -406,18 +375,25 @@ class AgentConfig(BaseModel):
     #   [...] -> only these. A trailing "/" means a directory prefix; a "*"
     #            makes it a glob; anything else is an exact path.
     writes: Optional[list[str]] = None
-    # Backend-specific knobs. Inert for `coding_agent: pi`.
-    claude_code: ClaudeCodeConfig = Field(default_factory=ClaudeCodeConfig)
+    # This agent's settings for ITS harness, already merged over the defaults
+    # block for that harness. Untyped here on purpose: the shape belongs to the
+    # harness module (`harnesses.<name>.Options`), which parses it during
+    # validation and again when it builds the command line — so a harness owns
+    # its own options without data_types.py having to know they exist.
+    harness_options: dict[str, Any] = Field(default_factory=dict)
 
 
 class ConfigDefaults(BaseModel):
-    coding_agent: Literal["pi", "claude_code"] = "pi"
+    harness: str = "pi"
     model: str = "google/gemini-3.6-flash"
     thinking: str = "medium"
     color: str = ""
     harness_engineering: list[str] = Field(default_factory=list)
     tools: Optional[list[str]] = None    # roster-wide allowlist; None = all tools usable
-    claude_code: ClaudeCodeConfig = Field(default_factory=ClaudeCodeConfig)
+    # Keyed BY HARNESS NAME here, because a mixed roster needs a block per
+    # harness: {"claude_code": {...}, "pi": {...}}. An agent inherits only the
+    # block for the harness it runs on, key by key — see agents.load_config.
+    harness_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
     # Off-limits to every agent that has not named them in its own `writes`.
     # The factory's own code is the default: an agent must not be able to edit
     # the machinery that decides whether its work passed.
@@ -870,16 +846,16 @@ class EventRecord(BaseModel):
     ended_at: Optional[str] = None
 
 
-# ── Coding agent interface (one shape, every backend) ────────────────────────
+# ── Coding agent interface (one shape, every harness) ────────────────────────
 
 class AgentRequest(BaseModel):
-    """Everything one non-interactive coding-agent turn needs, on any backend.
+    """Everything one non-interactive coding-agent turn needs, on any harness.
 
     The four-param rule already forced a request object, so adding a second
-    backend is a couple of fields rather than a second signature. Fields a
-    backend does not use are inert, never an error: pi ignores `resume`, and
+    harness was a couple of fields rather than a second signature. Fields a
+    harness does not use are inert, never an error: pi ignores `resume`, and
     Claude Code ignores `extensions` (it validates `harness_engineering` its
-    own way — see agent_cc).
+    own way — see harnesses/claude_code.py).
     """
 
     prompt: str
@@ -887,12 +863,12 @@ class AgentRequest(BaseModel):
     model: str                      # pi: a registry pattern. claude_code: an alias or model id
     thinking: str = "medium"
     session_id: str                 # the FACTORY's id for this agent's context window
-    session_dir: str                # the backend's own session store, if it keeps one
+    session_dir: str                # the harness's own session store, if it keeps one
     raw_output_path: str            # JSONL stream lands here
     # The run's session runtime — data_dir/sessions/<adw_id> — which lives in
     # the MAIN checkout, OUTSIDE the worktree the agent is spawned in. It holds
     # context_handoff/, the prompt copies and this agent's envelope, so every
-    # agent must be able to write it whatever its `writes:` says. A backend that
+    # agent must be able to write it whatever its `writes:` says. A harness that
     # confines file tools to the working directory has to be told about it.
     runtime_dir: str = ""
     tools: Optional[list[str]] = None
@@ -902,12 +878,11 @@ class AgentRequest(BaseModel):
     # neither field; Claude Code's is create-ONLY and errors on a second use,
     # so it needs both — the UUID it knows the session by, and whether that
     # session already exists.
-    native_session_id: str = ""     # "" = the backend uses session_id as-is
+    native_session_id: str = ""     # "" = the harness uses session_id as-is
     resume: bool = False
-    claude_code: ClaudeCodeConfig = Field(default_factory=ClaudeCodeConfig)
-
-
-PiRequest = AgentRequest            # transitional alias; prefer AgentRequest
+    # The agent's `harness_options`, verbatim. Parsed by the harness that reads
+    # them (`Options(**request.options)`), never here.
+    options: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentSession(BaseModel):
@@ -920,7 +895,7 @@ class AgentSession(BaseModel):
     """
 
     session_id: str
-    native_session_id: str = ""     # what the backend calls it; pi echoes session_id back
+    native_session_id: str = ""     # what the harness calls it; pi echoes session_id back
     started: bool = False           # the session EXISTS — resume it, do not create it
 
 
@@ -947,12 +922,12 @@ class UsageBreakdown(BaseModel):
     cache_write_cost: float = 0.0
     total_cost: float = 0.0
 
-    # No `add_turn` here on purpose. Each backend reports usage in its own
+    # No `add_turn` here on purpose. Each harness reports usage in its own
     # vocabulary — pi says `cacheRead`, Claude Code says
     # `cache_read_input_tokens`, and only pi breaks the cost down per component
-    # — so each backend owns an adapter that BUILDS one of these and merges it
-    # (`agent_pi._turn_usage`, `agent_cc._result_usage`). One function taught
-    # two vocabularies is how a silently-zero column happens.
+    # — so each harness owns an adapter that BUILDS one of these and merges it
+    # (`harnesses/pi.py:_turn_usage`, `harnesses/claude_code.py:_result_usage`).
+    # One function taught two vocabularies is how a silently-zero column happens.
 
     def merge(self, other: "UsageBreakdown") -> None:
         """Add another call's usage — a phase that retries spends more than once."""
@@ -961,9 +936,9 @@ class UsageBreakdown(BaseModel):
 
 
 class AgentResult(BaseModel):
-    """What one coding-agent turn produced. Identical across backends.
+    """What one coding-agent turn produced. Identical across harnesses.
 
-    `session_id` is what the backend says the session was — pi echoes back the
+    `session_id` is what the harness says the session was — pi echoes back the
     id it was handed, Claude Code reports the one it created or resumed, and
     `agents.execute` writes it into the agent map either way.
     """

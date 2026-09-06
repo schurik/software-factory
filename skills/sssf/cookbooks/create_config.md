@@ -5,23 +5,29 @@ Generate `sssf.config.yaml` — the agent roster for a target repo.
 ## Generate it
 
 ```bash
-uv run <skill>/scripts/make_config.py
+uv run <skill>/scripts/make_config.py --harness pi        # or claude_code
 ```
 
-Writes `adws/adw_sssf_config/sssf.config.yaml` — creating the directory if needed — with the starter agents (planner, builder, scout, reviewer, documenter) wired to the prompt files the install cookbook stamped into `adws/adw_data/prompt_engineering/`. That path is the default every ADW and the justfile look for; `--config` overrides it. `make_config.py` refuses to overwrite an existing config unless you pass `--force`, so retuning an existing roster is a hand edit — see `update_config.md`.
+Writes `adws/adw_sssf_config/sssf.config.yaml` — creating the directory if needed — with the starter agents (planner, builder, scout, reviewer, documenter) wired to the prompt files the install cookbook stamped into `adws/adw_data/prompt_engineering/`.
+
+That path is the default every ADW and the justfile look for; `--config` overrides it. `make_config.py` refuses to overwrite an existing config unless you pass `--force`, so retuning an existing roster is a hand edit — see `update_config.md`.
+
+**Ask the engineer which harness first**, or leave `--harness` off and let the script ask: the roster it writes is harness-specific — model shapes, tool vocabulary and the `harness_options` block all differ — and it does not touch the prompts, which `install.py` stamps per harness. Generating a `claude_code` roster over a repo whose prompts were stamped for pi leaves a planner told to use `subagent_*` tools that harness does not have.
 
 ## The rule
 
-**One agent, one prompt, one purpose.** An entry defines who an agent *is*: its coding agent, model, thinking level, and exactly one system prompt plus one user prompt. How it gets *used* — the output type, a per-call user prompt override — lives at the ADW call site, never here.
+**One agent, one prompt, one purpose.** An entry defines who an agent *is*: its harness, model, thinking level, and exactly one system prompt plus one user prompt. How it gets *used* — the output type, a per-call user prompt override — lives at the ADW call site, never here.
 
 ## Schema
 
 ```yaml
 defaults:
-  coding_agent: pi                 # pi | claude_code — per agent, and one chain may mix them
-  model: google/gemini-3.6-flash   # ALWAYS provider/model-id — a bare id is ambiguous
+  harness: pi                      # pi | claude_code — per agent, and one chain may mix them
+  model: google/gemini-3.6-flash   # pi: ALWAYS provider/model-id — a bare id is ambiguous
   thinking: medium                 # off | minimal | low | medium | high | xhigh | max
-  harness_engineering: []          # pi extension names
+  harness_engineering: []          # pi extension paths (claude_code: mcp:/agents:/plugin: entries)
+  harness_options:                 # keyed BY HARNESS; an agent inherits only its own, key by key
+    pi: {}
   data_dir: adws/adw_data          # runtime home: {data_dir}/sessions/{adw_id}/{agent_name}/
 
   # Off-limits to every agent that does not name them in its own `writes`.
@@ -59,7 +65,7 @@ issues:                            # a labelled work item can start a run. OFF b
 
 agents:
   - name: planner                  # ADW scripts name agents, never models
-    coding_agent: pi
+    harness: pi
     model: google/gemini-3.6-flash
     thinking: high
     color: "#a78bfa"               # optional hex — this agent's lane color in the visualizer

@@ -1,0 +1,125 @@
+# ── the roster: one agent, one prompt, one purpose ───────────────────────────
+#
+# Written for the pi harness. Every `model:` here is `provider/model-id`, the tool names
+# are pi's, and `harness_engineering:` entries are TypeScript extensions loaded with
+# `pi -e`. To move ONE agent to Claude Code, give it a harness and a model of that
+# shape — the rest of its entry is unchanged, and it can hand its envelope to a pi agent
+# in the same chain:
+#
+#   - name: reviewer
+#     harness: claude_code
+#     model: sonnet                  # alias or full id — NEVER provider/id
+#     thinking: high                 # -> --effort high
+#     harness_options:               # optional; merged over defaults.harness_options.claude_code
+#       permission_mode: bypassPermissions
+#
+# Its prompts were stamped for pi, though: `adws/adw_data/prompt_engineering/<agent>/`
+# tells the planner and the scout to fan out with `subagent_*`, which Claude Code has no
+# tools for. Drop that section from the agent's system.md when you move it, and drop the
+# `subagent_*` names from its `tools:` — an unmapped tool name is a validation error.
+
+agents:
+  - name: planner
+    model: fireworks/accounts/fireworks/models/kimi-k3
+    thinking: high
+    color: "#a78bfa"                 # optional hex — the agent's lane color in the visualizer
+    purpose: Turn a request into a plan the builder can implement without asking questions.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/planner/system.md
+      user: adws/adw_data/prompt_engineering/planner/user.md
+    harness_engineering:
+      - adws/adw_data/harness_engineering/subagents.ts    # registers the four subagent_* tools below
+    writes:                        # the plan is the only thing it may leave in the repo
+      - specs/
+    tools:                         # full recon + write for plan.md; no edit — the planner never touches repo files
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+      - subagent_create            # extension tools MUST be named here or they are filtered out
+      - subagent_continue
+      - subagent_list
+      - subagent_remove
+
+  - name: builder
+    color: "#22d3ee"
+    purpose: Implement the plan exactly; report every changed file in the envelope.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/builder/system.md
+      user: adws/adw_data/prompt_engineering/builder/user.md
+    # No `writes` key: unrestricted, and the only agent that is. It still cannot
+    # touch defaults.protected_files — the builder does not get to edit its own grader.
+    tools:                         # the only agent that mutates the repo — everything on
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - edit
+      - write
+
+  - name: scout
+    color: "#fbbf24"
+    purpose: Find and report where things live; change nothing.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/scout/system.md
+      user: adws/adw_data/prompt_engineering/scout/user.md
+    harness_engineering:
+      - adws/adw_data/harness_engineering/subagents.ts    # registers the four subagent_* tools below
+    writes: []                     # read-only, and now actually read-only: its findings
+                                   # go to context_handoff/, which is runtime, not the repo
+    tools:                         # search-heavy recon; write only so scout_findings.md lands without a bash heredoc
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+      - subagent_create            # extension tools MUST be named here or they are filtered out
+      - subagent_continue
+      - subagent_list
+      - subagent_remove
+
+  # No tester agent: running the suite is a known command, so it is a kind="code"
+  # phase over adw_modules/quality.py. See SKILL.md hard rule 8.
+
+  - name: reviewer
+    model: openai/gpt-5.6-terra
+    thinking: high
+    color: "#fb7185"
+    purpose: Confirm that what was built is what was asked for; change nothing.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/reviewer/system.md
+      user: adws/adw_data/prompt_engineering/reviewer/user.md
+    writes: []                     # a reviewer that cannot fix cannot quietly fix — the
+                                   # claim the tool list only implied, now enforced
+    tools:                         # full read surface; write only for review.md, no edit
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+
+  - name: documenter
+    model: openai/gpt-5.6-luna
+    color: "#e879f9"
+    purpose: Write up the change that was just made, from the diff; document only.
+    prompt_engineering:
+      system: adws/adw_data/prompt_engineering/documenter/system.md
+      user: adws/adw_data/prompt_engineering/documenter/user.md
+    writes:                        # documentation only — "document only" is a rule now,
+      - app_docs/                  # not a line in a prompt the model may drift from.
+      - docs/                      # Markdown anywhere, because docs live next to the
+      - "**/*.md"                  # code they describe as often as in a docs folder.
+      - "*.md"
+    tools:                         # reads the diff and the code; writes/edits documentation only
+      - read
+      - grep
+      - find
+      - ls
+      - bash
+      - write
+      - edit
