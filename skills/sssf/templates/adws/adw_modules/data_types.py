@@ -423,10 +423,12 @@ class IntegrationConfig(BaseModel):
     # under operator_env() so it resolves exactly as it does in their terminal.
     pr_command: list[str] = Field(default_factory=lambda: ["gh", "pr", "create", "--fill"])
     # Rendered with {adw_id}, {branch}, {base_ref} and — for an issue-triggered
-    # run — {issue_number} and {issue_url}, then passed as --body. Left empty,
-    # nothing is passed and pr_command decides on its own (`--fill` does).
-    # NOTE: `--fill` and an explicit body are mutually exclusive in gh; a repo
-    # that sets a template here drops --fill from pr_command.
+    # run — {issue_number} and {issue_url}, then passed as --body ahead of that
+    # run's own `Closes #<n>` line. Left empty, an issue-triggered run still
+    # sends `Closes #<n>` as the whole body; a run with no issue sends nothing,
+    # and pr_command decides on its own (`--fill` does).
+    # NOTE: `--fill` and an explicit body are mutually exclusive in gh; the
+    # integrate phase drops --fill from the command itself once there is a body.
     pr_body_template: str = ""
 
 

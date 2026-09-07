@@ -215,10 +215,13 @@ def _merge(run, result: IntegrationResult) -> IntegrationResult:
 
 
 def _pr_body(run, template: str, result: IntegrationResult) -> str:
-    """Render the configured PR body. Empty template = let pr_command decide.
+    """Render the configured PR body, plus `Closes #<n>` on an issue-triggered
+    run — the forge closes the issue on merge, so nothing here has to.
 
-    `Closes #<n>` in the template is what makes an issue-triggered run close its
-    own issue on merge — the forge does it, so nothing here has to.
+    The closing line is automatic rather than something the template has to
+    spell out: an issue-triggered run always knows the issue it came from, and
+    a PR that silently leaves that issue open is a worse default than one
+    operators have to opt out of.
 
     A BAD TEMPLATE MUST NOT KILL THE RUN. This is operator-authored markdown, and
     `str.format` treats every brace as a field: one JSON snippet, one `${{ }}`,
@@ -226,21 +229,23 @@ def _pr_body(run, template: str, result: IntegrationResult) -> str:
     landed and the branch was pushed, so the chain dies with its work committed
     and `run.finish()` never reached. Every other failure in this module comes
     back as a note; a typo in a config string has no business being the
-    exception. The PR gets opened without a body instead, and the note says why.
+    exception. The PR gets opened without the template's contribution instead,
+    and the note says why — the `Closes #<n>` line still gets added.
     """
-    if not template:
-        return ""
-    try:
-        return template.format(adw_id=run.adw_id, branch=result.branch,
-                               base_ref=result.base_ref,
-                               issue_number=run.issue_number or "",
-                               issue_url=run.issue_url or "")
-    except (KeyError, IndexError, ValueError) as error:
-        result.notes.append(
-            f"pr_body_template could not be rendered ({type(error).__name__}: "
-            f"{error}) — opening the pull request without a body. A literal "
-            f"brace in that template must be doubled: {{{{ and }}}}")
-        return ""
+    rendered = ""
+    if template:
+        try:
+            rendered = template.format(adw_id=run.adw_id, branch=result.branch,
+                                       base_ref=result.base_ref,
+                                       issue_number=run.issue_number or "",
+                                       issue_url=run.issue_url or "")
+        except (KeyError, IndexError, ValueError) as error:
+            result.notes.append(
+                f"pr_body_template could not be rendered ({type(error).__name__}: "
+                f"{error}) — opening the pull request without it. A literal "
+                f"brace in that template must be doubled: {{{{ and }}}}")
+    closes = f"Closes #{run.issue_number}" if run.issue_number else ""
+    return "\n\n".join(part for part in (rendered, closes) if part)
 
 
 def _open_pr(run, result: IntegrationResult, params: IntegrationRequest) -> IntegrationResult:
@@ -291,6 +296,11 @@ def _open_pr(run, result: IntegrationResult, params: IntegrationRequest) -> Inte
         argv += ["--title", params.title]
     body = params.body or _pr_body(run, config.pr_body_template, result)
     if body:
+        # gh rejects --fill together with an explicit --body, and an
+        # issue-triggered run always has a body now (its `Closes #<n>` line) —
+        # so --fill has to go the moment there is one, not just when an
+        # operator configured pr_body_template themselves.
+        argv = [flag for flag in argv if flag != "--fill"]
         argv += ["--body", body]
     # The forge CLI is already authenticated in the engineer's shell, so it runs
     # under their environment rather than the ADW's ephemeral `uv run` venv.

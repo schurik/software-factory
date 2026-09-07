@@ -39,11 +39,12 @@ worktree:
     # a second one. Nothing publishes a branch on its own.
     open_pr: false
     pr_command: ["gh", "pr", "create", "--fill"]
-    # Passed as --body, rendered with {adw_id}, {branch}, {base_ref} and — on an
-    # issue-triggered run — {issue_number} and {issue_url}. `Closes #<n>` here is
-    # what makes such a run close its own issue when the PR merges; the forge
-    # does it, nothing in the factory has to. NOTE: gh rejects --fill together
-    # with an explicit body, so drop --fill above if you set this.
+    # Prepended to --body, rendered with {adw_id}, {branch}, {base_ref} and — on
+    # an issue-triggered run — {issue_number} and {issue_url}. An issue-triggered
+    # run always appends its own `Closes #<n>` after this, so the forge closes
+    # the issue on merge without operators having to spell that out here.
+    # NOTE: gh rejects --fill together with an explicit body — the integrate
+    # phase drops --fill on its own the moment there is a body to send.
     pr_body_template: ""
 
 # Where work items come from, and which chain each label asks for. OFF by
