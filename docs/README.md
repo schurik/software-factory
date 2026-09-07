@@ -55,6 +55,7 @@ These are settled; the phase documents assume them rather than re-argue them.
 | 4 | [Learning loop](phase-4-learning-loop.md) | Past runs improve future runs | not started |
 | 5 | [Issue tracking](phase-5-issue-tracking.md) | A run starts from an issue, and reports back to it | **built** — see its *As built* section |
 | 6 | [Harness split](phase-6-harness-split.md) | A harness is one module plus one template directory — its own roster, prompts and options; the install asks which | **built** — see its *As built* section |
+| 7 | [One-command startup](phase-7-one-command-startup.md) | `just up` runs the UI and both watchers as one supervised process; a heartbeat makes "is anything watching?" answerable from `just status` and the trace UI | **built** — see its *As built* section |
 
 ### Dependency order
 
@@ -62,12 +63,13 @@ These are settled; the phase documents assume them rather than re-argue them.
 Phase 1 (dual backend) ─┐
                         ├─→ Phase 3 (Convex) ─→ Phase 4 (learning)
 Phase 2 (worktree) ─────┤
-                        └─→ Phase 5 (issue tracking)
+                        └─→ Phase 5 (issue tracking) ─→ Phase 7 (one-command startup)
 ```
 
 - **Phase 1 and Phase 2 are independent of each other.** They touch disjoint modules: Phase 1 changes `agents.py`, `agent_cc.py`, `agent_pi.py` and `data_types.py`; Phase 2 changes `git_helper.py`, `gates.py`, `runner.py` and `session.py`. Either can go first, and both are roughly a day of work.
 - **Phase 3 does not strictly require Phase 1**, but is meaningfully easier after it: once tool-call events are normalised across backends, the Convex schema does not need a per-backend shape.
 - **Phase 4 hard-depends on Phase 3.** There is nothing to learn from until the central store exists.
+- **Phase 7 depends on Phase 5**, whose watchers it supervises and instruments. It is the operating layer over them rather than a new capability, which is why it is small and why it was worth doing before anything larger: its cost is paid every session.
 - **Phase 5 depends only on Phase 2**, which is built, so it can be taken at any point. It is independent of Phases 3 and 4 except for one coordination point: both it and Phase 3 add columns to `sessions`, through the same additive `MIGRATIONS` list.
 
 Recommended order: **2 → 1 → 3 → 4**, with **5 wherever it is wanted**. Phase 2 first, because running in a dirty working tree is the thing most likely to cost you real work while you build everything else. Phases 2 and 1 are done; Phase 3 is next, and it inherits a tool-call event shape that is already normalised across backends — so its schema needs no per-backend variant.

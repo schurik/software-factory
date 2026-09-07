@@ -75,6 +75,49 @@ def ensure_gitignore(root: Path, stamped: list) -> None:
         stamped.append(f"{gitignore} (+{len(missing)} entries)")
 
 
+def ensure_env(root: Path, sample: Path, stamped: list, notes: list) -> None:
+    """Create `.env` from the sample and fill SSSF_SKILL in, in the one place
+    that knows the answer.
+
+    `SSSF_SKILL` is where the justfile finds the operational scripts and the
+    trace UI, and every agent keeps its skills somewhere different, so nothing
+    downstream can guess it. Printing it and trusting a copy-paste was the old
+    design, and it produced the same failure every time a repo was cloned or a
+    second machine picked the factory up: `just issues` exits with "not set",
+    or worse, `.env` carries a path from another machine.
+
+    Three cases, in this order, and none of them overwrite an answer:
+      * no .env      — copy the sample, then fill the key in
+      * key empty    — fill it in
+      * key set      — left alone, and reported when it points somewhere else
+    """
+    env = root / ".env"
+    if not env.exists() and sample.exists():
+        env.write_text(sample.read_text())
+        stamped.append(str(env))
+    if not env.exists():
+        return
+
+    lines = env.read_text().splitlines()
+    for index, line in enumerate(lines):
+        if not line.startswith("SSSF_SKILL="):
+            continue
+        current = line.split("=", 1)[1].strip().strip("\"'")
+        if not current:
+            lines[index] = f"SSSF_SKILL={SKILL_ROOT}"
+            env.write_text("\n".join(lines) + "\n")
+            notes.append(f"SSSF_SKILL={SKILL_ROOT}  (written into .env)")
+        elif Path(current).resolve() != SKILL_ROOT:
+            notes.append(f"SSSF_SKILL in .env is {current}, but this install ran "
+                         f"from {SKILL_ROOT} — left as it is, change it if that is "
+                         f"the stale one")
+        return
+    # A .env the engineer wrote themselves, with no key to fill.
+    with env.open("a") as f:
+        f.write(f"\nSSSF_SKILL={SKILL_ROOT}\n")
+    notes.append(f"SSSF_SKILL={SKILL_ROOT}  (appended to .env)")
+
+
 def write_config(harness: str, dest: Path, force: bool,
                  stamped: list, skipped: list) -> None:
     """The one stamped file that is assembled rather than copied."""
@@ -100,7 +143,7 @@ def main() -> int:
     harness_templates = TEMPLATES / "harnesses" / harness
 
     root = Path.cwd()
-    stamped, skipped = [], []
+    stamped, skipped, notes = [], [], []
 
     stamp(TEMPLATES / "adws", root / "adws", args.force, stamped, skipped)
     stamp(harness_templates / "prompt_engineering",
@@ -116,6 +159,8 @@ def main() -> int:
     # them. Skipped like any other file if the repo already has a justfile.
     stamp(TEMPLATES / "justfile", root / "justfile", args.force, stamped, skipped)
     ensure_gitignore(root, stamped)
+    # Last, because it reads the .env.sample this run just stamped.
+    ensure_env(root, root / ".env.sample", stamped, notes)
 
     print(f"sssf installed into {root} on the {harness} harness")
     print(f"  stamped: {len(stamped)} file(s)")
@@ -123,14 +168,15 @@ def main() -> int:
         print(f"    + {s}")
     if skipped:
         print(f"  skipped (already exist, use --force to overwrite): {len(skipped)}")
-    # The justfile's operational recipes (issues, prs, kill, worktrees, obs) run
+    # The justfile's operational recipes (up, issues, prs, kill, worktrees) run
     # scripts out of the skill, not out of this repo, and every agent keeps its
     # skills in a different place — so the justfile guesses nothing and this is
-    # the only moment anyone knows the answer. Printed every time, not only when
-    # it looks unusual: a recipe that silently resolves to a path that does not
-    # exist is the worst version of this.
-    print("\nthe skill is here — this line goes in .env:")
-    print(f"  SSSF_SKILL={SKILL_ROOT}")
+    # the only moment anyone knows the answer. `ensure_env` has already written
+    # it; this says so, every time, because a recipe that silently resolves to a
+    # path that does not exist is the worst version of this.
+    print(f"\nthe skill is here: {SKILL_ROOT}")
+    for note in notes:
+        print(f"  {note}")
 
     # The harness ships its own post-install steps in about.md, so a new
     # harness brings its instructions with it instead of editing this script.
@@ -140,10 +186,10 @@ def main() -> int:
         print(steps)
 
     print("\nnext steps:")
-    print("  1. cp .env.sample .env   # set SSSF_SKILL above, plus whatever it asks for")
+    print("  1. open .env             # SSSF_SKILL is filled in; add whatever else it asks for")
     print("  2. just demo             # two cheap read-only runs, end to end")
     print("  3. just sessions         # what just happened")
-    print("  4. just obs              # the trace UI, needs bun")
+    print("  4. just up               # trace UI + both watchers, all at once")
     print("\n  no just? the raw form of step 2 is:")
     print("     uv run adws/adw_prompt.py \"say hello\" --agent scout")
     return 0

@@ -119,14 +119,15 @@ cp -r /path/to/software-factory/skills/sssf .claude/skills/
 
 # 2. stamp the factory (run from the target repo ROOT, the cwd is where everything lands)
 uv run .claude/skills/sssf/scripts/install.py
-cp .env.sample .env                              # set SSSF_SKILL (install.py prints it) + OPENROUTER_API_KEY
+# install.py creates .env from the sample and fills SSSF_SKILL in; add your provider keys
 pi --version                                     # confirm pi is on PATH, or set PI_PATH in .env
 git init && git commit --allow-empty -m init     # chains that end in a commit phase need a repo
 
 # 3. smoke test: two cheap read-only runs, end to end
 just demo
 just sessions              # what just happened
-just obs                   # the trace UI, needs bun
+just up                    # the trace UI + both watchers, all at once (needs bun for the UI)
+just status                # ...and whether they are actually running
 
 # no just? every recipe is one line. the raw form of `just demo` is:
 uv run adws/adw_prompt.py "reply with a one-line summary of this repo" --agent scout
@@ -323,12 +324,11 @@ Files stay the raw record (`raw_output.jsonl`, `envelope.json`, `agent_map.json`
 The skill ships a read-only UI for this db at `skills/sssf/apps/visualizer/`: Vue and Vite served by Bun on port 4600, with sessions, a trace waterfall, and per-phase tool-call detail.
 
 ```bash
-cd "$SSSF_SKILL/apps/visualizer" && bun install     # SSSF_SKILL is in the stamped .env
-SSSF_DB=/abs/path/to/your-repo/adws/adw_data/sssf.db bun run server/index.ts &
-bunx vite
+just up                    # the UI plus both watchers, from the stamped repo
+just up --only obs         # the UI alone — this is what `just obs` now runs
 ```
 
-It resolves its target through `--db`, then `SSSF_DB`, then `<cwd>/adws/adw_data/sssf.db`, so one instance can point at any stamped repo. Pass the db explicitly, because the server runs from the app dir.
+It resolves its target through `--db`, then `SSSF_DB`, then `<cwd>/adws/adw_data/sssf.db`, so one instance can point at any stamped repo; `up.py` passes the db the config names, because the server runs from the app dir. By hand it is two processes — `bun run server/index.ts` on :4600 and `bunx vite` on :4601 — which is the reason to let one thing own them: backgrounding the API in a subshell leaves it holding the port after ctrl-c.
 
 ---
 
@@ -340,7 +340,7 @@ software-factory/
 │   ├── SKILL.md                        # hard rules + request routing table
 │   ├── cookbooks/                      # 9 orchestrator playbooks, loaded lazily
 │   ├── references/                     # config / handoff / observability specs
-│   ├── scripts/                        # install.py, make_config.py, make_adw.py
+│   ├── scripts/                        # install.py, up.py, the watchers, make_config.py
 │   ├── apps/visualizer/                # the read-only trace UI (Vue + Vite on Bun)
 │   └── templates/                      # EXACTLY what install.py stamps
 │       ├── sssf.config.yaml            # the starter roster

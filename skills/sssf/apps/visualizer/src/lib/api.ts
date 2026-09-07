@@ -8,6 +8,7 @@ import type {
   PromptsResponse,
   SessionDetail,
   SessionSummary,
+  WatchersResponse,
 } from './types'
 
 async function getJson(url: string): Promise<unknown> {
@@ -64,6 +65,11 @@ export async function fetchPrStatus(adwId: string): Promise<PrStatus> {
   } catch (error) {
     return { available: false, reason: error instanceof Error ? error.message : String(error) }
   }
+}
+
+/** The watcher heartbeats. Both kinds always come back — see the server route. */
+export function fetchWatchers(): Promise<WatchersResponse> {
+  return getJson('/api/watchers') as Promise<WatchersResponse>
 }
 
 export function fetchHealth(): Promise<HealthResponse> {

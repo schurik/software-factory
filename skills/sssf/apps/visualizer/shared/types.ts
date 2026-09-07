@@ -335,6 +335,34 @@ export type EnvelopesResponse = Envelope[];
 /** GET /api/sessions/:adw_id/gates */
 export type GatesResponse = GateResult[];
 
+/**
+ * One watcher's heartbeat row, as `tracer.watcher_beat` writes it.
+ *
+ * `alive` is not in the db: the row says what the watcher last wrote, and only
+ * a probe of its pid says whether it is still there. The server answers that,
+ * because it runs on the same machine the watchers do.
+ */
+export interface WatcherState {
+  kind: "issues" | "prs";
+  status: "polling" | "working" | "stopped" | "disabled" | "error" | string;
+  pid: number | null;
+  project: string | null;
+  interval_s: number | null;
+  note: string | null;
+  started_at: string | null;
+  last_poll_at: string | null;
+  alive: boolean;
+}
+
+/**
+ * GET /api/watchers
+ *
+ * Always both kinds, in a fixed order, whether or not the db has a row: a
+ * watcher that has never run in this repo is the case the UI most needs to
+ * show, and an absent key would render as nothing at all.
+ */
+export type WatchersResponse = WatcherState[];
+
 /** GET /api/health */
 export interface HealthResponse {
   ok: boolean;

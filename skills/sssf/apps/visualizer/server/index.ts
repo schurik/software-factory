@@ -14,7 +14,12 @@ import { existsSync, statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { SssfDb, resolveDbPath } from "./db.ts";
 import { forgeAvailable, prStatus } from "./pr.ts";
-import type { AgentPrompts, ApiError, HealthResponse } from "../shared/types.ts";
+import type {
+  AgentPrompts,
+  ApiError,
+  HealthResponse,
+  WatchersResponse,
+} from "../shared/types.ts";
 
 const PORT = Number(process.env.PORT ?? 4600);
 const DIST_DIR = resolve(import.meta.dir, "..", "dist");
@@ -124,6 +129,11 @@ const server = Bun.serve({
           forge: forgeAvailable(),
         } satisfies HealthResponse),
     ),
+
+    // Not about any one run: whether the things that START runs are running.
+    // A labelled issue with no watcher up is the most expensive silence this
+    // system produces, and this is what lets the UI show it instead.
+    "/api/watchers": safely(() => json(db.watchers() satisfies WatchersResponse)),
 
     "/api/sessions": safely((req) => json(db.sessions(intQuery(req, "limit", 200)))),
 

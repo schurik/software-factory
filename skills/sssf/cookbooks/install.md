@@ -64,7 +64,7 @@ is never the skill's own directory.
 | `adws/adw_modules/` | `templates/adws/adw_modules/` | yes — all low-level logic |
 | `adws/adw_data/prompt_engineering/{planner,builder,scout,reviewer,documenter}/` | `templates/harnesses/<harness>/prompt_engineering/` | yes — **the user-owned home for prompts**, stamped for the chosen harness |
 | `adws/adw_data/harness_engineering/` | `templates/harnesses/<harness>/harness_engineering/` | yes — **the user-owned home for harness extensions** |
-| `justfile` | `templates/justfile` | yes — starter recipes: `just demo`, the workflows, the trace reads, `just obs` |
+| `justfile` | `templates/justfile` | yes — starter recipes: `just up`, `just status`, `just demo`, the workflows, the trace reads |
 | `adws/adw_data/sessions/`, `adws/adw_data/sssf.db` | created at runtime | no — gitignored |
 | `.sssf-worktrees/`, `adws/adw_data/issue-locks/` | created at runtime | no — gitignored: one worktree per run, one lock file per claimed issue |
 
@@ -78,13 +78,15 @@ Re-running is safe. `install.py` skips **every** file that already exists — yo
 
 ## Post-install checklist
 
-1. **`SSSF_SKILL`** — the stamped `justfile` runs the operational scripts
-   (`just issues`, `just prs`, `just kill`, `just worktrees`, `just obs`) out of
-   the skill rather than out of this repo, and every agent keeps its skills
-   somewhere different, so it guesses nothing: put the `SSSF_SKILL=` line
-   `install.py` printed into `.env`. Those five recipes fail with that message
-   until you do; every ADW recipe runs without it, because ADWs are stamped code.
-2. **Env** — `cp .env.sample .env`. What it asks for depends on the harness, and the sample says so: a `claude_code` roster needs no API key at all (the CLI brings its own auth), a `pi` roster needs the key for every provider its models name.
+1. **`SSSF_SKILL`** — already done, and worth knowing about. The stamped
+   `justfile` runs the operational scripts (`just up`, `just issues`, `just
+   prs`, `just kill`, `just worktrees`) out of the skill rather than out of this
+   repo, and every agent keeps its skills somewhere different, so it guesses
+   nothing. `install.py` creates `.env` from the sample and writes the line
+   itself — it is the only moment anything knows the answer. It never overwrites
+   a value that is already there; if the path in `.env` came from another
+   machine, the installer says so and leaves it for you to change.
+2. **Env** — `.env` exists already (see 1). What else it asks for depends on the harness, and the sample says so: a `claude_code` roster needs no API key at all (the CLI brings its own auth), a `pi` roster needs the key for every provider its models name.
 3. **The harness's own steps** — `install.py` printed them after stamping, out of that harness's `about.md`: the CLI on PATH, how it authenticates, and the sharp edges (running as root, `safe_mode`). Re-read them there rather than guessing which apply.
 4. **Gitignore** — `install.py` appends `adws/adw_data/sessions/`, `adws/adw_data/sssf.db*`, `.env`, `.sssf-worktrees/`, `adws/adw_data/issue-locks/`, `__pycache__/` and `*.pyc`; confirm they landed. The worktree entry earns its place twice: chains that commit call `git add -A`, so without it a run's first commit would try to add the tree it is running in.
 5. **Git repo** — ADWs that end in a commit phase call `git_helper.commit_all`, which raises if the cwd is not a git repository. Run `git init` and make a first commit before using `adw_plan_build.py`, `adw_plan_build_test.py`, or `adw_simple_sdlc.py`. `adw_document.py` needs one too: it measures the change with `git diff` against a base ref (`main` by default, `--base` to override).
@@ -136,10 +138,24 @@ issues:
 ```
 
 Then create the four labels the state machine uses (`sssf:queued`, `:running`,
-`:done`, `:failed`), and drive it with `just issues` from cron. `just
-issues-status` prints what the watcher would do and whether it *can* — run it
-once before scheduling anything, because a watcher that cannot resolve its
-project polls nothing and looks identical to one with nothing to do.
+`:done`, `:failed`), and run the watcher. `just issues-status` prints what the
+watcher would do and whether it *can* — run it once before anything else,
+because a watcher that cannot resolve its project polls nothing and looks
+identical to one with nothing to do.
+
+Then pick how it runs:
+
+- **`just up`** — at a terminal. Starts the trace UI, the issue watcher and the
+  review watcher together, in one foreground process; ctrl-c stops all of them.
+  This is the answer to the failure everybody hits at least once: labelling an
+  issue and waiting on a watcher nobody started.
+- **`just issues` / `just prs` from cron** — unattended. One poll per
+  invocation, exactly as before.
+
+Either way, **`just status`** answers "is anything actually running" — both
+watchers, when each last polled, and what is in flight — and the trace UI carries
+the same two badges in its top bar, so a watcher that is down is visible from the
+screen you are already watching.
 
 **Say the trust boundary out loud to the engineer**, because it is the thing
 that changes when this goes on: an issue body is written by whoever can file

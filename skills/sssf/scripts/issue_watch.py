@@ -43,6 +43,7 @@ import argparse
 import fcntl
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -107,6 +108,25 @@ def _running_count(cfg, main_root) -> int:
         except PermissionError:
             alive += 1          # exists, owned by someone else
     return alive
+
+
+def _beat(cfg, main_root, status: str, *, project: str = "",
+          interval: int = 0, note: str = "") -> None:
+    """Say, in the trace db, that this watcher exists and what it just did.
+
+    The whole point is that "nothing is happening" stops being ambiguous: `just
+    status` and the trace UI read this row, so a watcher nobody started reads as
+    absent rather than as a quiet one. Thin over `tracer.watcher_beat`, and
+    tolerant of a stamped factory older than it — an out-of-date repo loses the
+    badge, not the watcher.
+    """
+    try:
+        from adw_modules.tracer import watcher_beat
+        from adw_modules.utils import anchor
+    except ImportError:
+        return
+    watcher_beat(anchor(main_root, cfg.observability.db), "issues", status,
+                 pid=os.getpid(), project=project, interval_s=interval, note=note)
 
 
 def _route(cfg, labels: list[str]) -> str:
@@ -178,20 +198,24 @@ def _launch(script: str, config_path: str, number: int, main_root) -> int:
     return subprocess.run(argv, cwd=str(main_root)).returncode
 
 
-def once(config_path: str) -> int:
+def once(config_path: str, interval: int = 0) -> int:
     cfg, main_root, project = _load(config_path)
     if not cfg.issues.enabled:
         print("issues.enabled is false — nothing to watch")
+        _beat(cfg, main_root, "disabled", note="issues.enabled is false")
         return 0
     if not project:
         print("issues.project is empty and no origin remote could be read.\n"
               "Set issues.project in the config: a watcher that cannot name its "
               "project polls nothing, and polling nothing is indistinguishable "
               "from having nothing to do.", file=sys.stderr)
+        _beat(cfg, main_root, "error", note="issues.project is unresolved")
         return 2
 
     queued = _list_queued(cfg, main_root, project)
     print(f"{project}: {len(queued)} issue(s) labelled {cfg.issues.states.queued}")
+    _beat(cfg, main_root, "polling", project=project, interval=interval,
+          note=f"{len(queued)} queued")
     launched = 0
     for entry in queued:
         number = entry.get("number")
@@ -213,6 +237,11 @@ def once(config_path: str) -> int:
                          cfg.issues.states.running, cfg.issues.states.queued):
                 continue
 
+            # A run blocks this watcher for as long as it takes, so the row
+            # has to say that: an idle watcher is recognised by a fresh
+            # `last_poll_at`, and without this a busy one would look stale.
+            _beat(cfg, main_root, "working", project=project, interval=interval,
+                  note=f"#{number} {Path(script).stem}")
             code = _launch(script, config_path, number, main_root)
             launched += 1
             # The run's own report phase said WHAT happened on the issue; this
@@ -222,19 +251,49 @@ def once(config_path: str) -> int:
                   cfg.issues.states.done if code == 0 else cfg.issues.states.failed,
                   cfg.issues.states.running)
     print(f"launched {launched} run(s)")
+    _beat(cfg, main_root, "polling", project=project, interval=interval,
+          note=f"{len(queued)} queued, launched {launched}")
     return 0
 
 
 def loop(config_path: str, interval: int) -> int:
     print(f"polling every {interval}s — ctrl-c to stop")
-    while True:
-        try:
-            once(config_path)
-        except KeyboardInterrupt:
-            raise
-        except Exception as error:                  # an outage is not a crash
-            print(f"! poll failed: {error}")
-        time.sleep(interval)
+    home = _home(config_path)
+    try:
+        while True:
+            try:
+                once(config_path, interval)
+            except KeyboardInterrupt:
+                raise
+            except Exception as error:              # an outage is not a crash
+                print(f"! poll failed: {error}")
+                _beat_error(home, error)
+            time.sleep(interval)
+    finally:
+        # The row outlives the process, so leaving it on `polling` would make a
+        # watcher that was stopped on purpose look like one that died. Written
+        # from the config resolved at STARTUP, never re-read here: this runs
+        # while the process is being torn down, and a git subprocess plus a
+        # config parse is long enough for the shutdown to win the race.
+        if home:
+            _beat(*home, "stopped", note="watcher exited")
+
+
+def _home(config_path: str) -> tuple | None:
+    """(cfg, main_root) resolved once, for beats written on the way out."""
+    try:
+        cfg, main_root, _ = _load(config_path)
+        return cfg, main_root
+    except Exception:
+        return None
+
+
+def _beat_error(home: tuple | None, error: Exception) -> None:
+    """Record a failed poll. A poll that failed is exactly the state the badge
+    is for — the forge unreachable, the token expired — so it must survive
+    whatever went wrong, including the config having become unreadable."""
+    if home:
+        _beat(*home, "error", note=str(error)[:200])
 
 
 def status(config_path: str) -> int:
@@ -255,6 +314,26 @@ def status(config_path: str) -> int:
     return 0
 
 
+def _exit_on_sigterm() -> None:
+    """Turn the FIRST SIGTERM into an ordinary exit, and ignore the rest.
+
+    Without this, `just up` stopping this watcher kills it where it stands and
+    the heartbeat row keeps whatever the last poll wrote — so a watcher stopped
+    on purpose is indistinguishable from one that died, which is the single
+    distinction the row exists to draw. 143 is the conventional code for it.
+
+    Ignoring the second one is not defensive coding, it is the actual bug: up.py
+    signals the whole process group, so `uv` gets SIGTERM alongside this process
+    and forwards its own to us. The second delivery lands while the first is
+    still unwinding, and raises SystemExit again from inside the `finally` that
+    was writing the goodbye beat — which is exactly how that beat went missing.
+    """
+    def leave(*_) -> None:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        sys.exit(143)
+    signal.signal(signal.SIGTERM, leave)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -264,6 +343,7 @@ def main() -> int:
                         help="loop: seconds between polls")
     args = parser.parse_args()
 
+    _exit_on_sigterm()
     if args.action == "once":
         return once(args.config)
     if args.action == "loop":
