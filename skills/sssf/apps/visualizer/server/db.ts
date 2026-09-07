@@ -1,9 +1,11 @@
 /**
  * SQLite reader over a target repo's sssf.db.
  *
- * The read connection is opened readonly and every query on it is a SELECT —
- * the writers are the tracers of running ADW processes, and WAL lets us read
- * straight through their inserts.
+ * Every query on the main connection is a SELECT — the writers are the
+ * tracers of running ADW processes, and WAL lets us read straight through
+ * their inserts. The connection is opened read-write anyway (see the
+ * constructor): a WAL db fully checkpointed between runs has no -shm/-wal
+ * sidecars on disk, and a true SQLITE_OPEN_READONLY open can't create them.
  *
  * ONE exception, opened lazily on its own connection: `setArchived`. Archiving
  * is review triage — "I have looked at this run" — which has to outlive a
@@ -87,11 +89,20 @@ export class SssfDb {
     }
     this.path = path;
     this.sessionsDir = resolve(dirname(path), "sessions");
-    this.db = new Database(path, { readonly: true });
+    // NOT { readonly: true }: a WAL-mode db that has fully checkpointed (no
+    // active writer, which is the common case whenever no ADW is running
+    // right now) has no -shm/-wal sidecar files on disk, and a connection
+    // opened SQLITE_OPEN_READONLY cannot create them — it fails outright with
+    // "unable to open database file" the moment it tries. This connection
+    // still never issues a write statement (the one write path is `writer`,
+    // its own separate connection below), so opening read-write costs nothing
+    // and lets SQLite recreate the sidecars on demand instead of refusing to
+    // start.
+    this.db = new Database(path);
 
-    // WAL is set by the tracer when it creates the db; a readonly connection
-    // cannot change it, so we assert rather than set, and always take the
-    // busy_timeout so a concurrent writer never turns into a failed request.
+    // WAL is set by the tracer when it creates the db, so this only asserts
+    // it rather than setting it, and always takes the busy_timeout so a
+    // concurrent writer never turns into a failed request.
     this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA synchronous = NORMAL");
     const mode = this.db
