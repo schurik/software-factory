@@ -26,9 +26,25 @@ from .utils import anchor, operator_env
 TAIL_CHARS = 1000        # command output kept as evidence on a failure
 
 
-def _in_tree(run, path: str) -> Path:
-    """An agent's declared path, resolved where the agent was spawned to work."""
-    return anchor(run.repo_root, path)
+def _in_tree(run, path: str) -> Path | None:
+    """An agent's declared path, resolved where the agent was spawned to work.
+
+    `anchor()` trusts an already-absolute path outright, which is correct for
+    the runtime under `session_dir` (context_handoff/, envelopes) but not for
+    an agent-declared path that happens to be absolute and points somewhere
+    else entirely — most dangerously, the engineer's own checkout one level up
+    from `repo_root` during a worktree run. A gate that resolved that path,
+    found it real (because the agent's `bash` wrote it there) and passed it
+    would legitimize the escape instead of catching it. So the two trees a run
+    actually owns — `repo_root` and `session_dir` — are the only places an
+    absolute declared path is allowed to land; anything else resolves to None.
+    """
+    p = anchor(run.repo_root, path)
+    resolved = p.resolve()
+    roots = (run.repo_root.resolve(), run.session_dir.resolve())
+    if not any(resolved == root or root in resolved.parents for root in roots):
+        return None
+    return p
 
 
 def _size(path: Path) -> str:
@@ -40,8 +56,12 @@ def artifacts_exist(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for a in envelope.artifacts:
         p = _in_tree(run, a)
-        report.check(a, p.exists(),
-                     f"exists, {_size(p)}" if p.exists() else "declared artifact does not exist")
+        if p is None:
+            report.check(a, False, "declared artifact resolves outside this run's own tree")
+        elif p.exists():
+            report.check(a, True, f"exists, {_size(p)}")
+        else:
+            report.check(a, False, "declared artifact does not exist")
     return report
 
 
@@ -49,8 +69,8 @@ def files_non_empty(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for a in envelope.artifacts:
         p = _in_tree(run, a)
-        if not (p.exists() and p.is_file()):
-            continue                       # existence is artifacts_exist's job
+        if p is None or not (p.exists() and p.is_file()):
+            continue                       # existence (and escape) is artifacts_exist's job
         empty = p.stat().st_size == 0
         report.check(a, not empty, "declared artifact is empty" if empty else _size(p))
     return report
@@ -60,7 +80,7 @@ def json_parses(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for a in envelope.artifacts:
         p = _in_tree(run, a)
-        if p.suffix != ".json" or not p.exists():
+        if p is None or p.suffix != ".json" or not p.exists():
             continue
         try:
             parsed = json.loads(p.read_text())
@@ -75,8 +95,12 @@ def diff_matches_claims(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for f in getattr(envelope, "changed_files", []):
         p = _in_tree(run, f)
-        report.check(f, p.exists(),
-                     f"exists, {_size(p)}" if p.exists() else "claimed changed file does not exist")
+        if p is None:
+            report.check(f, False, "claimed changed file resolves outside this run's own tree")
+        elif p.exists():
+            report.check(f, True, f"exists, {_size(p)}")
+        else:
+            report.check(f, False, "claimed changed file does not exist")
     return report
 
 
