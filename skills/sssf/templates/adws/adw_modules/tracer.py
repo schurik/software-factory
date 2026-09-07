@@ -94,6 +94,18 @@ CREATE TABLE IF NOT EXISTS processes (
   command       TEXT,                -- what the pid was, so a recycled pid is not killed by mistake
   started_at    TEXT, ended_at TEXT  -- ended_at NULL = believed alive
 );
+CREATE TABLE IF NOT EXISTS watchers (
+  -- One row per watcher KIND, not per process: two issue watchers on one repo
+  -- is the thing to notice, not to record twice, and the pid says which one
+  -- wrote the row last. Rewritten on every poll; nothing here is history.
+  kind          TEXT PRIMARY KEY,    -- 'issues' | 'prs'
+  status        TEXT,                -- 'polling' | 'working' | 'stopped' | 'disabled' | 'error'
+  pid           INTEGER,             -- what to probe for liveness; only meaningful on this machine
+  project       TEXT,
+  interval_s    INTEGER,
+  note          TEXT,                -- one line on what the last poll saw
+  started_at    TEXT, last_poll_at TEXT
+);
 CREATE TABLE IF NOT EXISTS agent_sessions (
   adw_id        TEXT REFERENCES sessions,
   agent         TEXT,
@@ -191,6 +203,110 @@ def session_pr_urls(db_path: str | Path) -> dict[str, str]:
             "AND pr_url != ''")}
     except sqlite3.Error:
         return {}
+    finally:
+        conn.close()
+
+
+def session_adw_names(db_path: str | Path) -> dict[str, str]:
+    """{adw_id: adw_name} for every session, read-only. {} when there is no db.
+
+    Which WORKFLOW a session ran, as recorded by `run.finish()` — the fourth of
+    these readers, and here because `pr_watch._reap` must not treat every run
+    that happens to be attached to a merged pull request the same. Stopping a
+    review run whose branch has landed is cleanup; stopping the SDLC run that
+    opened that pull request and is still writing its docs is destroying work.
+    Only the workflow's name tells the two apart.
+    """
+    if not Path(db_path).exists():
+        return {}
+    conn = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
+    try:
+        return {row[0]: row[1] or "" for row in
+                conn.execute("SELECT adw_id, adw_name FROM sessions")}
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+
+
+def ensure_db(db_path: str | Path) -> sqlite3.Connection:
+    """Open the trace db, creating it with the FULL schema if it is missing.
+
+    Not a reader, and not a Tracer either: the two writers that are not runs —
+    `watcher_beat` here, and `up.py` making sure the visualizer has something to
+    open on a repo that has never run anything — both need a db to exist without
+    minting a session or an events file to go with it.
+
+    The full schema rather than the one table the caller cares about, because a
+    db holding only `watchers` fails every session query in the UI, which is a
+    worse outcome than the missing file it replaced. The caller closes it.
+    """
+    path = Path(db_path)
+    ensure_dir(path.parent)
+    conn = sqlite3.connect(str(path), isolation_level=None, timeout=5)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    conn.executescript(SCHEMA)
+    return conn
+
+
+def watcher_beat(db_path: str | Path, kind: str, status: str, *,
+                 pid: int = 0, project: str = "", interval_s: int = 0,
+                 note: str = "") -> None:
+    """Record that a watcher is alive and what it last saw. Never raises.
+
+    The only write in this module that does not belong to a run. It exists
+    because a watcher that is not running and a watcher with nothing to
+    do look identical from the outside — which is the single most expensive
+    confusion in operating this thing: you label an issue, wait, and find out
+    an hour later that nothing was polling. A row here is what lets `just
+    status` and the trace UI answer "is it up" without guessing.
+
+    Written on every poll, so `last_poll_at` doubles as the liveness signal for
+    a watcher that is idling. It is NOT the signal for one that is mid-run:
+    `_launch` blocks for as long as the ADW takes, and status `working` is what
+    says so. The pid is how a reader tells a working watcher from a killed one.
+
+    `started_at` is preserved across beats — an upsert, not a replace — so the
+    row also says how long this watcher has been up.
+
+    Failure is swallowed on purpose. A watcher must not die because it could
+    not describe itself, and the db may legitimately be missing on the first
+    beat of a repo that has never run anything.
+    """
+    try:
+        conn = ensure_db(db_path)
+        try:
+            ts = now_iso()
+            conn.execute(
+                "INSERT INTO watchers (kind, status, pid, project, interval_s, note,"
+                " started_at, last_poll_at) VALUES (?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(kind) DO UPDATE SET status=excluded.status,"
+                " pid=excluded.pid, project=excluded.project,"
+                " interval_s=excluded.interval_s, note=excluded.note,"
+                " last_poll_at=excluded.last_poll_at",
+                (kind, status, pid, project, interval_s, note, ts, ts))
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError):
+        pass
+
+
+def watcher_states(db_path: str | Path) -> dict[str, dict]:
+    """{kind: row} for every watcher that has ever beaten here, read-only.
+
+    A kind that is absent has never been started in this repo — which is a
+    different thing from `stopped`, and the reason readers render the two
+    differently. {} when there is no db, same contract as the readers above.
+    """
+    if not Path(db_path).exists():
+        return {}
+    conn = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True, timeout=5)
+    conn.row_factory = sqlite3.Row
+    try:
+        return {row["kind"]: dict(row) for row in conn.execute("SELECT * FROM watchers")}
+    except sqlite3.Error:
+        return {}                       # a db written before this table existed
     finally:
         conn.close()
 

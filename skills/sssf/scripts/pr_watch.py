@@ -27,8 +27,13 @@ Two things that state cannot do on its own, and this file exists for both:
     same failing run, forever. `states.failed` is that mark, and a human
     removing it is the restart. It is the ONLY label this path uses.
   * A MERGED PULL REQUEST ENDS ITS SESSION, and nothing inside the factory can
-    notice. `_reap()` does: it kills a review run still working a branch that
+    notice. `_reap()` does: it stops the REVIEW run still working a branch that
     has already landed, and releases the worktree that run was keeping alive.
+    Only a review run — the kind this file starts. Any other workflow that
+    happens to be attached to that pull request is reported and left alone; see
+    `_reap`. The WATCHER itself is never stopped by a merge: `loop` keeps
+    polling, and only the pinned `loop --pr <n>` exits, because a watcher asked
+    to follow one pull request is finished when that pull request is.
 
 Exclusion is a file lock per pull request, held across the run, as in
 `issue_watch` — and with the same limit: it covers one watcher per repository on
@@ -101,6 +106,24 @@ def _running_count(cfg, main_root) -> int:
     max_concurrent permanently while looking like a busy factory.
     """
     return len(_live(cfg, main_root))
+
+
+def _beat(cfg, main_root, status: str, *, project: str = "",
+          interval: int = 0, note: str = "") -> None:
+    """Say, in the trace db, that this watcher exists and what it just did.
+
+    The twin of `issue_watch._beat`, and there for the same reason: `just
+    status` and the trace UI must be able to tell a watcher that is not running
+    from one with nothing to answer. Tolerant of a stamped factory older than
+    the heartbeat — an out-of-date repo loses the badge, not the watcher.
+    """
+    try:
+        from adw_modules.tracer import watcher_beat
+        from adw_modules.utils import anchor
+    except ImportError:
+        return
+    watcher_beat(anchor(main_root, cfg.observability.db), "prs", status,
+                 pid=os.getpid(), project=project, interval_s=interval, note=note)
 
 
 def _live(cfg, main_root) -> dict:
@@ -177,11 +200,21 @@ def _reap(cfg, main_root, project: str) -> int:
 
     For each such session whose pull request is no longer open, in this order:
 
-      1. KILL A RUN THAT IS STILL WORKING IT. SIGTERM, which `session.py` turns
-         into a clean finish: the session row closes, the process rows close,
-         and the worktree is deliberately left standing. Letting it continue
-         would be worse than pointless — `keep_published` would push onto a
-         branch that has already landed, and may already be deleted.
+      1. STOP A REVIEW RUN THAT IS STILL WORKING IT, and only a review run.
+         SIGTERM, which `session.py` turns into a clean finish: the session row
+         closes, the process rows close, and the worktree is deliberately left
+         standing. Letting it continue would be worse than pointless — it is
+         answering threads on a pull request that is already decided, and
+         `keep_published` would push onto a branch that has landed and may
+         already be deleted.
+
+         ANY OTHER WORKFLOW IS LEFT RUNNING. An `adw_simple_sdlc` that opened
+         the pull request itself is typically still reviewing and documenting
+         when someone merges it, and its remaining phases are work the engineer
+         asked for — killing that is not cleanup, it is throwing away a run
+         mid-flight because someone else was quick with the merge button. It
+         gets one line saying its pushes now land on a merged branch, and
+         `just kill <adw_id>` if that is not wanted.
       2. RELEASE THE WORKTREE, by the same conservative rule `just
          worktrees-prune` uses: only an ENDED session's tree, only when it is
          CLEAN. Uncommitted work stays put even here; a merged pull request is
@@ -197,11 +230,12 @@ def _reap(cfg, main_root, project: str) -> int:
     """
     from adw_modules import pull_requests, worktree
     from adw_modules.data_types import PullRequestRef
-    from adw_modules.tracer import session_pr_urls
+    from adw_modules.tracer import session_adw_names, session_pr_urls
     from adw_modules.utils import anchor
 
     db = str(anchor(main_root, cfg.observability.db))
     live = _live(cfg, main_root)
+    names = session_adw_names(db)
     trees = {info.adw_id for info in worktree.inventory(main_root, cfg.worktree, db)}
     candidates = sorted(trees | set(live))
     if not candidates:
@@ -225,13 +259,31 @@ def _reap(cfg, main_root, project: str) -> int:
 
         print(f"  ~ {adw_id}: #{number} is {context.state.lower()}")
         if adw_id in live:
-            _terminate(adw_id, live[adw_id])
+            if _is_review_run(names.get(adw_id, "")):
+                _terminate(adw_id, live[adw_id])
+            else:
+                print(f"    {names.get(adw_id) or 'a run'} is still working it "
+                      f"(pid {live[adw_id]}) — left running; its commits would now "
+                      f"push onto a landed branch. `just kill {adw_id}` to stop it")
         _release(cfg, main_root, adw_id, db)
         _mark(cfg, main_root, project, number,
               remove=cfg.pull_requests.states.failed)
         _drop_lock(cfg, main_root, project, number)
         reaped += 1
     return reaped
+
+
+def _is_review_run(adw_name: str) -> bool:
+    """Whether that session is a run of the review ADW — the kind this file starts.
+
+    Matched on the script's stem rather than an exact string: `adw_name` is the
+    chain a session ran, and a session that answered review feedback twice is
+    recorded as "adw_pr_review + adw_pr_review". An empty name (a db older than
+    the column, or a session that never finished a phase) is NOT a review run —
+    the conservative reading, because the mistake this guards against is
+    stopping something that should have kept going.
+    """
+    return Path(ADW).stem in (adw_name or "")
 
 
 def _pr_number(pr_url: str) -> int:
@@ -295,7 +347,7 @@ def _drop_lock(cfg, main_root, project: str, number: int) -> None:
 
 # ── the poll ─────────────────────────────────────────────────────────────────
 
-def once(config_path: str, only: int = 0) -> int:
+def once(config_path: str, only: int = 0, interval: int = 0) -> int:
     """One pass: reap what merged, then answer what is outstanding.
 
     Returns 0 normally; 3 means "the pull request this watcher was pinned to is
@@ -304,12 +356,14 @@ def once(config_path: str, only: int = 0) -> int:
     cfg, main_root, project = _load(config_path)
     if not cfg.pull_requests.enabled:
         print("pull_requests.enabled is false — nothing to watch")
+        _beat(cfg, main_root, "disabled", note="pull_requests.enabled is false")
         return 0
     if not project:
         print("pull_requests.project is empty and no origin remote could be read.\n"
               "Set pull_requests.project in the config: a watcher that cannot name "
               "its project polls nothing, and polling nothing is indistinguishable "
               "from having nothing to do.", file=sys.stderr)
+        _beat(cfg, main_root, "error", note="pull_requests.project is unresolved")
         return 2
 
     if cfg.pull_requests.reap_merged:
@@ -327,6 +381,8 @@ def once(config_path: str, only: int = 0) -> int:
     failed_label = cfg.pull_requests.states.failed
     print(f"{project}: {len(entries)} open pull request(s) on "
           f"{cfg.worktree.branch_prefix}*")
+    _beat(cfg, main_root, "polling", project=project, interval=interval,
+          note=f"{len(entries)} open")
     launched = 0
     for entry in entries:
         number = entry.get("number")
@@ -347,6 +403,11 @@ def once(config_path: str, only: int = 0) -> int:
         with _claim(cfg, main_root, project, number) as mine:
             if not mine:
                 continue
+            # A run blocks this watcher for as long as it takes, so the row
+            # has to say so: an idling watcher is recognised by a fresh
+            # `last_poll_at`, and without this a busy one would look stale.
+            _beat(cfg, main_root, "working", project=project, interval=interval,
+                  note=f"#{number} {Path(ADW).stem}")
             code = _launch(config_path, number, main_root)
             launched += 1
             # The run's own report phase said WHAT happened in the threads; this
@@ -355,6 +416,8 @@ def once(config_path: str, only: int = 0) -> int:
             if code != 0:
                 _mark(cfg, main_root, project, number, add=failed_label)
     print(f"launched {launched} run(s)")
+    _beat(cfg, main_root, "polling", project=project, interval=interval,
+          note=f"{len(entries)} open, launched {launched}")
     return 0
 
 
@@ -384,16 +447,44 @@ def _has_work(cfg, main_root, project: str, number: int) -> bool:
 def loop(config_path: str, interval: int, only: int = 0) -> int:
     target = f" on #{only}" if only else ""
     print(f"polling every {interval}s{target} — ctrl-c to stop")
-    while True:
-        try:
-            code = once(config_path, only)
-            if code == 3:               # the pinned pull request is finished
-                return 0
-        except KeyboardInterrupt:
-            raise
-        except Exception as error:                  # an outage is not a crash
-            print(f"! poll failed: {error}")
-        time.sleep(interval)
+    home = _home(config_path)
+    try:
+        while True:
+            try:
+                code = once(config_path, only, interval)
+                if code == 3:           # the pinned pull request is finished
+                    return 0
+            except KeyboardInterrupt:
+                raise
+            except Exception as error:              # an outage is not a crash
+                print(f"! poll failed: {error}")
+                _beat_error(home, error)
+            time.sleep(interval)
+    finally:
+        # The row outlives the process, so leaving it on `polling` would make a
+        # watcher that was stopped on purpose look like one that died. Written
+        # from the config resolved at STARTUP, never re-read here: this runs
+        # while the process is being torn down, and a git subprocess plus a
+        # config parse is long enough for the shutdown to win the race.
+        if home:
+            _beat(*home, "stopped", note="watcher exited")
+
+
+def _home(config_path: str) -> tuple | None:
+    """(cfg, main_root) resolved once, for beats written on the way out."""
+    try:
+        cfg, main_root, _ = _load(config_path)
+        return cfg, main_root
+    except Exception:
+        return None
+
+
+def _beat_error(home: tuple | None, error: Exception) -> None:
+    """Record a failed poll. A poll that failed is exactly the state the badge
+    is for — the forge unreachable, the token expired — so it must survive
+    whatever went wrong, including the config having become unreadable."""
+    if home:
+        _beat(*home, "error", note=str(error)[:200])
 
 
 def status(config_path: str) -> int:
@@ -414,6 +505,26 @@ def status(config_path: str) -> int:
     return 0
 
 
+def _exit_on_sigterm() -> None:
+    """Turn the FIRST SIGTERM into an ordinary exit, and ignore the rest.
+
+    Without this, `just up` stopping this watcher kills it where it stands and
+    the heartbeat row keeps whatever the last poll wrote — so a watcher stopped
+    on purpose is indistinguishable from one that died, which is the single
+    distinction the row exists to draw. 143 is the conventional code for it.
+
+    Ignoring the second one is not defensive coding, it is the actual bug: up.py
+    signals the whole process group, so `uv` gets SIGTERM alongside this process
+    and forwards its own to us. The second delivery lands while the first is
+    still unwinding, and raises SystemExit again from inside the `finally` that
+    was writing the goodbye beat — which is exactly how that beat went missing.
+    """
+    def leave(*_) -> None:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        sys.exit(143)
+    signal.signal(signal.SIGTERM, leave)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -425,6 +536,7 @@ def main() -> int:
                         help="watch one pull request; loop exits when it is merged or closed")
     args = parser.parse_args()
 
+    _exit_on_sigterm()
     if args.action == "once":
         # 3 means "the pinned pull request is finished" — a signal for `loop`,
         # not a failure for a single pass.

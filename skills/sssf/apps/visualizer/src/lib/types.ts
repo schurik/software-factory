@@ -20,6 +20,8 @@ export type {
   PrStatus,
   PromptsResponse,
   HealthResponse,
+  WatcherState,
+  WatchersResponse,
   SessionStatus,
   PhaseStatus,
   PhaseKind,

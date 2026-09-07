@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useRoute, hrefFor, phaseCrumb } from './lib/router'
 import SessionsList from './components/SessionsList.vue'
+import WatcherChips from './components/WatcherChips.vue'
 import SessionTrace from './components/SessionTrace.vue'
 
 const route = useRoute()
@@ -31,7 +32,10 @@ const route = useRoute()
           <span class="current">{{ phaseCrumb ?? route.phaseId }}</span>
         </template>
       </nav>
-      <span class="live-hint"><span class="live-dot" /> live</span>
+      <span class="topbar-right">
+        <WatcherChips />
+        <span class="live-hint"><span class="live-dot" /> live</span>
+      </span>
     </header>
     <main>
       <SessionsList v-if="!route.adwId" />
@@ -109,6 +113,13 @@ const route = useRoute()
 
 .crumbs .current {
   color: var(--text);
+}
+
+.topbar-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
 }
 
 .live-hint {

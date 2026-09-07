@@ -143,6 +143,16 @@ processes (                        -- adw_id → pid, so a stuck run can be stop
   started_at    TEXT, ended_at TEXT -- ended_at NULL = believed alive
 );
 
+watchers (                         -- is anything going to START a run right now
+  kind          TEXT PRIMARY KEY,   -- 'issues' | 'prs' — one row per KIND, not per process
+  status        TEXT,               -- 'polling' | 'working' | 'stopped' | 'disabled' | 'error'
+  pid           INTEGER,            -- probe this; the row is a belief, like a running session
+  project       TEXT,
+  interval_s    INTEGER,
+  note          TEXT,               -- one line on what the last poll saw
+  started_at    TEXT, last_poll_at TEXT
+);
+
 agent_sessions (                   -- the queryable mirror of agent_map.json
   adw_id        TEXT REFERENCES sessions,
   agent         TEXT,
@@ -156,6 +166,8 @@ agent_sessions (                   -- the queryable mirror of agent_map.json
 ```
 
 **A hung agent emits nothing**, which is exactly when you need its pid: no events, no tokens, no output to read. `processes` is the only table that can answer "what is this run running, and how do I stop it" — `just procs <adw_id>` lists what is live, `just kill <adw_id>` stops children before the parent, and both verify the recorded `command` still matches the pid before signalling it. A killed run finalizes its own trace: SIGTERM and SIGINT are turned into `SystemExit` in `session.ensure`, so the session lands on `fail` with its process rows closed instead of reading `running` forever.
+
+**The one table that is not about a run.** Every other row here answers "what happened"; `watchers` answers "is anything going to make something happen". Both watchers upsert their row on every poll (`tracer.watcher_beat`), mark it `working` while a run they launched is blocking them, and `stopped` on the way out — so a watcher stopped on purpose is distinguishable from one that died. It exists because a watcher that is not running and a watcher with nothing to do produce exactly the same output: nothing. `just status` and the trace UI's top-bar badges (`GET /api/watchers`) read it, and both probe the pid, because a `SIGKILL`ed watcher leaves the row saying `polling` forever — the same "belief, not fact" rule as `sessions.status`. A kind with **no row** has never been started in this repo, which is not the same as `stopped`, and is shown differently.
 
 **Derived, never stored:** phase durations (`ended_at − started_at`), session phase-progress (query `phases` by `adw_id`), lane layout (`kind` + `owner`).
 

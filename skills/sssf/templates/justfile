@@ -12,18 +12,33 @@ set positional-arguments
 # swaps the whole roster for one run.
 config := env_var_or_default("SSSF_CONFIG", "adws/adw_sssf_config/sssf.config.yaml")
 db     := "adws/adw_data/sssf.db"
-# Where the sssf skill itself lives — the operational scripts (issue_watch,
+# Where the sssf skill itself lives — the operational scripts (up, issue_watch,
 # pr_watch, kill_run, worktrees) and the trace UI are read from there, not from
 # this repo. Every agent keeps its skills somewhere else (.claude/skills,
 # ~/.pi/agent/skills, ~/.codex/skills, ~/.config/opencode/skills, ~/.agents/skills),
-# so there is no default worth guessing: install.py prints the path it ran from
-# and .env is where it goes. Resolved in the recipe shell, not at parse time, so
-# cron sees exactly what an interactive run sees.
-skill  := '"${SSSF_SKILL:?not set - put the path install.py printed into .env}"'
+# so there is no default worth guessing: install.py writes the path it ran from
+# into .env, which is the one moment anything knows it. Resolved in the recipe
+# shell, not at parse time, so cron sees exactly what an interactive run sees.
+skill  := '"${SSSF_SKILL:?not set - re-run install.py, which writes it into .env}"'
 
 # list every recipe
 default:
     @just --list
+
+# ── run the factory ─────────────────────────────────────────────────────────
+# The factory has three long-running parts — the trace UI, the issue watcher and
+# the review watcher — and forgetting one is silent: a watcher that is not
+# running looks exactly like a watcher with nothing to do. So they start
+# together, in one foreground process that owns all of them, and ctrl-c stops
+# the lot. The individual recipes below still exist for cron and for debugging.
+
+# start everything: trace UI + both watchers, ctrl-c stops it all
+up *ARGS:
+    uv run {{skill}}/scripts/up.py --config {{config}} "$@"
+
+# is anything actually running? watchers, their last poll, runs in flight
+status:
+    @uv run {{skill}}/scripts/up.py status --config {{config}}
 
 # ── first run ───────────────────────────────────────────────────────────────
 
@@ -89,7 +104,7 @@ issues:
 issues-status:
     @uv run {{skill}}/scripts/issue_watch.py status --config {{config}}
 
-# keep polling — this is the cron form: just issues-watch
+# keep polling — the cron form; `just up` is the one for a terminal
 issues-watch *ARGS:
     uv run {{skill}}/scripts/issue_watch.py loop --config {{config}} "$@"
 
@@ -110,6 +125,9 @@ prs:
 # what the review watcher would do, and whether it can: just prs-status
 prs-status:
     @uv run {{skill}}/scripts/pr_watch.py status --config {{config}}
+
+# An unpinned watcher never exits on a merge — `just up` runs it that way, and
+# only this pinned form is finished when the pull request it follows is.
 
 # keep polling — the cron form; --pr <n> watches one and exits when it merges
 prs-watch *ARGS:
@@ -165,9 +183,12 @@ worktree-rm ADW_ID *ARGS:
 
 # ── observability UI ────────────────────────────────────────────────────────
 
-# Needs bun. The db path is passed explicitly because the server runs from the
-# app dir and would otherwise look for a trace db sitting next to itself.
+# Needs bun. This is `just up --only obs`, not a second implementation. The UI
+# is TWO processes — the json api and vite — and an earlier version of this
+# recipe backgrounded the api in a subshell, so ctrl-c killed vite and left the
+# api holding :4600; the next `just obs` then died on EADDRINUSE. up.py owns
+# both, passes the db path the config names, and takes both down on ctrl-c.
 
-# boot the trace UI, http://localhost:4601 (api on :4600)
+# boot the trace UI alone, http://localhost:4601 (api on :4600)
 obs:
-    cd {{skill}}/apps/visualizer && bun install && (SSSF_DB={{justfile_directory()}}/{{db}} bun run server/index.ts &) && bunx vite
+    uv run {{skill}}/scripts/up.py --config {{config}} --only obs

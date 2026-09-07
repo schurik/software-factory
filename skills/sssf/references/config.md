@@ -181,7 +181,7 @@ That excludes a second watcher **on the same machine**, which is the deployment 
 4. **`writes:` and `protected_files`** are unchanged but now load-bearing: an agent editing the machinery that judges it is rolled back by `permissions.py`.
 5. **`force_pr`** — the base branch is not reachable from this path.
 
-The trigger itself sits *above* the factory: `<skill>/scripts/issue_watch.py` (`just issues`, `issues-status`, `issues-watch`), run by cron or by hand.
+The trigger itself sits *above* the factory: `<skill>/scripts/issue_watch.py` (`just issues`, `issues-status`, `issues-watch`), run by cron, by hand, or — at a terminal — by `just up`, which runs both watchers and the trace UI as one supervised foreground process. See **[Running the watchers](#running-the-watchers)**.
 
 ### `pull_requests`
 
@@ -210,7 +210,11 @@ This is the other end of a branch's life. `adw_pr_review.py` reads `sssf/<adw_id
 
 **Merged is the end of the session.** A merged pull request vanishes from the watcher's queue on its own, but three things would otherwise hang. `pr_watch`'s reap pass — over the worktrees on disk plus the sessions that believe they are running, never over the repository's history, so the work shrinks as the factory tidies up — handles each:
 
-1. **A run still working that branch is stopped**, with `SIGTERM`, which `session.py` turns into a clean finish. Letting it continue is not merely pointless: `keep_published` would push onto a branch that has already landed and may already be deleted.
+1. **A REVIEW run still working that branch is stopped**, with `SIGTERM`, which `session.py` turns into a clean finish. Letting it continue is not merely pointless: it is answering threads on a pull request that is already decided, and `keep_published` would push onto a branch that has landed and may already be deleted.
+
+   **Only a review run** — the kind this watcher starts. Any other workflow attached to that pull request is left running and reported instead: an `adw_simple_sdlc` that opened the pull request itself is typically still reviewing and documenting when someone merges it, and its remaining phases are work the engineer asked for. Stopping that is not cleanup, it is discarding a run mid-flight because someone was quick with the merge button. It gets one line saying its commits would now push onto a landed branch, and `just kill <adw_id>` if that is not wanted. `session_adw_names()` is what tells the two apart.
+
+   **The WATCHER is never stopped by a merge.** `just prs` and the loop `just up` runs keep polling; only the pinned `pr_watch.py loop --pr <n>` exits, because a watcher asked to follow one pull request is finished when that pull request is.
 2. **Its worktree is released**, by the same conservative rule `just worktrees-prune` uses — ended session, clean tree. Uncommitted work stays put even here. **The branch is never deleted**, locally or on the remote; that belongs to whoever merged.
 3. **The `states.failed` label and the lock file are dropped.**
 
@@ -225,6 +229,24 @@ Idempotent throughout: a second pass finds no process, no worktree and no label.
 5. **The base branch is unreachable** — this chain has no integration phase at all, and `integration.integrate()` additionally downgrades a `merge` on a `pr_review`-triggered session, so a later `just integrate` cannot land it either.
 
 The trigger sits *above* the factory: `<skill>/scripts/pr_watch.py` (`just prs`, `prs-status`, `prs-watch`). `prs-watch --pr <n>` watches a single pull request and exits when it merges or closes.
+
+## Running the watchers
+
+Three long-running things make up a working factory — the trace UI, the issue watcher, the review watcher — and the failure they invite is not a crash. It is **silence**: a labelled issue and no watcher polling looks exactly like a labelled issue with a busy factory, from the terminal and from the trace UI alike. Two mechanisms answer that.
+
+**`just up`** starts all three in one foreground process. It owns them as a process group, prefixes their output by service, restarts what dies (up to three times in a minute, then it says so and leaves the rest running), and takes the whole tree down on ctrl-c — including the API server that an older `just obs` used to orphan on `:4600`. It skips a watcher whose `enabled` is `false` and says which, starts without the UI when there is no `bun`, and warns before anything spawns when the forge CLI or an agent CLI is unreachable. `--only obs,issues,prs` narrows it; `just obs` is now `just up --only obs`.
+
+It is **not a daemon** — no pidfile, no detach, no `stop`. The terminal is the handle. For unattended deployment the cron form is unchanged: `just issues`, `just prs`, one poll per invocation.
+
+**The heartbeat** is what makes the state readable afterwards. Both watchers write a row per poll into a `watchers` table in the trace db (`kind`, `status`, `pid`, `project`, `note`, `last_poll_at`), and mark it `stopped` on the way out, so a watcher stopped on purpose is distinguishable from one that died. Readers probe the recorded pid, because the row says only what the watcher last wrote — a `SIGKILL`ed watcher leaves it saying `polling` forever.
+
+| Where | What it shows |
+|---|---|
+| `just status` | Both watchers with their last poll and note, the runs actually in flight, whether any worktrees are outstanding |
+| The trace UI's top bar | The same two as badges, polled every 10s — green polling, blue mid-run, red down-or-erroring, dashed grey never-started |
+| `GET /api/watchers` | The rows plus a liveness probe per pid |
+
+A kind with no row has **never** been started in this repo, which is a different thing from `stopped` and is rendered differently on purpose. A db written before this table existed reads as exactly that, rather than as an error.
 
 ### `agents[]`
 

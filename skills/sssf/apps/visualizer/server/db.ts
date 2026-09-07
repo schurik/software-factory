@@ -26,7 +26,20 @@ import type {
   SessionDetail,
   SessionSummary,
   SessionUsage,
+  WatcherState,
 } from "../shared/types.ts";
+
+/** Whether that pid still exists on this machine. Signal 0 delivers nothing. */
+function pidAlive(pid: number | null): boolean {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means it exists and belongs to someone else — alive, either way.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
 
 const DEFAULT_DB_RELATIVE = "adws/adw_data/sssf.db";
 const MAX_LIMIT = 1000;
@@ -121,6 +134,71 @@ export class SssfDb {
 
   private optionalColumn(table: string, column: string): string {
     return this.hasColumn(table, column) ? column : `NULL AS ${column}`;
+  }
+
+  /**
+   * Whether a table the tracer added later exists yet.
+   *
+   * Same shape and same reason as hasColumn: a db written before `watchers`
+   * existed must read as "no watcher has ever run here", not as a 500. It
+   * re-probes while missing and latches once seen, because the first watcher
+   * to start creates the table under a server that is already serving.
+   */
+  private hasTable(table: string): boolean {
+    const key = `table:${table}`;
+    if (!this.columnCache.get(key)) {
+      const found = this.db
+        .query<{ name: string }, [string]>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        )
+        .all(table);
+      this.columnCache.set(key, found.length > 0);
+    }
+    return this.columnCache.get(key) ?? false;
+  }
+
+  /**
+   * The watcher heartbeats, one row per kind whether or not the db has one.
+   *
+   * `alive` is decided here rather than by the reader: the row is what the
+   * watcher last wrote, and a SIGKILLed watcher leaves it saying `polling`
+   * forever. Signal 0 is the standard "does this process exist" probe and
+   * delivers nothing — the same check `issue_watch` makes about runs. It is
+   * only meaningful because the api and the watchers share a machine, which is
+   * the deployment this whole app assumes (it reads a local sqlite file).
+   */
+  watchers(): WatcherState[] {
+    const rows = this.hasTable("watchers")
+      ? this.db
+          .query<WatcherState, []>(
+            `SELECT kind, status, pid, project, interval_s, note,
+                    started_at, last_poll_at FROM watchers`,
+          )
+          .all()
+      : [];
+    const byKind = new Map(rows.map((row) => [row.kind, row]));
+    return (["issues", "prs"] as const).map((kind) => {
+      const row = byKind.get(kind);
+      if (!row) {
+        return {
+          kind, status: "unknown", pid: null, project: null, interval_s: null,
+          note: null, started_at: null, last_poll_at: null, alive: false,
+        };
+      }
+      // Listed field by field rather than spread: the same shape as the
+      // branch above, and one place to look when the row grows a column.
+      return {
+        kind,
+        status: row.status,
+        pid: row.pid,
+        project: row.project,
+        interval_s: row.interval_s,
+        note: row.note,
+        started_at: row.started_at,
+        last_poll_at: row.last_poll_at,
+        alive: pidAlive(row.pid),
+      };
+    });
   }
 
   close(): void {

@@ -66,6 +66,7 @@ Every run executes in its own git worktree, `<worktrees_dir>/<adw_id>`, on its o
 - **An open pull request has a way back in.** Review comments are not the end of the line: `just pr-review <n>` reads `sssf/<adw_id>` off the pull request's head ref, joins THAT session, and pushes its answer onto the branch already under review — the pull request is updated, never replaced. Unresolved threads are the queue, so nothing is worked twice. `just prs` polls for it.
 - **The merge is what ends the session, not the first run.** `just prs` also reaps: a review run still working a branch that has already landed is stopped, and its worktree released. The branch is never deleted — that belongs to whoever merged.
 - **The trace does not move.** `data_dir` and the db are anchored to the main checkout, so one db holds every concurrent run and survives a pruned worktree.
+- **Nothing polls unless something is polling.** The trace UI and the two watchers are `just up` — one foreground process that owns all three and stops them together. `just status` says whether they are actually up and when each last polled, and the UI carries the same two badges; a watcher nobody started is the one failure this system produces silently, so never answer "it should pick that up" without one of those two. [references/config.md](references/config.md#running-the-watchers).
 
 It is isolation, not a sandbox — an agent with `bash` can leave the worktree, and `permissions.py` is still the boundary. Details in [references/config.md](references/config.md#worktree-per-run).
 
@@ -77,6 +78,7 @@ It is isolation, not a sandbox — an agent with `bash` can leave the worktree, 
 | create a new ADW / workflow | [cookbooks/create_adw.md](cookbooks/create_adw.md) |
 | land a run's branch, clean up worktrees | [references/config.md](references/config.md#worktreeintegration) |
 | start runs from tracked issues, run the watcher | [references/config.md](references/config.md#issues) |
+| start everything / "is the watcher even running?" | [references/config.md](references/config.md#running-the-watchers) |
 | answer review comments on a run's pull request | [references/config.md](references/config.md#pull_requests) |
 | modify an existing ADW chain | [cookbooks/update_adw.md](cookbooks/update_adw.md) |
 | create the config / agent roster | [cookbooks/create_config.md](cookbooks/create_config.md) |
