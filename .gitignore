@@ -147,6 +147,11 @@ temp/
 .netlify/
 *.tsbuildinfo
 
+# Subagent-driven-development scratch: one directory per plan, holding its
+# ledger, task briefs, implementer reports and review packages. Recovery state
+# for a run in flight, never a record of what shipped — that is the git history.
+.superpowers/
+
 # sssf runtime
 adws/adw_data/sessions/
 # Unanchored: a trace db is never committed, wherever it turns up. Two empty

@@ -104,7 +104,9 @@ def config():
     ("", ""),
     ("@{weird}", "weird"),
     ("trailing dot.", "trailing-dot"),
-    ("release.lock", "release"),
+    # A ref may not END in ".lock" — but every "." here has already become a
+    # hyphen, so the illegal shape cannot survive to be stripped.
+    ("release.lock", "release-lock"),
     ("a..b", "a-b"),
 ])
 def test_slugify_shapes(text, expected):
@@ -221,10 +223,13 @@ def slugify(text: str, limit: int = 40) -> str:
     slug = _NOT_ALLOWED.sub("-", line.lower()).strip("-")
     if len(slug) <= limit:
         return slug
-    cut = slug[:limit]
     # Truncate on a word boundary so the last word is whole or absent — never a
-    # half word, which reads like a typo rather than an abbreviation.
-    return cut.rsplit("-", 1)[0].strip("-") if "-" in cut else cut.strip("-")
+    # half word, which reads like a typo rather than an abbreviation. A cut that
+    # lands exactly ON a boundary is already whole and keeps its last word.
+    cut = slug[:limit]
+    if slug[limit] != "-" and "-" in cut:
+        cut = cut.rsplit("-", 1)[0]
+    return cut.strip("-")
 
 
 def issue_slug(number: int, title: str, limit: int = 40) -> str:
@@ -696,7 +701,11 @@ from adw_modules.data_types import LinkedBranchRequest
 @pytest.fixture
 def forge(monkeypatch):
     """Record `gh` calls and `git fetch`es without running either."""
-    state = {"gh": _completed(), "fetch": _completed(), "exists": False,
+    # `local_branches` is what `branch_exists` answers from — it has to
+    # distinguish the BASE branch (which exists, so `--base` is passed) from the
+    # RUN's branch (which usually does not, so the fetch happens).
+    state = {"gh": _completed(), "fetch": _completed(),
+             "local_branches": {"main"},
              "head": "0" * 40, "calls": [], "fetched": []}
 
     def fake_run(argv, cwd):
@@ -710,7 +719,7 @@ def forge(monkeypatch):
     monkeypatch.setattr(issues, "_run", fake_run)
     monkeypatch.setattr(issues.git_helper, "fetch_branch", fake_fetch)
     monkeypatch.setattr(issues.git_helper, "branch_exists",
-                        lambda cwd, name: state["exists"])
+                        lambda cwd, name: name in state["local_branches"])
     monkeypatch.setattr(issues.git_helper, "rev", lambda cwd, ref="HEAD": state["head"])
     return state
 
@@ -746,7 +755,7 @@ def test_develop_omits_base_when_it_is_not_a_branch_name(tmp_path, forge):
 def test_develop_skips_the_fetch_when_the_branch_is_already_local(tmp_path, forge):
     """A rerun: gh reuses the linked branch, and a fetch would be rejected as a
     non-fast-forward the moment the earlier run committed anything."""
-    forge["exists"] = True
+    forge["local_branches"].add("sssf/a1b2c3d4-42-fix-rounding")
     result = issues.develop(tmp_path, IssuesConfig(project="acme/widgets"), _request())
     assert result.ok is True
     assert forge["fetched"] == []
@@ -973,14 +982,21 @@ def cfg():
 @pytest.fixture
 def forge(monkeypatch):
     """No forge and no git: every outward call is stubbed and recorded."""
-    state = {"brief": IssueBrief(ok=True, number=42,
-                                 title="floorEuro rounds down on negative amounts"),
+    # The title is deliberately short enough that `issue_slug` does not truncate
+    # it: the locally computed name and the forge's answer are then the SAME
+    # string, so a test can tell "the forge's name won" from "nothing happened"
+    # only by what it asserts, not by accident of length.
+    state = {"brief": IssueBrief(ok=True, number=42, title="floorEuro rounds down"),
              "linked": LinkedBranch(ok=True, created=True, head="abc1234",
                                     branch="sssf/a1b2c3d4-42-flooreuro-rounds-down"),
              "recorded": "", "remote": True, "develop_calls": []}
 
     monkeypatch.setattr(branches.issues, "peek",
                         lambda tree, config, ref: state["brief"])
+    # `_base_ref_of` asks the checkout what it has checked out, and tmp_path is
+    # not a git repository — without this every linking test dies in git_helper.
+    monkeypatch.setattr(branches.git_helper, "current_branch",
+                        lambda main_root: "main")
 
     def fake_develop(tree, config, request):
         state["develop_calls"].append(request)
