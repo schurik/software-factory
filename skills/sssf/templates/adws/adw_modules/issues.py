@@ -34,8 +34,8 @@ import re
 import subprocess
 
 from . import git_helper
-from .data_types import (EventRecord, IssueContext, IssueOutput, IssueRef, IssueResult,
-                         IssuesConfig, IssueUpdate, PullRequestsConfig)
+from .data_types import (EventRecord, IssueBrief, IssueContext, IssueOutput, IssueRef,
+                         IssueResult, IssuesConfig, IssueUpdate, PullRequestsConfig)
 from .utils import operator_env
 
 BODY_FILENAME = "issue.md"
@@ -106,6 +106,40 @@ def _aim(argv: list[str], project: str, number: int | None = None) -> list[str]:
     if project:
         aimed += ["--repo", project]
     return aimed
+
+
+def peek(tree, config: IssuesConfig, ref: IssueRef) -> IssueBrief:
+    """Read an issue's title WITHOUT a run — the branch is named before phases.
+
+    `fetch()` cannot serve this: it writes the body into `run.context_handoff_dir`,
+    and at naming time there is no Run, no session directory and no trace row.
+    The overlap is one `gh issue view`, which is worth paying rather than
+    threading a pre-fetched payload through `session.ensure()` into a phase that
+    has not opened yet.
+
+    NEVER RAISES, unlike `fetch()`. A chain that cannot read its issue has
+    nothing to plan against and should die; a chain that cannot read its issue's
+    TITLE has only a duller branch name.
+    """
+    brief = IssueBrief(number=ref.number)
+    project = ref.project or resolve_project(config, tree)
+    argv = _aim([*config.fetch_command], project, ref.number)
+    argv += ["--json", "number,title,url,author"]
+    completed = _run(argv, tree)
+    if completed.returncode != 0:
+        return brief
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return brief
+    author = payload.get("author") or {}
+    return IssueBrief(
+        ok=True,
+        number=int(payload.get("number", ref.number)),
+        title=payload.get("title") or "",
+        url=payload.get("url") or "",
+        author=(author.get("login", "") if isinstance(author, dict) else str(author)),
+    )
 
 
 def fetch(run, config: IssuesConfig, ref: IssueRef) -> IssueContext:
