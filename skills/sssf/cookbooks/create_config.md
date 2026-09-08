@@ -42,7 +42,13 @@ observability:
 worktree:                          # a git worktree + branch per run
   enabled: true                    # false = run in the main checkout, v1 behaviour
   dir: .sssf-worktrees             # relative to the main checkout; gitignored
-  branch_prefix: "sssf/"           # the run's branch is <prefix><adw_id>
+  branch_prefix: "sssf/"           # the run's branch is <prefix><adw_id>[-<slug>]
+  # A branch named only for its run says nothing about what it was for. On, the
+  # run's issue title (or its prompt's first line) is slugged onto the end:
+  #   sssf/a1b2c3d4-42-floor-euro-rounds-down
+  # The adw_id stays FIRST so everything that reads a branch back — the review
+  # chain, `just worktrees` — still finds it. false restores <prefix><adw_id>.
+  branch_slug: true
   base_ref: ""                     # "" = whatever the main checkout has checked out
   keep_on_success: false           # a clean accepted run's tree is a redundant copy
   integration:                     # how that branch gets back — THIS IS A REPO DECISION
@@ -62,6 +68,14 @@ issues:                            # a labelled work item can start a run. OFF b
   trusted_authors: []              # [] = the human who applied the label is the authorization
   max_concurrent: 2
   force_pr: true                   # an issue-triggered run may not move the base branch
+  # The Development panel on an issue — the only thing that says "a run has
+  # this" BEFORE a pull request exists. GitHub creates linked branches and never
+  # links existing ones, so an issue-triggered run's branch is created HERE, by
+  # the forge, and the worktree is cut from it. Anything that stops that (no
+  # remote, no auth, a tracker that is not GitHub) leaves the run on a local
+  # branch of the same name and says so in the run's first line.
+  link_branch: true
+  develop_command: ["gh", "issue", "develop"]
 
 agents:
   - name: planner                  # ADW scripts name agents, never models

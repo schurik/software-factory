@@ -124,6 +124,7 @@ Every run executes in its own git worktree, on its own branch, cut from a base r
 | `enabled` | bool | Default `true`. `false` runs in the main checkout exactly as v1 did. |
 | `dir` | path | Where worktrees live, relative to the main checkout. Default `.sssf-worktrees` — gitignored by `install.py`. |
 | `branch_prefix` | string | The run's branch is `<prefix><adw_id>`. Default `sssf/`. |
+| `branch_slug` | bool | Default `true`. Appends a slug of the run's issue title (`sssf/a1b2c3d4-42-floor-euro-rounds-down`) or of its prompt's first line (`sssf/7b3c9a01-add-tenant-export-to-csv`). The adw_id stays the first segment, so `branches.session_of` still recovers it and pre-existing branches still resolve. `false` restores `<prefix><adw_id>`. |
 | `base_ref` | ref | What to cut from. Default `""` = whatever the main checkout has checked out when the run starts. Set it to pin every run to one branch. |
 | `keep_on_success` | bool | Default `false`: an accepted run's worktree is removed **if it is clean**, and its branch is always retained. `true` keeps every worktree. |
 
@@ -168,6 +169,8 @@ Where work items come from, and which chain each label asks for. **Off by defaul
 | `trusted_authors` | list[string] | `[]` accepts every issue author, because the human who applied the routing label is then the only authorization. Narrow it where anyone can label. |
 | `max_concurrent` | int | Runs in flight, counted from `sessions.status='running'`. Bounds parallelism, **not spend**. |
 | `force_pr` | bool | Default `true`. An issue-triggered run's `merge` is downgraded to `pr` in `integration.integrate()`. `mode: none` still wins. |
+| `link_branch` | bool | Default `true`. An issue-triggered run's branch is created by `gh issue develop`, so it appears in the issue's **Development** panel while the run is still going — not only once a pull request exists. GitHub's API creates linked branches and cannot link an existing one, which is why the forge makes the branch and the worktree is cut from it. Any failure (no remote, no auth, a token without the `createLinkedBranch` permission, a tracker that is not GitHub) leaves the run on an ordinary local branch and notes why. |
+| `develop_command` | list[string] | The forge CLI for the above, aimed with `--repo <project>` like every other command here. Default `["gh", "issue", "develop"]`. |
 
 **The flip is the claim; a file lock is the exclusion.** Moving an issue off `queued` records the claim where humans already look, but it does not *win* anything: the forge has no conditional label change, and `gh issue edit --remove-label queued` succeeds whether or not the issue still carries it. So the watcher takes a `flock` on `<data_dir>/issue-locks/<project>-<n>.lock` before claiming and holds it for the whole run.
 
@@ -180,6 +183,8 @@ That excludes a second watcher **on the same machine**, which is the deployment 
 3. **The body is an artifact, not a field** — it reaches the consuming agent as `artifacts[0]` framed as a user's description of a problem, never as instructions. It is also absent from the persisted envelope. Which agent that is, is the ADW's choice: a scout, a planner, or something that enriches the issue first.
 4. **`writes:` and `protected_files`** are unchanged but now load-bearing: an agent editing the machinery that judges it is rolled back by `permissions.py`.
 5. **`force_pr`** — the base branch is not reachable from this path.
+
+**The two links are not the same link.** `Closes #<n>` in a pull request body (see `pr_body_template`) ties the *pull request* to the issue and closes it on merge; it says nothing until the pull request exists. `link_branch` ties the *branch* to the issue at the moment the run starts. A repository wants both, and gets both by default.
 
 The trigger itself sits *above* the factory: `<skill>/scripts/issue_watch.py` (`just issues`, `issues-status`, `issues-watch`), run by cron, by hand, or — at a terminal — by `just up`, which runs both watchers and the trace UI as one supervised foreground process. See **[Running the watchers](#running-the-watchers)**.
 

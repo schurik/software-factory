@@ -20,7 +20,13 @@ observability:
 worktree:
   enabled: true
   dir: .sssf-worktrees             # relative to the main checkout; gitignored
-  branch_prefix: "sssf/"           # the run's branch is <prefix><adw_id>
+  branch_prefix: "sssf/"           # the run's branch is <prefix><adw_id>[-<slug>]
+  # A branch named only for its run says nothing about what it was for. On, the
+  # run's issue title (or its prompt's first line) is slugged onto the end:
+  #   sssf/a1b2c3d4-42-floor-euro-rounds-down
+  # The adw_id stays FIRST so everything that reads a branch back — the review
+  # chain, `just worktrees` — still finds it. false restores <prefix><adw_id>.
+  branch_slug: true
   base_ref: ""                     # "" = whatever the main checkout has checked out
   # A clean worktree is a redundant copy of a branch that is kept, so an
   # accepted run drops it. A failed or killed run keeps its worktree — that is
@@ -71,6 +77,14 @@ issues:
   list_command:    ["gh", "issue", "list"]
   comment_command: ["gh", "issue", "comment"]
   state_command:   ["gh", "issue", "edit"]
+  # The Development panel on an issue — the only thing that says "a run has
+  # this" BEFORE a pull request exists. GitHub creates linked branches and never
+  # links existing ones, so an issue-triggered run's branch is created HERE, by
+  # the forge, and the worktree is cut from it. Anything that stops that (no
+  # remote, no auth, a tracker that is not GitHub) leaves the run on a local
+  # branch of the same name and says so in the run's first line.
+  link_branch: true
+  develop_command: ["gh", "issue", "develop"]
   # label -> ADW. THE LABEL IS THE AUTHORIZATION: a human applied it, and the
   # watcher never looks at an issue that does not carry one. An empty route map
   # means nothing ever launches, which is the safe default.
