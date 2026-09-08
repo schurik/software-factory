@@ -133,10 +133,23 @@ def peek(tree, config: IssuesConfig, ref: IssueRef) -> IssueBrief:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError:
         return brief
+    # Valid JSON is not necessarily an object: `gh` could print `null`, a bare
+    # number, or an array under some failure mode. `.get` on any of those
+    # raises, and this function does not get to raise over a branch name.
+    if not isinstance(payload, dict):
+        return brief
     author = payload.get("author") or {}
+    try:
+        number = int(payload.get("number", ref.number))
+    except (TypeError, ValueError):
+        # A well-formed object with a non-numeric `number` is still not worth
+        # dying over. `brief` already carries `number=ref.number` — the one
+        # thing we always know — so returning it here is the same answer as
+        # every other malformed-payload path above, not a special case.
+        return brief
     return IssueBrief(
         ok=True,
-        number=int(payload.get("number", ref.number)),
+        number=number,
         title=payload.get("title") or "",
         url=payload.get("url") or "",
         author=(author.get("login", "") if isinstance(author, dict) else str(author)),

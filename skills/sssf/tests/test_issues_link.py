@@ -66,6 +66,31 @@ def test_peek_never_raises_on_junk_output(tmp_path, calls):
     assert brief.ok is False
 
 
+@pytest.mark.parametrize("stdout", ["null", "[]"])
+def test_peek_never_raises_when_json_is_not_an_object(tmp_path, calls, stdout):
+    recorded, replies = calls
+    replies["next"] = _completed(stdout=stdout)
+
+    brief = issues.peek(tmp_path, IssuesConfig(project="acme/widgets"),
+                        IssueRef(number=42))
+
+    assert brief.ok is False
+
+
+def test_peek_falls_back_to_the_asked_for_number_when_it_is_not_numeric(tmp_path, calls):
+    recorded, replies = calls
+    replies["next"] = _completed(stdout=json.dumps({
+        "number": "", "title": "some title",
+        "url": "https://github.com/acme/widgets/issues/42",
+        "author": {"login": "alex"}}))
+
+    brief = issues.peek(tmp_path, IssuesConfig(project="acme/widgets"),
+                        IssueRef(number=42))
+
+    assert brief.ok is False
+    assert brief.number == 42
+
+
 from adw_modules import git_helper
 from adw_modules.data_types import LinkedBranchRequest
 
