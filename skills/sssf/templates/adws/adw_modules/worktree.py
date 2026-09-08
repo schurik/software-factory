@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import git_helper, tracer
+from . import branches, git_helper, tracer
 from .data_types import Workspace, WorktreeConfig, WorktreeInfo, WorktreeRequest
 from .utils import anchor, ensure_dir, now_iso
 
@@ -81,8 +81,17 @@ def ensure(request: WorktreeRequest) -> Workspace:
 
     root = anchor(main, config.dir)
     path = root / request.adw_id
-    branch = f"{config.branch_prefix}{request.adw_id}"
     meta = _meta_path(root, request.adw_id)
+    # WHAT THIS RUN'S BRANCH IS CALLED, most specific answer first: what the
+    # caller named, else what an earlier process in this session recorded, else
+    # the default. The middle one is the load-bearing case — a successful run's
+    # worktree is pruned, so a later process enters with the directory gone and
+    # only an adw_id in hand. Recomputing the name there was harmless only while
+    # the name was a pure function of the adw_id; with a slug in it, the recompute
+    # would miss and `worktree_add` would cut a SECOND branch from the base,
+    # orphaning the run's commits on the first one.
+    branch = (request.branch or _read_meta(meta).get("branch")
+              or f"{config.branch_prefix}{request.adw_id}")
 
     if path.is_dir():
         return _reattach(path, main, branch, meta)
@@ -101,11 +110,11 @@ def ensure(request: WorktreeRequest) -> Workspace:
         git_helper.worktree_add(main, path, branch)
         recorded = _read_meta(meta)
         base_ref = recorded.get("base_ref") or _base_ref_of(main, config)
-        base_commit = recorded.get("base_commit") or git_helper.merge_base(
-            path, base_ref, "HEAD")
+        base_commit = (request.base_commit or recorded.get("base_commit")
+                       or git_helper.merge_base(path, base_ref, "HEAD"))
     else:
         base_ref = _base_ref_of(main, config)
-        base_commit = git_helper.rev(main, base_ref)
+        base_commit = request.base_commit or git_helper.rev(main, base_ref)
         git_helper.worktree_add(main, path, branch, base_ref)
 
     workspace = Workspace(main_root=main, repo_root=path.resolve(), enabled=True,
@@ -157,6 +166,16 @@ def _write_meta(meta: Path, adw_id: str, workspace: Workspace) -> None:
     }, indent=2))
 
 
+def recorded_branch(main_root, config: WorktreeConfig, adw_id: str) -> str:
+    """The branch an earlier process in this session recorded, or "".
+
+    The metadata file lives BESIDE the worktree, so it is still there after a
+    successful run's tree was pruned. `branches.plan()` reads it before it names
+    anything, which is what stops a second process from renaming the session.
+    """
+    return _read_meta(_meta_path(anchor(main_root, config.dir), adw_id)).get("branch", "")
+
+
 # ── lifecycle ────────────────────────────────────────────────────────────────
 
 def release(workspace: Workspace) -> str:
@@ -206,8 +225,7 @@ def inventory(main_root, config: WorktreeConfig, db_path: str = "") -> list[Work
         mine = branch.startswith(config.branch_prefix) or root in path.parents
         if not mine or path.resolve() == Path(main_root).resolve():
             continue
-        adw_id = (branch.removeprefix(config.branch_prefix) if branch.startswith(config.branch_prefix)
-                  else path.name)
+        adw_id = branches.session_of(branch, config.branch_prefix) or path.name
         prunable = bool(entry.get("prunable"))
         found.append(WorktreeInfo(
             path=str(path), branch=branch, adw_id=adw_id, prunable=prunable,
