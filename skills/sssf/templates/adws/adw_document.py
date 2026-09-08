@@ -43,7 +43,7 @@ def main(prompt: str, base: str = "",
          config: str = "adws/adw_sssf_config/sssf.config.yaml", adw_id: str | None = None) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
-    run = session.ensure(cfg, adw_id)
+    run = session.ensure(cfg, adw_id, prompt=prompt)
     base = base or run.workspace.base_ref or "main"
 
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,

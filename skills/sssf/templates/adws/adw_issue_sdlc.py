@@ -36,8 +36,11 @@ checkout. Four things stand between those two facts, none sufficient alone:
     merge to a pull request for this run, in `integration.integrate()` rather
     than in config, so the work arrives somewhere a human looks at it.
 
-The issue phase runs FIRST, before the worktree has been touched and before any
-agent is spawned, so an untrusted author or an unreadable issue costs nothing.
+The issue phase runs before any agent is spawned, so an untrusted author or an
+unreadable issue costs no model calls. It does not run before the WORKTREE: the
+branch is cut in `session.ensure()`, which now also reads the issue's title to
+name it and asks the forge to link it. An untrusted author therefore costs one
+`gh issue view`, one branch and one empty worktree — and nothing else.
 """
 
 import argparse
@@ -62,7 +65,7 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
          adw_id: str | None = None) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
-    run = session.ensure(cfg, adw_id)
+    run = session.ensure(cfg, adw_id, issue=IssueRef(number=number))
     baseline = git_helper.rev(run.repo_root, "HEAD")   # pinned before this run commits anything
 
     def commit(ph, envelope) -> None:

@@ -69,7 +69,7 @@ DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the
 def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw_id: str | None = None) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
-    run = session.ensure(cfg, adw_id)
+    run = session.ensure(cfg, adw_id, prompt=prompt)
     baseline = git_helper.rev(run.repo_root, "HEAD")   # pinned before this run commits anything
 
     def commit(ph, envelope) -> None:

@@ -45,18 +45,13 @@ by construction — there is no integration phase in this chain at all.
 import argparse
 import sys
 
-from adw_modules import (agents, gates, git_helper, integration, pull_requests,
-                         quality, session)
+from adw_modules import (agents, branches, gates, git_helper, integration,
+                         pull_requests, quality, session)
 from adw_modules.data_types import (AgentCall, BuildOutput, PhaseParams,
                                     PullRequestRef, PullRequestUpdate)
 
 REQUIRED_AGENTS = ["builder"]
 MAX_FIX_LOOPS = 3
-
-
-def _session_of(branch: str, prefix: str) -> str:
-    """The adw_id a branch names, or "" when the branch is not this factory's."""
-    return branch.removeprefix(prefix) if branch.startswith(prefix) else ""
 
 
 def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
@@ -76,7 +71,7 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
               f"review.", file=sys.stderr)
         return 2
 
-    resolved = _session_of(context.branch, cfg.worktree.branch_prefix)
+    resolved = branches.session_of(context.branch, cfg.worktree.branch_prefix)
     if not resolved:
         print(f"#{number} is on `{context.branch}`, which does not start with "
               f"`{cfg.worktree.branch_prefix}` — no run of this factory produced "

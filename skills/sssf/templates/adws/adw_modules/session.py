@@ -24,8 +24,8 @@ import signal
 import sys
 from pathlib import Path
 
-from . import git_helper, worktree
-from .data_types import RunSpec, SSSFConfig, WorktreeRequest
+from . import branches, git_helper, worktree
+from .data_types import BranchRequest, IssueRef, RunSpec, SSSFConfig, WorktreeRequest
 from .runner import Run
 from .tracer import Tracer
 from .utils import anchor, engineer_name, new_id
@@ -52,11 +52,20 @@ def _finalize_when_killed(run: Run) -> None:
         signal.signal(sig, handler)
 
 
-def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
+def ensure(cfg: SSSFConfig, adw_id: str | None = None, *, prompt: str = "",
+           issue: IssueRef | None = None) -> Run:
     adw_id = adw_id or new_id(8)
     main_root = git_helper.main_root()          # the engineer's checkout, always
+    # WHAT THE BRANCH IS CALLED is decided before the worktree exists, because
+    # the worktree is cut from it. An issue run's branch is created AT THE FORGE
+    # here — the only order in which it can be linked to the issue at all — and
+    # everything that can fail about that degrades to a local branch and a note.
+    plan = branches.plan(cfg, BranchRequest(main_root=main_root, adw_id=adw_id,
+                                            prompt=prompt, issue=issue))
     workspace = worktree.ensure(WorktreeRequest(main_root=main_root, adw_id=adw_id,
-                                                config=cfg.worktree))
+                                                config=cfg.worktree,
+                                                branch=plan.branch,
+                                                base_commit=plan.base_commit))
     tracer = Tracer(anchor(main_root, cfg.observability.db),
                     anchor(main_root, f"{cfg.defaults.data_dir}/sessions/{adw_id}/events.jsonl"))
     run = Run(RunSpec(cfg=cfg, adw_id=adw_id, engineer=engineer_name(),
@@ -76,14 +85,20 @@ def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
                          " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]))
     _finalize_when_killed(run)
     run.console.session_started(adw_id, run.engineer)
-    run.console.note(_workspace_line(workspace))
+    run.console.note(_workspace_line(workspace, plan))
     return run
 
 
-def _workspace_line(workspace) -> str:
-    """The one line that says where this run's work will actually land."""
+def _workspace_line(workspace, plan) -> str:
+    """The one line that says where this run's work will actually land.
+
+    The plan's notes ride along on it rather than getting a line of their own:
+    "linked to issue #42" and "not linked, because…" are both facts about this
+    branch, and the branch is what this line is for.
+    """
     if not workspace.enabled:
         return f"workspace: {workspace.repo_root} (no worktree — running in place)"
     verb = "joined" if workspace.joined else "created"
-    return (f"workspace: {verb} {workspace.repo_root} on {workspace.branch} "
+    line = (f"workspace: {verb} {workspace.repo_root} on {workspace.branch} "
             f"from {workspace.base_ref} @ {workspace.base_commit[:7]}")
+    return f"{line} · {' · '.join(plan.notes)}" if plan.notes else line

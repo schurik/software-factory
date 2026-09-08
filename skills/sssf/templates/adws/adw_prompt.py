@@ -21,7 +21,7 @@ def main(prompt: str, agent: str = "builder",
          config: str = "adws/adw_sssf_config/sssf.config.yaml", adw_id: str | None = None) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, [agent])
-    run = session.ensure(cfg, adw_id)
+    run = session.ensure(cfg, adw_id, prompt=prompt)
 
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:

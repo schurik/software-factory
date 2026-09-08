@@ -32,7 +32,7 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
          adw_id: str | None = None) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
-    run = session.ensure(cfg, adw_id)
+    run = session.ensure(cfg, adw_id, issue=IssueRef(number=number))
 
     with run.phase(PhaseParams(name="issue", kind="code", owner="tracker",
                                description="Read the reporter's own words and labels, "

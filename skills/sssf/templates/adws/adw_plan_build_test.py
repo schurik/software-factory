@@ -28,7 +28,7 @@ MAX_FIX_LOOPS = 3
 def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw_id: str | None = None) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
-    run = session.ensure(cfg, adw_id)
+    run = session.ensure(cfg, adw_id, prompt=prompt)
 
     def record(ph, result) -> None:
         passed = sum(1 for check in result.checks if check.passed)
