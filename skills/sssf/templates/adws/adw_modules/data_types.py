@@ -443,7 +443,12 @@ class WorktreeConfig(BaseModel):
 
     enabled: bool = True
     dir: str = ".sssf-worktrees"     # relative to the MAIN checkout; gitignored
-    branch_prefix: str = "sssf/"     # the run's branch is <prefix><adw_id>
+    branch_prefix: str = "sssf/"     # the run's branch is <prefix><adw_id>[-<slug>]
+    # A branch called sssf/a1b2c3d4 says which run made it and nothing about
+    # what it was for. With this on, the run's issue title or prompt is slugged
+    # onto the end — the adw_id stays FIRST so `branches.session_of` can still
+    # take it back off. false restores the bare <prefix><adw_id>.
+    branch_slug: bool = True
     base_ref: str = ""               # "" = whatever the main checkout has checked out
     # A successful run's worktree is a redundant copy of a branch, so it goes.
     # A failed or killed one is where you go to see what happened, so it stays —
