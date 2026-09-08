@@ -302,6 +302,16 @@ def _open_pr(run, result: IntegrationResult, params: IntegrationRequest) -> Inte
         # operator configured pr_body_template themselves.
         argv = [flag for flag in argv if flag != "--fill"]
         argv += ["--body", body]
+        if "--title" not in argv:
+            # --fill would have supplied the title too, and gh refuses to run
+            # non-interactively with neither --fill nor --title. The first
+            # commit unique to this branch is what --fill itself falls back
+            # to for a single-commit PR, and reads fine for a multi-commit
+            # one too — a standalone integrate (`adw_integrate.py`, no
+            # `params.title`) hits this every time the run also has a body.
+            fallback_title = git_helper.first_subject(tree, result.base_ref, result.branch)
+            if fallback_title:
+                argv += ["--title", fallback_title]
     # The forge CLI is already authenticated in the engineer's shell, so it runs
     # under their environment rather than the ADW's ephemeral `uv run` venv.
     completed = subprocess.run(argv, cwd=tree, env=operator_env(),

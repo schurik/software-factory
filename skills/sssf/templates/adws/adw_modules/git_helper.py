@@ -133,6 +133,21 @@ def merge_base(cwd: Pathish, ref: str, other: str = "HEAD") -> str:
     return _git(cwd, "merge-base", ref, other)
 
 
+def first_subject(cwd: Pathish, base: str, ref: str = "HEAD") -> str:
+    """Subject of the first commit unique to `ref` since it diverged from `base`.
+
+    A QUESTION, not a command: empty string on any failure (unknown ref, no
+    commits) rather than raising. A caller using this as a fallback title has
+    better ways to report "nothing to fall back to" than an exception from
+    three functions away.
+    """
+    result = _ask_git(cwd, "log", "--reverse", "--format=%s", f"{base}..{ref}")
+    if result.returncode != 0:
+        return ""
+    lines = [line for line in result.stdout.splitlines() if line]
+    return lines[0] if lines else ""
+
+
 def is_dirty(cwd: Pathish) -> bool:
     return bool(_git(cwd, "status", "--porcelain"))
 
