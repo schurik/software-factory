@@ -93,7 +93,9 @@ def plan(cfg: SSSFConfig, request: BranchRequest) -> BranchPlan:
 
     Everything after that degrades: no worktrees, no issue, no remote, no auth,
     a tracker that is not GitHub — each ends with a perfectly usable local
-    branch and a note saying why the Development panel is empty.
+    branch, silently where nothing went wrong (worktrees off, no issue, link
+    off) and with a note saying why the Development panel is empty where
+    something was tried and did not land.
     """
     result = BranchPlan()
     config = cfg.worktree
@@ -148,5 +150,15 @@ def _base_ref_of(main_root: Path, config: WorktreeConfig) -> str:
     """
     if config.base_ref:
         return config.base_ref
+    if not git_helper.ref_exists(main_root, "HEAD"):
+        # A fresh `git init` has nothing to branch from yet (worktree.py:79-80
+        # guards the same fact before its own _base_ref_of). Asking
+        # current_branch would run `rev-parse --abbrev-ref HEAD`, which RAISES
+        # on an unborn HEAD — and this runs before the worktree exists, before
+        # a single phase opens, so that raise would kill the whole chain over a
+        # branch name. "" tells issues.develop to let the forge pick its own
+        # default base, which is exactly right for a repo with nothing local
+        # to cut from.
+        return ""
     branch = git_helper.current_branch(main_root)
     return "" if branch == "HEAD" else branch

@@ -124,3 +124,28 @@ def test_worktrees_disabled_skips_the_whole_thing(cfg, forge, tmp_path):
 
     assert plan.branch == ""
     assert forge["develop_calls"] == []
+
+
+def test_an_unborn_head_still_produces_a_usable_plan(cfg, forge, tmp_path, monkeypatch):
+    """A repo with a remote configured but zero commits (a fresh `git init`) has
+    an unborn HEAD. `has_remote` only reads `git remote` output, so it does not
+    rule this out — and the real `current_branch` RAISES on an unborn HEAD
+    (`rev-parse --abbrev-ref HEAD` exits 128). `_base_ref_of` must check
+    `ref_exists` first and never reach `current_branch` here, so the whole
+    chain does not die over a branch name before a single phase opens.
+    """
+    monkeypatch.setattr(branches.git_helper, "ref_exists",
+                        lambda main_root, ref: False)
+
+    def _current_branch_raises_like_the_real_one(main_root):
+        raise RuntimeError("fatal: ambiguous argument 'HEAD': unknown revision")
+
+    monkeypatch.setattr(branches.git_helper, "current_branch",
+                        _current_branch_raises_like_the_real_one)
+
+    plan = branches.plan(cfg, BranchRequest(
+        main_root=tmp_path, adw_id="a1b2c3d4", issue=IssueRef(number=42)))
+
+    assert plan.branch == "sssf/a1b2c3d4-42-flooreuro-rounds-down"
+    assert plan.linked is True
+    assert forge["develop_calls"][0].base_ref == ""
