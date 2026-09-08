@@ -64,3 +64,92 @@ def test_peek_never_raises_on_junk_output(tmp_path, calls):
                         IssueRef(number=42))
 
     assert brief.ok is False
+
+
+from adw_modules import git_helper
+from adw_modules.data_types import LinkedBranchRequest
+
+
+@pytest.fixture
+def forge(monkeypatch):
+    """Record `gh` calls and `git fetch`es without running either."""
+    # `local_branches` is what `branch_exists` answers from — it has to
+    # distinguish the BASE branch (which exists, so `--base` is passed) from the
+    # RUN's branch (which usually does not, so the fetch happens).
+    state = {"gh": _completed(), "fetch": _completed(),
+             "local_branches": {"main"},
+             "head": "0" * 40, "calls": [], "fetched": []}
+
+    def fake_run(argv, cwd):
+        state["calls"].append(argv)
+        return state["gh"]
+
+    def fake_fetch(cwd, remote, branch):
+        state["fetched"].append((remote, branch))
+        return state["fetch"]
+
+    monkeypatch.setattr(issues, "_run", fake_run)
+    monkeypatch.setattr(issues.git_helper, "fetch_branch", fake_fetch)
+    monkeypatch.setattr(issues.git_helper, "branch_exists",
+                        lambda cwd, name: name in state["local_branches"])
+    monkeypatch.setattr(issues.git_helper, "rev", lambda cwd, ref="HEAD": state["head"])
+    return state
+
+
+def _request(branch="sssf/a1b2c3d4-42-fix-rounding", base_ref="main"):
+    return LinkedBranchRequest(ref=IssueRef(number=42, project="acme/widgets"),
+                               branch=branch, base_ref=base_ref, remote="origin")
+
+
+def test_develop_creates_fetches_and_reports_the_head(tmp_path, forge):
+    forge["gh"] = _completed(
+        stdout="https://github.com/acme/widgets/tree/sssf/a1b2c3d4-42-fix-rounding\n")
+    forge["head"] = "abc123" + "0" * 34
+
+    result = issues.develop(tmp_path, IssuesConfig(project="acme/widgets"), _request())
+
+    assert result.ok is True
+    assert result.created is True
+    assert result.branch == "sssf/a1b2c3d4-42-fix-rounding"
+    assert result.head == "abc123" + "0" * 34
+    assert forge["calls"][0] == [
+        "gh", "issue", "develop", "42", "--repo", "acme/widgets",
+        "--name", "sssf/a1b2c3d4-42-fix-rounding", "--base", "main"]
+    assert forge["fetched"] == [("origin", "sssf/a1b2c3d4-42-fix-rounding")]
+
+
+def test_develop_omits_base_when_it_is_not_a_branch_name(tmp_path, forge):
+    issues.develop(tmp_path, IssuesConfig(project="acme/widgets"),
+                   _request(base_ref="3f9a1c2d"))
+    assert "--base" not in forge["calls"][0]
+
+
+def test_develop_skips_the_fetch_when_the_branch_is_already_local(tmp_path, forge):
+    """A rerun: gh reuses the linked branch, and a fetch would be rejected as a
+    non-fast-forward the moment the earlier run committed anything."""
+    forge["local_branches"].add("sssf/a1b2c3d4-42-fix-rounding")
+    result = issues.develop(tmp_path, IssuesConfig(project="acme/widgets"), _request())
+    assert result.ok is True
+    assert forge["fetched"] == []
+
+
+def test_develop_failing_reports_nothing_created(tmp_path, forge):
+    forge["gh"] = _completed(stderr="could not create linked branch", returncode=1)
+    result = issues.develop(tmp_path, IssuesConfig(project="acme/widgets"), _request())
+    assert result.ok is False
+    assert result.created is False
+    assert "could not create linked branch" in " ".join(result.notes)
+
+
+def test_develop_reports_a_created_branch_it_could_not_fetch(tmp_path, forge):
+    """The one state a caller must treat differently: the remote branch EXISTS.
+    Reusing its name locally would diverge from it and be rejected at push."""
+    forge["gh"] = _completed(
+        stdout="https://github.com/acme/widgets/tree/sssf/a1b2c3d4-42-fix-rounding\n")
+    forge["fetch"] = _completed(stderr="could not read from remote", returncode=1)
+
+    result = issues.develop(tmp_path, IssuesConfig(project="acme/widgets"), _request())
+
+    assert result.ok is False
+    assert result.created is True
+    assert result.branch == "sssf/a1b2c3d4-42-fix-rounding"

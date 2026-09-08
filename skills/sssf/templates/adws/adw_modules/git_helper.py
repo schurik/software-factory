@@ -281,3 +281,14 @@ def remote_tip(cwd: Pathish, remote: str, branch: str) -> str:
     ref = f"refs/remotes/{remote}/{branch}"
     completed = _ask_git(cwd, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
     return completed.stdout.strip() if completed.returncode == 0 else ""
+
+
+def fetch_branch(cwd: Pathish, remote: str, branch: str) -> subprocess.CompletedProcess:
+    """Bring a branch the REMOTE owns into this repository under the same name.
+
+    `git fetch <remote> <branch>:<branch>` creates the local ref without checking
+    it out, which is what a worktree needs — it is handed a branch, not a tree.
+    Returns the completed process: a rejected fetch is data, exactly as a
+    rejected push is.
+    """
+    return _ask_git(cwd, "fetch", remote, f"{branch}:{branch}")

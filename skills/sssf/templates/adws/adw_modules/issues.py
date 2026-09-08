@@ -35,7 +35,8 @@ import subprocess
 
 from . import git_helper
 from .data_types import (EventRecord, IssueBrief, IssueContext, IssueOutput, IssueRef,
-                         IssueResult, IssuesConfig, IssueUpdate, PullRequestsConfig)
+                         IssueResult, IssuesConfig, IssueUpdate, LinkedBranch,
+                         LinkedBranchRequest, PullRequestsConfig)
 from .utils import operator_env
 
 BODY_FILENAME = "issue.md"
@@ -140,6 +141,75 @@ def peek(tree, config: IssuesConfig, ref: IssueRef) -> IssueBrief:
         url=payload.get("url") or "",
         author=(author.get("login", "") if isinstance(author, dict) else str(author)),
     )
+
+
+def develop(tree, config: IssuesConfig, request: LinkedBranchRequest) -> LinkedBranch:
+    """Have the FORGE create the run's branch, linked to the issue, then fetch it.
+
+    Order is forced by the API, not chosen: `createLinkedBranch` creates a ref
+    and nothing links an existing one, so a branch cut locally first can never be
+    linked afterwards.
+
+    Idempotent for a rerun: `gh issue develop --name X` reuses X when X is
+    already linked to this issue, and the fetch is skipped when the branch is
+    already here — a local branch that has moved ahead would reject the fetch as
+    a non-fast-forward, and losing that branch is the one outcome worth avoiding.
+
+    NEVER RAISES. Every failure is a note plus `ok=False`.
+    """
+    result = LinkedBranch(branch=request.branch)
+    project = request.ref.project or resolve_project(config, tree)
+    argv = _aim([*config.develop_command], project, request.ref.number)
+    argv += ["--name", request.branch]
+    # `--base` names a branch AT THE FORGE. A pinned sha or a detached base has
+    # no name there, so the flag is dropped and the repository default is used —
+    # noted rather than failed, because a linked branch off the default base is
+    # still a linked branch.
+    if request.base_ref and git_helper.branch_exists(tree, request.base_ref):
+        argv += ["--base", request.base_ref]
+    else:
+        result.notes.append(f"base {request.base_ref or '(none)'} is not a branch "
+                            f"name — the forge's default base was used")
+
+    completed = _run(argv, tree)
+    if completed.returncode != 0:
+        result.notes.append(f"`{' '.join(config.develop_command)}` failed: "
+                            f"{(completed.stderr or completed.stdout).strip()[-300:]}")
+        return result
+    result.created = True
+    result.branch = _branch_of(completed.stdout) or request.branch
+
+    if git_helper.branch_exists(tree, result.branch):
+        result.ok = True
+        result.head = git_helper.rev(tree, result.branch)
+        result.notes.append(f"{result.branch} is linked to #{request.ref.number}")
+        return result
+
+    fetched = git_helper.fetch_branch(tree, request.remote, result.branch)
+    if fetched.returncode != 0:
+        result.notes.append(
+            f"{result.branch} was created at the forge but could not be fetched: "
+            f"{fetched.stderr.strip()[-300:]}")
+        return result
+    result.ok = True
+    result.head = git_helper.rev(tree, result.branch)
+    result.notes.append(f"{result.branch} is linked to #{request.ref.number}")
+    return result
+
+
+def _branch_of(output: str) -> str:
+    """The branch name out of the tree url `gh issue develop` prints.
+
+    Taken from the forge's answer rather than from what was asked for, because
+    the forge sanitises names and reuses an existing linked branch under whatever
+    IT calls that branch. "" when there is no url to read, and the caller keeps
+    the name it asked for.
+    """
+    for word in output.split():
+        marker = "/tree/"
+        if word.startswith("http") and marker in word:
+            return word.split(marker, 1)[1].strip()
+    return ""
 
 
 def fetch(run, config: IssuesConfig, ref: IssueRef) -> IssueContext:
