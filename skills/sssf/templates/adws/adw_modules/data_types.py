@@ -496,6 +496,14 @@ class IssuesConfig(BaseModel):
     list_command: list[str] = Field(default_factory=lambda: ["gh", "issue", "list"])
     comment_command: list[str] = Field(default_factory=lambda: ["gh", "issue", "comment"])
     state_command: list[str] = Field(default_factory=lambda: ["gh", "issue", "edit"])
+    # The Development panel on an issue, which is the only thing that says "a
+    # run has this" BEFORE a pull request exists. `gh issue develop` is the only
+    # way to write it: GitHub's createLinkedBranch mutation CREATES a ref
+    # ("the commit SHA to base the NEW branch on"), and no public API links one
+    # that already exists — so the forge makes the branch and the worktree is cut
+    # from what it made. Off, or unreachable, and the run keeps a local branch.
+    link_branch: bool = True
+    develop_command: list[str] = Field(default_factory=lambda: ["gh", "issue", "develop"])
     # label -> ADW script. The watcher routes on this; no ADW knows about it.
     route: dict[str, str] = Field(default_factory=dict)
     states: IssueStates = Field(default_factory=IssueStates)
@@ -616,6 +624,14 @@ class WorktreeRequest(BaseModel):
     main_root: Path
     adw_id: str
     config: WorktreeConfig = Field(default_factory=WorktreeConfig)
+    # Both empty on the ordinary path, and then this module decides everything.
+    # `branches.plan()` fills them when the branch was named — or created at the
+    # forge — before the worktree existed. Passing base_commit is not an
+    # optimisation: a branch the forge cut from ORIGIN's base tip has a
+    # merge-base with the LOCAL base that is older than its real branch point,
+    # and every diff in the run measures from base_commit.
+    branch: str = ""
+    base_commit: str = ""
 
 
 class WorktreeInfo(BaseModel):
@@ -677,6 +693,69 @@ class IssueRef(BaseModel):
 
     number: int
     project: str = ""
+
+
+class IssueBrief(BaseModel):
+    """The two fields a branch name needs, read before the run exists.
+
+    Not an `IssueContext`: that one carries a `body_path`, and there is no run
+    to write a body into yet. `ok=False` is an ordinary answer here — the branch
+    is named without a title, and the run proceeds.
+    """
+
+    ok: bool = False
+    number: int = 0
+    title: str = ""
+    url: str = ""
+    author: str = ""
+
+
+class LinkedBranchRequest(BaseModel):
+    """Everything `issues.develop()` needs. One object, never loose params."""
+
+    ref: IssueRef
+    branch: str                     # the name to ask the forge for
+    base_ref: str = ""              # "" or a non-branch ref = let the forge choose
+    remote: str = "origin"          # where the created branch is fetched from
+
+
+class LinkedBranch(BaseModel):
+    """What the forge did about a branch for an issue. Evidence, not a claim.
+
+    `created` is separate from `ok` and it matters: a run that created the remote
+    branch but could not fetch it must NOT fall back to a local branch of the
+    same name — the two would diverge, and the divergence would surface as a
+    rejected push at integrate time, hours later.
+    """
+
+    ok: bool = False
+    created: bool = False
+    branch: str = ""
+    head: str = ""                  # sha of the fetched tip, "" when not fetched
+    notes: list[str] = Field(default_factory=list)
+
+
+class BranchRequest(BaseModel):
+    """What `branches.plan()` has to work with. One object, never loose params."""
+
+    main_root: Path
+    adw_id: str
+    prompt: str = ""                # already resolved: a path became its contents
+    issue: Optional[IssueRef] = None
+
+
+class BranchPlan(BaseModel):
+    """The name the run's branch will have, and how it came to have it.
+
+    `base_commit` is set only when the FORGE created the branch — that is the one
+    case where the branch point is not derivable from the local checkout, and
+    every diff in the run measures from it.
+    """
+
+    branch: str = ""
+    base_commit: str = ""
+    linked: bool = False
+    notes: list[str] = Field(default_factory=list)
 
 
 class IssueContext(BaseModel):
