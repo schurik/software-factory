@@ -245,7 +245,9 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
                           f"{len(violations)} gate violation(s)")
         correction = ("Your previous response failed validation:\n- "
                       + "\n- ".join(violations)
-                      + "\n\nFix these problems, then re-emit ONLY your Report JSON.")
+                      + "\n\nFix these problems — use whatever tools you need (move a file, "
+                        "rewrite content, re-run a command) to make them true on disk — then "
+                        "re-emit ONLY your Report JSON as your final message.")
         result = send(correction)
         envelope, attempt = _parse_with_retries(run, phase, call, result, send)
 
