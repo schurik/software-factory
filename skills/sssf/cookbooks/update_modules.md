@@ -19,6 +19,7 @@ Extend `adws/adw_modules/` with new low-level logic.
 | `tool_calls.py` | the normalized tool-call record and its ledger — one shape per completed call, whichever harness ran it. Adding a third harness means writing a tracker that fills this in, and nothing else |
 | `gates.py` | validation gates over envelope claims |
 | `permissions.py` | the write boundary — snapshots the tree, checks it after every agent call against that agent's `writes` plus `defaults.protected_files`, rolls unauthorized changes back and kills the phase. `tools` is a capability list; THIS is the boundary |
+| `branches.py` | the run's branch NAME — the only place it is assembled (`branch_for`) or taken apart (`session_of`) — and `plan()`, which decides what a run's branch is called, reaches the forge to link it to its issue, and falls back to a local-only branch with a note when it cannot |
 | `worktree.py` | create-or-join the run's worktree and branch, and release it when a clean accepted run no longer needs it |
 | `integration.py` | land that branch again — merge, fast-forward ref update, or push-and-open-a-PR, per `worktree.integration`. Refusals are notes, never exceptions. `keep_published()` is the small half: a commit phase calls it to push onto a branch that is ALREADY on the remote, so an open pull request never falls behind its session |
 | `quality.py` | lint / typecheck / build / test as CODE: argv lists, not shell strings, run under the operator's own environment, adapted into an envelope so failures reach the builder through the ordinary door |
@@ -26,7 +27,7 @@ Extend `adws/adw_modules/` with new low-level logic.
 | `pull_requests.py` | the same shape one step later: read a pull request AND its review threads in one graphql snapshot, adapt the open ones into an envelope, reply in each thread and resolve it. `actionable()` is the queue definition and lives here alone. Shares `resolve_project`/`_aim`/`_run` with `issues.py` rather than copying them |
 | `changes.py` | deterministic change capture: resolve the base ref, `git diff` into `context_handoff/changes.diff`, adapt the `ChangeSet` into an envelope an agent can be handed |
 | `prompts.py` | load system/user prompt refs from config, render placeholders |
-| `session.py` | mint or join `adw_id`, maintain `agent_map.json`, create session dirs incl. `context_handoff/` |
+| `session.py` | mint or join `adw_id`, name and link the run's branch via `branches.plan()`, maintain `agent_map.json`, create session dirs incl. `context_handoff/` |
 | `tracer.py` | append JSONL **and** insert every event into `sssf.db` as it happens |
 | `console.py` | the rich stdout reporter — every line printed is ALSO traced as a `log` event (`{message, level}`) so the terminal and the swim-lane UI tell the same story |
 | `git_helper.py` | branch, status, diff, commit — the raw plumbing `changes.py` composes |

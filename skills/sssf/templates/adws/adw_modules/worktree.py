@@ -91,7 +91,7 @@ def ensure(request: WorktreeRequest) -> Workspace:
     # would miss and `worktree_add` would cut a SECOND branch from the base,
     # orphaning the run's commits on the first one.
     branch = (request.branch or _read_meta(meta).get("branch")
-              or f"{config.branch_prefix}{request.adw_id}")
+              or branches.branch_for(config, request.adw_id))
 
     if path.is_dir():
         return _reattach(path, main, branch, meta)

@@ -218,6 +218,29 @@ def test_an_undecodable_forge_branch_falls_back_instead_of_being_adopted(cfg, fo
     assert plan.linked is False
 
 
+def test_branch_slug_false_skips_the_peek_but_still_links(cfg, forge, tmp_path,
+                                                           monkeypatch):
+    """`branch_slug: false` promises to "restore today's behaviour exactly"
+    (`base.yaml`) — but today's behaviour for an issue run was never
+    UNLINKED, only unslugged. So the branch must still be linked; only the
+    slug, and the `gh issue view` call that would have produced it, goes away.
+    """
+    cfg.worktree.branch_slug = False
+    peeked = []
+    monkeypatch.setattr(branches.issues, "peek",
+                        lambda tree, config, ref: peeked.append(ref) or forge["brief"])
+    forge["linked"] = LinkedBranch(ok=True, created=True, head="abc1234",
+                                   branch="sssf/a1b2c3d4")
+
+    plan = branches.plan(cfg, BranchRequest(
+        main_root=tmp_path, adw_id="a1b2c3d4", issue=IssueRef(number=42)))
+
+    assert peeked == []
+    assert plan.branch == "sssf/a1b2c3d4"
+    assert plan.linked is True
+    assert forge["develop_calls"][0].branch == "sssf/a1b2c3d4"
+
+
 def test_an_unborn_head_still_produces_a_usable_plan(cfg, forge, tmp_path, monkeypatch):
     """A repo with a remote configured but zero commits (a fresh `git init`) has
     an unborn HEAD. `has_remote` only reads `git remote` output, so it does not

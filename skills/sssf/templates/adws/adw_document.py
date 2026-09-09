@@ -18,11 +18,17 @@ built, and the phase says so instead of paying an agent to discover it.
 adw_modules/changes.py for how the base commit is resolved on a branch, on the
 base branch, and on a clean tree right after a chain committed.
 
-`--base` defaults to the ref the run's worktree was cut from, not to `main`.
-Under a worktree per run those differ and only the pinned one is right: joined
-to an earlier ADW's session, "since main" would include every commit main has
-taken on since that run started, none of which this run wrote. Without a
-worktree it falls back to `main`, which is what it always was.
+`--base` defaults to the commit the run's worktree was cut from — `base_commit`
+when the session pinned one, else `base_ref`, else `main`. Under a worktree per
+run those differ from `main` and only the pinned one is right: joined to an
+earlier ADW's session, "since main" would include every commit main has taken
+on since that run started, none of which this run wrote. Preferring the
+COMMIT over the ref matters on a linked branch specifically: it was cut from
+origin's base tip, so resolving `base_ref` (a name like "main") through
+`changes.resolve_base` would measure from the LOCAL checkout's merge-base
+instead — older than the branch's real point of departure by however far
+origin was ahead. Without a worktree, or without either pinned, it falls back
+to `main`, which is what it always was.
 """
 
 import argparse
@@ -44,7 +50,16 @@ def main(prompt: str, base: str = "",
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
     run = session.ensure(cfg, adw_id, prompt=prompt)
-    base = base or run.workspace.base_ref or "main"
+    # Prefer the PINNED commit over the ref it was pinned from. On a linked
+    # branch — one the forge cut from ORIGIN's base tip — `base_ref` is a name
+    # like "main", and `changes.resolve_base` turns any ref into
+    # `merge_base(ref, HEAD)`; asked for "main" it answers with the LOCAL
+    # checkout's merge-base, which can be older than the branch's real branch
+    # point by however far origin was ahead. `base_commit` is that real branch
+    # point as a sha, and `merge_base(<sha that is an ancestor>, HEAD)` returns
+    # that same sha right back — so preferring it costs nothing on every other
+    # path and fixes the one where it matters.
+    base = base or run.workspace.base_commit or run.workspace.base_ref or "main"
 
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:

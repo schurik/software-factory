@@ -628,8 +628,16 @@ class WorktreeRequest(BaseModel):
     # `branches.plan()` fills them when the branch was named — or created at the
     # forge — before the worktree existed. Passing base_commit is not an
     # optimisation: a branch the forge cut from ORIGIN's base tip has a
-    # merge-base with the LOCAL base that is older than its real branch point,
-    # and every diff in the run measures from base_commit.
+    # merge-base with the LOCAL base that is older than its real branch point.
+    # NOT every diff in the run measures from base_commit — most chains pin
+    # their own baseline instead (`git_helper.rev(..., "HEAD")`, read right
+    # after `session.ensure()` returns), and `changes.resolve_base` takes a REF
+    # and answers `merge_base(ref, HEAD)`, so a caller that hands it base_commit
+    # directly gets it back unchanged (merge_base of an ancestor sha is itself)
+    # while one that hands it base_ref does not. What base_commit actually is:
+    # the honest branch point for whichever chain measures from it, and the
+    # value `integration.py` compares HEAD against to decide a branch has
+    # nothing to land.
     branch: str = ""
     base_commit: str = ""
 

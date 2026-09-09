@@ -33,6 +33,7 @@ adws/
 │   ├── tool_calls.py            the normalized tool-call record every harness emits
 │   ├── gates.py                 gate(envelope, run) -> GateReport — one check per item verified
 │   ├── permissions.py           the write boundary: unauthorized changes rolled back, phase dies
+│   ├── branches.py              the run's branch NAME — the only place it's built or parsed  ·  plan() names it and links it to its issue at the forge
 │   ├── worktree.py              a git worktree + branch per run  ·  integration.py  lands it again
 │   ├── quality.py               lint/typecheck/build/test blocks → QualityResult → envelope
 │   ├── changes.py               git diff vs a resolved base → ChangeSet → envelope for the documenter

@@ -13,6 +13,17 @@ splitting on the first hyphen is unambiguous, and a pre-slug branch (no hyphen a
 all) returns the same answer it always did. Nothing needs migrating.
 
 A slug is a NAME, not an identifier. Nothing ever reads it back.
+
+The module owns more than the format, though: `plan()` is where a run's branch
+is actually DECIDED. It reads back a recorded name before inventing one (a
+joined run must never be renamed by a different prompt), recovers one from git
+directly when even that record is gone, builds the slug from the run's issue
+or prompt, and — for an issue run — reaches the forge (`issues.develop`) so the
+branch is CREATED there and shows up in the issue's Development panel before
+any commit exists. Everything that can go wrong on that path — no remote, no
+auth, a tracker that is not GitHub — degrades to a perfectly usable local
+branch and a note, never a failed run. `session.ensure()` is `plan()`'s only
+caller.
 """
 
 from __future__ import annotations
@@ -128,7 +139,13 @@ def plan(cfg: SSSFConfig, request: BranchRequest) -> BranchPlan:
             return result
 
     slug = ""
-    if request.issue is not None:
+    # `branch_for` already drops the slug when `branch_slug` is off, so a name
+    # computed with one would be thrown away — but `issues.peek` is a real `gh
+    # issue view` call, and paying for a title that is never used would mean
+    # `branch_slug: false` no longer "restores today's behaviour exactly", as
+    # `base.yaml` promises: it would still cost one forge round trip per issue
+    # run. Guarding the call, not just the result, is what keeps that promise.
+    if request.issue is not None and config.branch_slug:
         brief = issues.peek(request.main_root, cfg.issues, request.issue)
         slug = issue_slug(brief.number or request.issue.number, brief.title)
     elif request.prompt:
