@@ -39,8 +39,9 @@ checkout. Four things stand between those two facts, none sufficient alone:
 The issue phase runs before any agent is spawned, so an untrusted author or an
 unreadable issue costs no model calls. It does not run before the WORKTREE: the
 branch is cut in `session.ensure()`, which now also reads the issue's title to
-name it and asks the forge to link it. An untrusted author therefore costs one
-`gh issue view`, one branch and one empty worktree — and nothing else.
+name it and asks the forge to link it. An untrusted author therefore costs two
+`gh issue view` calls — one from the peek that names the branch, one from the
+fetch that reads the body — one branch and one empty worktree, and nothing else.
 """
 
 import argparse
