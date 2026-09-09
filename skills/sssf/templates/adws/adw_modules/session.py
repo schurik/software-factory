@@ -4,6 +4,9 @@
 exactly that id (pinned ids for repeatable runs); omitted, a fresh id is
 minted and printed so the next ADW can pick it up.
 
+It is also the last moment a run can be refused for free, which is why
+`preflight.before_run` is the first thing it does — see that module.
+
 This is also where a run stops being able to hurt the engineer's checkout. The
 worktree is created here, before anything else exists, because everything
 downstream derives its tree from `run.repo_root`: agents are spawned in it, the
@@ -24,7 +27,7 @@ import signal
 import sys
 from pathlib import Path
 
-from . import git_helper, worktree
+from . import git_helper, preflight, worktree
 from .data_types import RunSpec, SSSFConfig, WorktreeRequest
 from .runner import Run
 from .tracer import Tracer
@@ -55,6 +58,12 @@ def _finalize_when_killed(run: Run) -> None:
 def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
     adw_id = adw_id or new_id(8)
     main_root = git_helper.main_root()          # the engineer's checkout, always
+    # BEFORE the worktree, the session row and the process record exist. A run
+    # that cannot write its own trace, or whose base_ref does not resolve, dies
+    # a few seconds later having already minted a session and cut a branch —
+    # so it is refused here, while the repo is still untouched. Warnings survive
+    # to be said on the console below, where they are read.
+    warnings = preflight.before_run(cfg, main_root)
     workspace = worktree.ensure(WorktreeRequest(main_root=main_root, adw_id=adw_id,
                                                 config=cfg.worktree))
     tracer = Tracer(anchor(main_root, cfg.observability.db),
@@ -77,6 +86,12 @@ def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
     _finalize_when_killed(run)
     run.console.session_started(adw_id, run.engineer)
     run.console.note(_workspace_line(workspace))
+    # Two lines, not one: the console clips a note at 160 characters, and a fix
+    # that gets cut off is the half worth keeping.
+    for finding in warnings:
+        run.console.note(f"preflight — {finding.detail}")
+        if finding.fix:
+            run.console.note(f"fix: {finding.fix}")
     return run
 
 

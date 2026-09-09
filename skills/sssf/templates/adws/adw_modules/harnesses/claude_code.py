@@ -20,8 +20,8 @@ Two things differ from pi and shape everything below:
    loaded says so there.
 
 One harness behind the names `__init__.py` documents — `NAME`, `Options`,
-`resolve_model`, `reachable`, `validate_agent`, `new_session_id`,
-`ToolCallTracker`, `run`. Its templates (roster, prompts, env sample) live in
+`resolve_model`, `reachable`, `credentials`, `validate_agent`,
+`new_session_id`, `ToolCallTracker`, `run`. Its templates (roster, prompts, env sample) live in
 the skill under `templates/harnesses/claude_code/`.
 """
 
@@ -37,7 +37,8 @@ from typing import Callable, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..data_types import AgentConfig, AgentRequest, AgentResult, UsageBreakdown
+from ..data_types import (AgentConfig, AgentRequest, AgentResult, Finding,
+                          UsageBreakdown)
 from ..tool_calls import ToolCallLedger
 from ..utils import operator_env
 
@@ -156,6 +157,18 @@ def reachable() -> None:
         raise RuntimeError(
             f"the Claude Code CLI ({CLAUDE_PATH!r}) is not reachable — install it "
             f"(`npm i -g @anthropic-ai/claude-code`), put it on PATH, or set CLAUDE_PATH")
+
+
+def credentials(agent: AgentConfig) -> list[Finding]:
+    """Nothing to check: the Claude Code CLI carries its own authentication.
+
+    Implemented rather than omitted so `doctor` says so out loud. "No key is
+    needed here" is a useful answer — it is the reason a claude_code roster is
+    the shortest path to a first green run, and an absent line would read as an
+    unchecked one.
+    """
+    return [Finding(check=f"credentials: {agent.name}",
+                    detail="claude_code — the CLI brings its own auth (`claude auth`)")]
 
 
 def resolve_model(pattern: str) -> str:

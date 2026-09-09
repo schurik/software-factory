@@ -36,6 +36,7 @@ and knows nothing else about any harness:
 | `Options` | pydantic model for `harness_options`, `extra="forbid"` |
 | `resolve_model(pattern)` | pattern → whatever the CLI needs; `ValueError` if unwritable |
 | `reachable()` | raise unless the CLI can be executed (cache it — one probe per process) |
+| `credentials(agent)` | *optional* — `Finding`s on whether this agent can authenticate at all. Read by `preflight.py` and `agents.validate()`, never by `agents.execute`. A CLI that brings its own auth may omit it (or say so, which is what `claude_code` does). **Never read a key's value** — whether the variable naming it is set is the entire answer, and `fatal` is only for a name the harness actually knows |
 | `validate_agent(agent)` | harness-specific config problems, as a list of strings |
 | `new_session_id(adw_id, agent)` | a fresh id for this agent's context window |
 | `ToolCallTracker` | folds the CLI's event stream into `tool_calls.py` records |

@@ -22,7 +22,7 @@ and without a terminal to ask at, a missing flag is an error rather than a silen
 | Ask | Default if they shrug | Why it is not the installer's call |
 |---|---|---|
 | **Which harness?** (`pi`, `claude_code`) | none — it is asked | An all-`claude_code` roster needs **no API key at all** (the CLI brings its own auth), which is often the shortest path to a first green run; `pi` needs the right provider key in `.env`. The two stamp different rosters AND different prompts: pi's planner and scout fan out with `subagent_*`, tools Claude Code does not have. Adding a harness later: [references/harnesses.md](../references/harnesses.md). |
-| **How does this repo run its tests, lint and typecheck?** (`bun test`, `uv run pytest -q`, `npm run lint` …) | placeholders that `echo` and exit 0 | `quality.py` ships every block as a fake that **announces it is fake and passes**. A stamped repo cannot guess your runner, and a wrong-but-plausible command that goes green is worse than one that says so out loud. Until you replace them, `adw_simple_sdlc` "tests" nothing. |
+| **How does this repo run its tests, lint and typecheck?** (`bun test`, `uv run pytest -q`, `npm run lint` …) | whatever the installer detects; anything it cannot detect stays a placeholder, and **a placeholder fails** | `install.py` reads `package.json` scripts, the lockfiles, `pyproject.toml`, `Cargo.toml` and `go.mod`, and writes what it finds into `quality.py` marked `# detected at install`. Confirm those lines — a detected command is a guess from a filename, not an answer. A block nothing could answer for exits 78 with instructions rather than passing, because a chain that reports a green suite it never ran is the most expensive default this factory can ship. |
 | **How should a run's branch land — `merge`, `pr`, or `none`?** | `merge` | Repositories genuinely disagree about whether a machine may move the base branch. `merge` is right for a solo repo; `pr` is right anywhere a human reviews before main moves; `none` leaves every branch for a person. |
 | **Should issues be able to start runs?** | off | This is the one path where the prompt is written by whoever can file an issue rather than by the engineer at the keyboard. Off until the repo opts in — see the block below. |
 
@@ -90,9 +90,15 @@ Re-running is safe. `install.py` skips **every** file that already exists — yo
 3. **The harness's own steps** — `install.py` printed them after stamping, out of that harness's `about.md`: the CLI on PATH, how it authenticates, and the sharp edges (running as root, `safe_mode`). Re-read them there rather than guessing which apply.
 4. **Gitignore** — `install.py` appends `adws/adw_data/sessions/`, `adws/adw_data/sssf.db*`, `.env`, `.sssf-worktrees/`, `adws/adw_data/issue-locks/`, `__pycache__/` and `*.pyc`; confirm they landed. The worktree entry earns its place twice: chains that commit call `git add -A`, so without it a run's first commit would try to add the tree it is running in.
 5. **Git repo** — ADWs that end in a commit phase call `git_helper.commit_all`, which raises if the cwd is not a git repository. Run `git init` and make a first commit before using `adw_plan_build.py`, `adw_plan_build_test.py`, or `adw_simple_sdlc.py`. `adw_document.py` needs one too: it measures the change with `git diff` against a base ref (`main` by default, `--base` to override).
-6. **Quality commands** — replace the `_placeholder(...)` calls in `adws/adw_modules/quality.py` with this repo's real argv, and delete the blocks you do not want. Skipping this does not fail anything, which is the problem: the placeholders exit 0, so a chain reports a green suite it never ran.
+6. **Quality commands** — `install.py` prints what it detected and what is still unwired. Confirm every `# detected at install` line in `adws/adw_modules/quality.py` (it read a filename, not your intent), replace the remaining `_placeholder(...)` calls with this repo's real argv, and delete the blocks you do not want from `BLOCKS`. An unwired block now FAILS its phase — exit 78, with the fix in the message — so skipping this is loud rather than silent.
 7. **Integration** — set `worktree.integration.mode` to what this repo agreed above. On `pr`, also decide `open_pr` (pushing is safe everywhere; opening a PR needs an authenticated forge CLI) and, if you want the PR to close its issue on merge, `pr_body_template`.
-8. **Smoke test** — `just demo` runs two cheap read-only workflows back to back, or run the smallest ADW directly:
+8. **`just doctor`** — before spending anything. It asks everything a run needs and prints the fix beside each answer: the provider key behind every model in the roster, a `base_ref` that resolves, a writable `data_dir`, which quality blocks are still placeholders, the forge CLI your enabled paths shell out to, and whether `SSSF_SKILL` still points at a skill. No agents, no cost, and it exits non-zero on anything fatal, so it also works as a repo's first CI step. The checks live in `adws/adw_modules/preflight.py` — stamped, and yours to add to.
+
+```bash
+just doctor          # or: uv run <skill>/scripts/doctor.py
+```
+
+9. **Smoke test** — `just demo` runs two cheap read-only workflows back to back, or run the smallest ADW directly:
 
 ```bash
 just demo                                                    # both, end to end

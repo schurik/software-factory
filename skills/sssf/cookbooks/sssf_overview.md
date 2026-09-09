@@ -35,6 +35,7 @@ adws/
 │   ├── permissions.py           the write boundary: unauthorized changes rolled back, phase dies
 │   ├── worktree.py              a git worktree + branch per run  ·  integration.py  lands it again
 │   ├── quality.py               lint/typecheck/build/test blocks → QualityResult → envelope
+│   ├── preflight.py             what must be true before a run is worth starting → Findings
 │   ├── changes.py               git diff vs a resolved base → ChangeSet → envelope for the documenter
 │   ├── issues.py                fetch a work item, hand it on as an envelope, write the outcome back
 │   ├── pull_requests.py         the same, one step later: read review threads, answer them, resolve them

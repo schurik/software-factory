@@ -13,6 +13,11 @@ A module qualifies by exposing:
     Options           pydantic model for `harness_options`, owned by the harness
     resolve_model     pattern -> whatever the CLI needs; ValueError if unwritable
     reachable         raise unless the CLI can be executed (cached per process)
+    credentials       Findings on whether this agent can authenticate at all —
+                      read by preflight.py, never by agents.py. Optional: a
+                      harness whose CLI carries its own auth may omit it, and
+                      a harness that CAN answer must never read a key's value,
+                      only whether the variable naming it is set.
     validate_agent    harness-specific config problems for one agent, as strings
     new_session_id    a fresh id for this agent's context window
     ToolCallTracker   folds the CLI's event stream into tool_calls.py records

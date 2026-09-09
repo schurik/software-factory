@@ -6,8 +6,9 @@ by construction). `--session-id` creates-or-continues, so running and
 continuing an agent are the same call: same session id = same context window.
 
 One harness behind the names `__init__.py` documents — `NAME`, `Options`,
-`resolve_model`, `reachable`, `validate_agent`, `new_session_id`,
-`ToolCallTracker`, `run` — which is all `agents.py` dispatches on. Its
+`resolve_model`, `reachable`, `credentials`, `validate_agent`,
+`new_session_id`, `ToolCallTracker`, `run` — which is all `agents.py` and
+`preflight.py` dispatch on. Its
 templates (roster, prompts, extensions, env sample) live in the skill under
 `templates/harnesses/pi/`.
 """
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from functools import lru_cache
 from pathlib import Path
@@ -23,7 +25,8 @@ from typing import Callable, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from ..data_types import AgentConfig, AgentRequest, AgentResult, UsageBreakdown
+from ..data_types import (AgentConfig, AgentRequest, AgentResult, Finding,
+                          UsageBreakdown)
 from ..tool_calls import ToolCallLedger
 from ..utils import new_id, operator_env
 
@@ -107,6 +110,81 @@ def resolve_model(pattern: str) -> tuple[str, str]:
         raise ValueError(f"model pattern {pattern!r} not found in pi --list-models — "
                          "authenticate/register it or fix the config")
     raise ValueError(f"model pattern {pattern!r} is ambiguous: {matches}")
+
+
+# Which environment variable carries a provider's key is pi's business, not
+# ours: it comes from ~/.pi/agent/models.json, where a provider block names it.
+# So the name is read from there when it is declared, and only guessed when it
+# is not — and a guess never fails a run, it warns. `PROVIDER_API_KEY` is the
+# convention every provider in the starter roster happens to follow, which is
+# exactly why it is not trustworthy enough to be fatal.
+KEY_NAME = re.compile(r"^[A-Z][A-Z0-9_]*(?:KEY|TOKEN)[A-Z0-9_]*$")
+
+
+def _declared_key_env(provider: str) -> str:
+    """The env var models.json says pi reads for `provider`, or "".
+
+    Deliberately shape-matched rather than field-matched: pi is free to call the
+    field `apiKey`, `apiKeyEnv` or `envVar`, and all three mean the same thing.
+    A value that is an actual secret rather than a variable NAME cannot match —
+    it is not an all-caps identifier ending in KEY or TOKEN — so nothing here
+    can read, log or leak a key. Only names are ever touched.
+    """
+    try:
+        registry = json.loads(Path(MODELS_JSON).read_text())
+    except (OSError, ValueError):
+        return ""
+    block = registry.get("providers", {}).get(provider, {})
+    if not isinstance(block, dict):
+        return ""
+    for field, value in block.items():
+        if not isinstance(value, str):
+            continue
+        if any(word in field.lower() for word in ("key", "token", "env")) \
+                and KEY_NAME.match(value):
+            return value
+    return ""
+
+
+def _guessed_key_env(provider: str) -> str:
+    """The conventional name, for a provider models.json does not describe."""
+    slug = "".join(char if char.isalnum() else "_" for char in provider).upper()
+    return f"{slug}_API_KEY"
+
+
+def credentials(agent: AgentConfig) -> list[Finding]:
+    """Whether the key this agent's model needs is actually set.
+
+    The gap this closes: `resolve_model` proves a model is written correctly and
+    exists in pi's catalog, and nothing proved the credential behind it exists —
+    so a missing key surfaced when that agent ran, which on a five-phase chain is
+    after the planner has been paid for.
+
+    Never reads a key's value. The variable's name is the whole answer.
+    """
+    try:
+        provider, _ = resolve_model(agent.model)
+    except ValueError:
+        return []                    # agents.validate() already reports this one
+    declared = _declared_key_env(provider)
+    name = declared or _guessed_key_env(provider)
+    if os.environ.get(name, "").strip():
+        return [Finding(check=f"credentials: {agent.name}",
+                        detail=f"{provider} → ${name} is set")]
+    if declared:
+        return [Finding(
+            check=f"credentials: {agent.name}", level="fatal",
+            detail=f"agent {agent.name!r} runs {agent.model} on provider {provider!r}, "
+                   f"whose key ${name} is not set",
+            fix=f"add {name}=… to .env (models.json is what names it), or point this "
+                f"agent at a provider you have a key for")]
+    return [Finding(
+        check=f"credentials: {agent.name}", level="warn",
+        detail=f"agent {agent.name!r} runs on provider {provider!r} and ${name} is "
+               f"not set — {MODELS_JSON} does not name the variable pi reads for it, "
+               f"so this is a guess",
+        fix=f"set {name} in .env if that is the right name; if pi reads a different "
+            f"one for {provider!r}, this warning is safe to ignore")]
 
 
 def reachable() -> None:

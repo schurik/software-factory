@@ -173,6 +173,30 @@ class QualityResult(BaseModel):
     artifacts: list[str] = Field(default_factory=list)
 
 
+# ── Preflight (what would fail later, asked now) ─────────────────────────────
+
+FindingLevel = Literal["ok", "warn", "fatal"]
+
+
+class Finding(BaseModel):
+    """One preflight answer: what was asked, how it went, and how to fix it.
+
+    `fix` is not optional decoration. A finding that names a problem without
+    naming the command that ends it just moves the search from mid-chain to
+    startup, and the whole point of asking early is that the answer is
+    actionable while nothing has been spent yet.
+    """
+
+    check: str                      # short id: "git", "credentials: planner"
+    level: FindingLevel = "ok"
+    detail: str = ""                # what is true right now
+    fix: str = ""                   # what to do about it, concretely
+
+    @property
+    def line(self) -> str:
+        return f"{self.check}: {self.detail}" if self.detail else self.check
+
+
 # ── Change capture (git diff, deterministic) ─────────────────────────────────
 
 class ChangeCapture(BaseModel):

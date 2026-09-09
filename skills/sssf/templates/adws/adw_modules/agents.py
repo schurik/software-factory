@@ -10,12 +10,13 @@ disposes.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Optional
 
 import yaml
 
-from . import git_helper, harnesses, permissions, prompts
+from . import git_helper, harnesses, permissions, preflight, prompts
 from .data_types import (AgentCall, AgentConfig, AgentRequest, AgentResult,
                          AgentSession, EnvelopeBase, EventRecord, GateCheck,
                          GateReport, Phase, SSSFConfig, UsageBreakdown)
@@ -81,12 +82,15 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
     TypeScript extension. The shape here — collect every problem, raise one
     SystemExit — is unchanged, and every ADW depends on it.
 
-    A model is checked for being WRITTEN correctly, not for being reachable.
-    Nothing here confirms the provider answers or that its key is set, so a
-    missing credential still surfaces partway into a chain.
+    A model is checked for being WRITTEN correctly AND for having a credential
+    behind it — `preflight.credentials` asks the harness whether the variable
+    its provider needs is set, never what is in it. That check is only fatal
+    when the harness KNOWS the variable's name; a guess warns instead, because
+    refusing to start on a guess is worse than the failure it was guessing at.
+    Nothing here confirms the provider actually answers.
     """
     root = git_helper.main_root()
-    problems = []
+    problems, warnings = [], []
     for name in required:
         try:
             agent = resolve(cfg, name)
@@ -116,8 +120,19 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
             driver.reachable()      # cached per harness; one probe per process
         except RuntimeError as e:
             problems.append(f"agent {name!r}: {e}")
+        # The credential behind the model. Asked here rather than in
+        # session.ensure() because this is the one place that knows WHICH
+        # agents this chain will actually spawn — a key missing for an agent
+        # nobody calls is not this run's problem.
+        for finding in preflight.credentials(agent):
+            if finding.level == "fatal":
+                problems.append(f"{finding.detail}\n  fix: {finding.fix}")
+            elif finding.level == "warn":
+                warnings.append(finding)
     if problems:
         raise SystemExit("config validation failed:\n- " + "\n- ".join(problems))
+    for finding in warnings:
+        print(f"  ~ {finding.detail}\n    {finding.fix}", file=sys.stderr)
 
 
 # ── execution ────────────────────────────────────────────────────────────────
