@@ -24,6 +24,7 @@ from typing import Callable, Optional
 from pydantic import BaseModel, ConfigDict
 
 from ..data_types import AgentConfig, AgentRequest, AgentResult, UsageBreakdown
+from ..limits import AgentTimeout, Deadline
 from ..tool_calls import ToolCallLedger
 from ..utils import new_id, operator_env
 
@@ -285,9 +286,14 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
                                env=operator_env())
     if on_spawn:
         on_spawn(process.pid)
+    # A hung pi emits nothing, and every read below would block on nothing
+    # forever — the failure the DEVNULL comment above describes, arriving by a
+    # route stdin cannot fix. The deadline is what ends it: it owns the clock
+    # on this side of the pipe, so no read waits on the child's goodwill.
+    deadline = Deadline(process, request.timeout_seconds)
     with raw_path.open("a") as raw:
         assert process.stdout is not None
-        for line in process.stdout:
+        for line in deadline.lines():
             raw.write(line)
             raw.flush()                      # events land on disk as they happen
             line = line.strip()
@@ -316,10 +322,18 @@ def run(request: AgentRequest, on_event: Optional[Callable[[dict], None]] = None
             if on_event:
                 on_event(event)
 
-    stderr = process.stderr.read() if process.stderr else ""
-    result.returncode = process.wait()
+    stderr = deadline.drain(process.stderr)
+    result.returncode = deadline.wait()
     if on_exit:
         on_exit(process.pid)
+    if deadline.fired:
+        # Checked before the returncode: a terminated child exits non-zero, so
+        # without this a timeout would read as an ordinary "pi exited -15" and
+        # say nothing about the factory having ended it. Whatever the agent did
+        # emit is already in raw_output.jsonl, and the partial result rides
+        # along on the exception: pi reports usage per message, so a turn that
+        # hung after real work has already been billed for it.
+        raise AgentTimeout(deadline.reason(NAME, request.raw_output_path), result)
     if result.returncode != 0 and not result.text:
         raise RuntimeError(f"pi exited {result.returncode}: {stderr.strip()[-800:]}")
     return result

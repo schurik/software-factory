@@ -455,6 +455,22 @@ class Tracer:
         )
         self.processes_end_all(adw_id)   # nothing of this run is alive any more
 
+    def session_usage(self, adw_id: str) -> tuple[int, float]:
+        """(tokens, cost) this session has already spent. (0, 0.0) when new.
+
+        The read side of `session_add_usage`, and the reason a spend ceiling
+        can mean anything: a session spans processes — a chain, then `just
+        integrate`, then a review run on the pull request it opened — and a
+        budget that each process seeded at zero would bound one process rather
+        than the work. Same argument as `max_phase_seq` and
+        `session_provenance`: what the session already knows, read back rather
+        than assumed.
+        """
+        row = self.conn.execute(
+            "SELECT total_tokens, total_cost FROM sessions WHERE adw_id=?",
+            (adw_id,)).fetchone()
+        return (row[0] or 0, row[1] or 0.0) if row else (0, 0.0)
+
     def session_add_usage(self, adw_id: str, tokens: int, cost: float) -> None:
         self.conn.execute(
             "UPDATE sessions SET total_tokens=total_tokens+?, total_cost=total_cost+? WHERE adw_id=?",

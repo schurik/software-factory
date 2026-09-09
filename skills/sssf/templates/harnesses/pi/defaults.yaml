@@ -19,6 +19,14 @@ defaults:
   thinking: medium                 # off | minimal | low | medium | high | xhigh | max
                                    # pi honors this when the model is registered with
                                    # `reasoning: true`; on other models it is inert.
+  # Wall clock for ONE agent turn — a send, a JSON re-prompt, a gate correction,
+  # each measured on its own. A harness call is a subprocess plus a blocking read
+  # of its output, so an agent that stops emitting blocks the run forever: no
+  # events, no tokens, nothing to notice, until somebody runs `just kill`. This is
+  # what ends that — SIGTERM, then SIGKILL, then the phase fails with a named
+  # error. Generous on purpose; real work legitimately runs for minutes. Any agent
+  # may set its own, and 0 disables it.
+  timeout_seconds: 1800
   harness_engineering: []          # pi: extension file paths, loaded with `pi -e <file.ts>`
   # Roster-wide allowlist; any agent may override with its own list.
   # NOTE: --tools filters extension and custom tools too, not just builtins. An agent

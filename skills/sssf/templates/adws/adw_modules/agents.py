@@ -15,7 +15,7 @@ from typing import Optional
 
 import yaml
 
-from . import git_helper, harnesses, permissions, prompts
+from . import git_helper, harnesses, limits, permissions, prompts
 from .data_types import (AgentCall, AgentConfig, AgentRequest, AgentResult,
                          AgentSession, EnvelopeBase, EventRecord, GateCheck,
                          GateReport, Phase, SSSFConfig, UsageBreakdown)
@@ -46,7 +46,8 @@ def load_config(path: str = "adws/adw_sssf_config/sssf.config.yaml") -> SSSFConf
     raw = yaml.safe_load(Path(path).read_text()) or {}
     defaults = raw.get("defaults", {}) or {}
     for agent in raw.get("agents", []) or []:
-        for key in ("harness", "model", "thinking", "color", "tools", "writes"):
+        for key in ("harness", "model", "thinking", "color", "tools", "writes",
+                    "timeout_seconds"):
             if key in defaults:
                 agent.setdefault(key, defaults[key])
         agent.setdefault("harness_engineering", defaults.get("harness_engineering", []))
@@ -112,6 +113,12 @@ def validate(cfg: SSSFConfig, required: list[str]) -> None:
             problems.append(f"agent {name!r}: {e}")
         problems += [f"agent {name!r}: {problem}"
                      for problem in driver.validate_agent(agent)]
+        # Harness-agnostic, so it is checked here rather than in a driver. A
+        # negative wall clock is a typo that would otherwise read as `0` — no
+        # limit — which is the opposite of what whoever typed it meant.
+        if agent.timeout_seconds < 0:
+            problems.append(f"agent {name!r}: timeout_seconds must be >= 0 "
+                            f"(0 disables it), got {agent.timeout_seconds}")
         try:
             driver.reachable()      # cached per harness; one probe per process
         except RuntimeError as e:
@@ -163,6 +170,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
                                           "harness": agent.harness,
                                           "purpose": agent.purpose,
                                           "tools": agent.tools,  # None = all tools
+                                          "timeout_seconds": agent.timeout_seconds,
                                           "harness_engineering": agent.harness_engineering}))
     run.console.agent_started(agent.name, agent.model, session.session_id)
 
@@ -175,6 +183,11 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
 
     def send(prompt_text: str) -> AgentResult:
         nonlocal latest
+        # Asked BEFORE the turn, because spend is only known after one is paid
+        # for: a session that has hit its ceiling keeps the envelope it already
+        # bought and dies here instead, rather than mid-turn with nothing to
+        # show for the money. limits.py has the full argument.
+        _refuse_if_over_budget(run, phase, agent)
         request = AgentRequest(
             prompt=prompt_text,
             system_prompt=system_text,
@@ -192,14 +205,25 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
             native_session_id=session.native_session_id,
             resume=session.started,
             options=agent.harness_options,
+            timeout_seconds=agent.timeout_seconds,
         )
-        result = driver.run(
-            request,
-            on_event=forward,
-            on_spawn=lambda pid: run.tracer.process_start(
-                run.adw_id, "agent", agent.name, pid,
-                f"{agent.harness} {agent.name} {agent.model}"),
-            on_exit=lambda pid: run.tracer.process_end(run.adw_id, pid))
+        try:
+            result = driver.run(
+                request,
+                on_event=forward,
+                on_spawn=lambda pid: run.tracer.process_start(
+                    run.adw_id, "agent", agent.name, pid,
+                    f"{agent.harness} {agent.name} {agent.model}"),
+                on_exit=lambda pid: run.tracer.process_end(run.adw_id, pid))
+        except limits.AgentTimeout as expiry:
+            # The turn produced no envelope, but it was not free. Bank what it
+            # did spend before failing the phase, or the next run in this
+            # session inherits a ceiling that never saw the money go.
+            if expiry.result:
+                run.add_usage(expiry.result.tokens, expiry.result.cost)
+                spent.merge(expiry.result.usage)
+            _record_limit(run, phase, agent, "agent_timeout", str(expiry))
+            raise
         run.add_usage(result.tokens, result.cost)
         spent.merge(result.usage)
         latest = result
@@ -295,6 +319,39 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
 
 
 # ── internals ────────────────────────────────────────────────────────────────
+
+def _refuse_if_over_budget(run, phase: Phase, agent: AgentConfig) -> None:
+    """Stop the session before it pays for another turn. No-op with no ceiling.
+
+    Raises rather than degrading — there is no partial version of an agent
+    turn, and a chain that quietly skipped one would hand the next agent an
+    envelope nobody produced. The phase fails, the run aborts, and the worktree
+    is kept: the work bought so far is on its branch, and `just integrate`
+    still lands it.
+    """
+    reason = run.overrun()
+    if not reason:
+        return
+    _record_limit(run, phase, agent, "budget_exceeded", reason)
+    raise limits.BudgetExceeded(f"{agent.name} not sent: {reason}")
+
+
+def _record_limit(run, phase: Phase, agent: AgentConfig, kind: str, reason: str) -> None:
+    """One error event per limit that fired, named for the limit.
+
+    The phase records its own failure either way (runner.py), but only as the
+    exception's text. A dedicated event is what makes "which agents time out"
+    and "how often does a ceiling stop a run" answerable from the trace, the
+    way `permission_breach` already is for the write boundary.
+    """
+    run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
+                                 type="error", name=kind,
+                                 payload={"agent": agent.name, "reason": reason,
+                                          "timeout_seconds": agent.timeout_seconds,
+                                          "max_cost_usd": run.cfg.budget.max_cost_usd,
+                                          "max_tokens": run.cfg.budget.max_tokens}))
+    run.console.note(f"{kind}: {reason}")
+
 
 def _as_report(result) -> GateReport:
     """Accept a GateReport, or a legacy gate that returned a violations list."""

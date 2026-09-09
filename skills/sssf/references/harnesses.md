@@ -96,3 +96,12 @@ Two things worth getting right the first time:
   buffers to completion turns the live UI into a progress bar with one step. Use
   `stdin=DEVNULL`; a non-interactive CLI that inherits a terminal can block forever
   waiting for input that never comes.
+- **...and it must arm `request.timeout_seconds`.** That streaming read is a block on a
+  child that may never write again, and it is the one failure the factory cannot see:
+  no events, no tokens, no output, a phase that started and never ended. Wrap the read
+  AND the `wait()` in `limits.Deadline(process, request.timeout_seconds)` and raise
+  `limits.AgentTimeout(deadline.reason(NAME, request.raw_output_path), result)` when
+  `deadline.fired` — ahead of the returncode check, or a terminated child reads as an
+  ordinary crash. Pass the partial `AgentResult`: a hung turn was still paid for, and
+  `agents.execute` banks its usage against the session's budget. Both harnesses do this
+  identically; copy either one.

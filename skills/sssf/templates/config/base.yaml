@@ -6,6 +6,23 @@
 # `make_config.py`) drop it between the chosen harness's `defaults:` block and
 # its `agents:` roster — one generated file, three source files.
 
+# What one SESSION may spend, across every process that joins it — a chain,
+# then `just integrate`, then a review run answering comments on the pull
+# request it opened are three processes and one budget. A run seeds itself from
+# what the trace says the session already spent, so re-entry cannot reset it.
+#
+# Both OFF by default (0 = no ceiling), because a ceiling that fires halfway
+# through a chain the engineer is watching is worse than no ceiling at all.
+# Set them where nobody is watching: an issue watcher, cron, an overnight loop.
+#
+# A ceiling stops the NEXT agent turn, never the one in flight — spend is only
+# known once a turn is paid for, so refusing mid-turn would throw away work
+# already bought. The phase fails, the run aborts, the worktree is kept, and
+# everything committed so far is still on the branch for `just integrate`.
+budget:
+  max_cost_usd: 0                  # dollars, whole session; 0 = no ceiling
+  max_tokens: 0                    # tokens, whole session; 0 = no ceiling
+
 observability:
   db: adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
   poll_ms: 500                     # visualizer live-poll cadence

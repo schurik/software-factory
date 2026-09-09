@@ -18,7 +18,7 @@ import json
 import time
 from contextlib import contextmanager
 
-from . import agents, worktree
+from . import agents, limits, worktree
 from .console import Console
 from .data_types import (AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams,
                          RunSpec)
@@ -53,8 +53,14 @@ class Run:
         self.console = Console(tracer, spec.adw_id)
         self.engineer = spec.engineer
         self.phases: list[Phase] = []
-        self.tokens = 0
+        self.tokens = 0                 # THIS process — what the banner reports
         self.cost = 0.0
+        # ...and what the SESSION had already spent before this process opened.
+        # A joined run (`--adw-id`, `just integrate`, a pr-review re-entry) is
+        # the same work continuing, so the budget counts from here while the
+        # banner keeps reporting the run in front of the engineer. Read before
+        # the first phase opens; a new session has no row and answers (0, 0.0).
+        self._prior_tokens, self._prior_cost = tracer.session_usage(spec.adw_id)
         self._seq = tracer.max_phase_seq(spec.adw_id)  # a joined run continues the sequence
         self.workspace = spec.workspace
         self.repo_root = spec.workspace.repo_root      # the tree agents work in
@@ -156,6 +162,17 @@ class Run:
         self.tokens += tokens
         self.cost += cost
         self.tracer.session_add_usage(self.adw_id, tokens, cost)
+
+    def overrun(self) -> str:
+        """Why this session may spend no more, or "" while it still may.
+
+        Deliberately a question and not an enforcement point: adding usage must
+        not raise, or a phase would die between paying for a turn and recording
+        it. `agents.execute` asks this before each send — see limits.py on why
+        a ceiling stops the next turn rather than the one in flight.
+        """
+        return limits.overrun(self._prior_tokens + self.tokens,
+                              self._prior_cost + self.cost, self.cfg.budget)
 
     # ── the phase primitive ─────────────────────────────────────────────────
     @contextmanager

@@ -17,6 +17,13 @@ from pydantic import BaseModel, Field, ValidationInfo, field_validator
 PhaseKind = Literal["engineer", "agent", "code"]
 PhaseStatus = Literal["queued", "running", "success", "fail"]
 
+# Wall clock for one agent turn, unless the roster says otherwise. Generous on
+# purpose — a builder working a real change legitimately runs for many minutes,
+# and a limit that fires on honest work would be turned off within a day. What
+# it catches is the other shape: a turn that emits nothing at all, forever.
+# `0` anywhere this is used means no limit. See adw_modules/limits.py.
+DEFAULT_AGENT_TIMEOUT_SECONDS = 1800
+
 
 # ── Phases ────────────────────────────────────────────────────────────────────
 
@@ -381,6 +388,12 @@ class AgentConfig(BaseModel):
     # validation and again when it builds the command line — so a harness owns
     # its own options without data_types.py having to know they exist.
     harness_options: dict[str, Any] = Field(default_factory=dict)
+    # Wall clock for ONE turn of this agent — a send, a JSON re-prompt, a gate
+    # correction — each measured on its own. 0 disables it. Inherited from
+    # `defaults.timeout_seconds` like every other per-agent setting; an agent
+    # whose work is genuinely long (a builder on a big suite) raises its own.
+    # Not a spend limit: that is `budget:`, and it is per session.
+    timeout_seconds: int = DEFAULT_AGENT_TIMEOUT_SECONDS
 
 
 class ConfigDefaults(BaseModel):
@@ -388,6 +401,10 @@ class ConfigDefaults(BaseModel):
     model: str = "google/gemini-3.6-flash"
     thinking: str = "medium"
     color: str = ""
+    # Roster-wide wall clock per agent turn; any agent may override with its
+    # own, and `0` restores the unbounded behaviour every version before this
+    # one had.
+    timeout_seconds: int = DEFAULT_AGENT_TIMEOUT_SECONDS
     harness_engineering: list[str] = Field(default_factory=list)
     tools: Optional[list[str]] = None    # roster-wide allowlist; None = all tools usable
     # Keyed BY HARNESS NAME here, because a mixed roster needs a block per
@@ -450,6 +467,29 @@ class WorktreeConfig(BaseModel):
     # and so does any worktree with uncommitted work in it, whatever the outcome.
     keep_on_success: bool = False
     integration: IntegrationConfig = Field(default_factory=IntegrationConfig)
+
+
+class BudgetConfig(BaseModel):
+    """What one SESSION may spend, across every process that joins it.
+
+    Per session and not per process, because `--adw-id` re-entry is normal: a
+    chain, then `just integrate`, then a review run answering comments on the
+    pull request it opened are three processes against one adw_id, and a
+    ceiling that reset with each of them would bound nothing. `Run` seeds
+    itself from `sessions.total_tokens` / `total_cost`, so a joined run starts
+    where the last one stopped.
+
+    Both default to 0 — no ceiling, exactly as every version before this one
+    behaved. A repository that runs the factory unattended (an issue watcher,
+    cron) is the one that wants them set.
+
+    Distinct from `harness_options.claude_code.max_budget_usd`, which is one
+    harness's per-CALL ceiling enforced by the CLI itself. This one is
+    harness-agnostic, cumulative, and the factory's own.
+    """
+
+    max_cost_usd: float = 0.0       # 0 = no ceiling
+    max_tokens: int = 0             # 0 = no ceiling
 
 
 class ObservabilityConfig(BaseModel):
@@ -568,6 +608,7 @@ class PullRequestsConfig(BaseModel):
 
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
+    budget: BudgetConfig = Field(default_factory=BudgetConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     worktree: WorktreeConfig = Field(default_factory=WorktreeConfig)
     issues: IssuesConfig = Field(default_factory=IssuesConfig)
@@ -885,6 +926,12 @@ class AgentRequest(BaseModel):
     # The agent's `harness_options`, verbatim. Parsed by the harness that reads
     # them (`Options(**request.options)`), never here.
     options: dict[str, Any] = Field(default_factory=dict)
+    # Wall clock for THIS turn. Every harness arms `limits.Deadline` with it
+    # around its read loop and raises `limits.AgentTimeout` when it fires, so a
+    # hung CLI fails its phase instead of blocking the run forever. 0 = no
+    # limit. It is a field rather than a harness option because a harness that
+    # can hang is not a harness-specific property.
+    timeout_seconds: int = 0
 
 
 class AgentSession(BaseModel):

@@ -23,7 +23,7 @@ Location comes from `observability.db` in `sssf.config.yaml`, default `adws/adw_
 | `log` | an explicit `ph.log(...)` from the ADW script |
 | `agent_end` | the agent's run completes; envelope parsed or not — payload carries `cost`, `usage` (the per-component breakdown), `context_tokens`, `context_window` |
 | `phase_end` | the block exits; carries the resolved status |
-| `error` | a raise inside a phase block |
+| `error` | a raise inside a phase block. `name` is the phase, except where a specific guard fired first and named itself: `permission_breach` (a write outside the agent's `writes:`), `agent_timeout` (the turn ran past `defaults.timeout_seconds` and its child was killed), `budget_exceeded` (the session hit a `budget:` ceiling, so the turn was never sent), `not_accepted` (every phase passed but `run.finish(accepted=False)`). Each carries the offending agent and the limit in its payload |
 
 `parent_id` nests spans, so an agent phase expands into its tool-call spans in the UI.
 

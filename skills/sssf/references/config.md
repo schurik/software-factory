@@ -15,6 +15,7 @@ defaults:
   thinking: medium
   harness_engineering: []
   tools: [read, bash, edit, write, grep, find, ls]
+  timeout_seconds: 1800                 # wall clock per agent turn; 0 = no limit
   data_dir: adws/adw_data
   harness_options:                      # keyed BY HARNESS; an agent inherits only its own
     pi: {}
@@ -26,6 +27,10 @@ defaults:
       permission_mode: bypassPermissions
       add_dirs: []
       max_budget_usd: 0
+
+budget:                                 # per SESSION, not per process; 0 = no ceiling
+  max_cost_usd: 0
+  max_tokens: 0
 
 observability:
   db: adws/adw_data/sssf.db
@@ -105,6 +110,7 @@ One thing a mixed roster does NOT get for free: **prompts are stamped per harnes
 | `harness_engineering` | list[string] | Coding-agent extensions, and **not interchangeable between harnesses**. Pi: TypeScript extension paths (`-e`). Claude Code: `mcp:<file.json>`, `agents:<json-or-file>`, `plugin:<dir-or-zip>`. |
 | `harness_options` | map | Per-harness settings, **keyed by harness name**: `{pi: {...}, claude_code: {...}}`. An agent inherits only the block for the harness it runs on. The shape belongs to the harness module (`harnesses.<name>.Options`), which rejects unknown keys — see [Claude Code determinism](#claude-code-determinism) for the one harness that has any. |
 | `tools` | list[string] | Roster-wide tool allowlist. Every agent that omits its own `tools` inherits this. Unset = all tools usable. |
+| `timeout_seconds` | int | Wall clock for **one agent turn** — a send, a JSON re-prompt, a gate correction, each measured separately. Default `1800`; `0` disables it. Any agent may override. See [Limits](#limits--what-a-run-may-spend-and-how-long-a-turn-may-take). |
 | `protected_files` | list[string] | Paths **no** agent may modify unless it names them in its own `writes`. Default: `adws/adw_modules/`, `adws/adw_sssf_config/`, `adws/adw_*.py` — an agent must not be able to edit the machinery that decides whether its work passed. |
 | `data_dir` | path | Runtime home. Sessions land at `{data_dir}/sessions/{adw_id}/{agent_name}/`. Default `adws/adw_data`. **Resolved against the MAIN checkout, never against a run's worktree** — see [Worktree per run](#worktree-per-run). |
 
@@ -114,6 +120,15 @@ One thing a mixed roster does NOT get for free: **prompts are stamped per harnes
 |---|---|---|
 | `db` | path | SQLite trace db. `tracer.py` writes it directly; the visualizer polls it. Default `adws/adw_data/sssf.db`. |
 | `poll_ms` | int | Visualizer live-poll cadence in ms. History uses the same queries, lazy-paged. Default `500`. |
+
+### `budget`
+
+What one **session** may spend, across every process that joins it. Both default to `0` — no ceiling, which is how every version before this one behaved. See [Limits](#limits--what-a-run-may-spend-and-how-long-a-turn-may-take).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `max_cost_usd` | float | Dollar ceiling for the whole session. `0` = none. |
+| `max_tokens` | int | Token ceiling for the whole session. `0` = none. |
 
 ### `worktree`
 
@@ -257,7 +272,7 @@ A kind with no row has **never** been started in this repo, which is a different
 | `prompt_engineering.system` | yes | Path to the system prompt — who the agent is, its single purpose, its output contract. |
 | `prompt_engineering.user` | yes | Path to the default user prompt — the task template with `{{prompt}}`, `{{previous_envelope}}`, `{{context_handoff_dir}}`. |
 | `color` | no | Hex swatch (`"#a78bfa"`) for this agent's lane in the visualizer. Travels config → `agent_sessions.color` → `/api/sessions/:adw_id`, and rides the `agent_start` event so a lane is colored while the agent is still running. Unset = the UI's fallback palette. |
-| `harness`, `model`, `thinking`, `color`, `harness_engineering` | no | Override the corresponding `defaults` key. |
+| `harness`, `model`, `thinking`, `color`, `harness_engineering`, `timeout_seconds` | no | Override the corresponding `defaults` key. |
 | `harness_options` | no | This agent's settings for **its own** harness — a flat block, not keyed by name. Merged **key by key** over `defaults.harness_options[<this agent's harness>]`, so overriding one setting never drops the rest. An unknown key fails validation rather than doing nothing quietly. |
 | `tools` | no | Allowlist. **Omitting the key means all tools usable.** A capability list, not a boundary — see `writes`. |
 | `writes` | no | What this agent may modify **in the repo**, enforced after every call. Omitted = unrestricted (still barred from `protected_files`). `[]` = no repo writes at all. A list = only those paths: a trailing `/` is a directory prefix, `*` matches within one path segment, `**` crosses segments, anything else is an exact path. Naming a `protected_files` path here is what unlocks it. **The session runtime under `data_dir` is always writable** — `writes: []` means read-only with respect to the repo, not unable to write its own report. |
@@ -281,11 +296,27 @@ Output types are deliberately absent: config defines who an agent *is*; the ADW 
 
 Worktrees are skipped — both roots become the same directory, and everything behaves as it did in v1 — when `enabled: false`, when the repository is not a git repo, or when it has no commit to branch from.
 
+## Limits — what a run may spend, and how long a turn may take
+
+`writes:`, `protected_files` and the worktree bound what an agent may **change**. These two bound what it may **spend** and how long it may **sit there** — the failures nobody is watching for, because both are silent.
+
+**`defaults.timeout_seconds` — the wall clock, per agent turn.** A harness call is a subprocess plus a blocking read of its NDJSON output; an agent that stops emitting produces no events, no tokens and no output, so the read blocks forever and the trace shows a phase that started and never ended. The cure was an engineer noticing and running `just kill`. On expiry the child gets SIGTERM, then SIGKILL after five seconds, and the phase fails with `agent_timeout` in the trace — carrying whatever partial spend the harness had already folded out of the stream, so a hung turn is still counted against the budget. Each turn is measured on its own: a send, a JSON re-prompt and each gate correction get the full clock, because each is a fresh piece of work.
+
+**`budget.max_cost_usd` / `budget.max_tokens` — the ceiling, per session.** Per *session*, not per process: `--adw-id` re-entry is normal — a chain, then `just integrate`, then a review run answering comments on the pull request it opened — and a ceiling that reset with each process would bound nothing. A run reads `sessions.total_tokens` / `total_cost` back from the trace at startup and counts from there.
+
+**A ceiling stops the next turn, never the one in flight.** Spend is only known once a turn has been paid for, so refusing mid-turn would discard work already bought. `agents.execute` asks before each send instead: an over-budget session finishes the turn it is in, keeps its envelope, and dies at the following one with `budget_exceeded`. The phase fails, the run aborts, and — as with any failed run — the worktree is kept and everything committed so far is on the branch, so `just integrate <adw_id>` still lands it.
+
+Both are off-switchable with `0`, and the budget ships off. A ceiling firing halfway through a chain an engineer is watching is worse than no ceiling; set it where nobody is watching — the issue watcher, cron, an overnight loop.
+
+Not to be confused with `harness_options.claude_code.max_budget_usd`, which is one harness's per-**call** ceiling, enforced by that CLI. The `budget:` block is the factory's own: harness-agnostic, cumulative, and it fails the phase rather than trimming the turn.
+
 ## Defaults merging
 
 `agents.py` merges each entry **over** `defaults`, key by key — including `harness_options`, whose inherited half is looked up by the agent's harness name. An entry states only what differs; anything unset inherits. `agents.validate(cfg, REQUIRED_AGENTS)` then confirms every name an ADW declares exists, has both prompt files present on disk, and — **asking the agent's own harness, not one hard-coded rule** — that its model, tools, thinking level, `harness_options` and `harness_engineering` entries are ones that harness can actually honor, and that its CLI is on PATH. Any miss fails the run immediately, with every problem listed at once: **no agent is ever spawned against a half-valid config.**
 
-Validation still checks that a model is *written* correctly, not that its provider answers or that its key is set. A missing credential surfaces when that agent runs, not at startup.
+Validation still checks that a model is *written* correctly, not that its provider answers or that its key is set. A missing credential surfaces when that agent runs, not at startup. It does reject a negative `timeout_seconds`, which would otherwise read as `0` — no limit — and mean the opposite of what was typed.
+
+`budget:` is deliberately **not** part of this merge: it is one ceiling for the session, not a per-agent setting, so it sits at the top level beside `worktree` and `observability`.
 
 ## Harnesses
 
