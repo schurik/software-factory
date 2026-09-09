@@ -1,8 +1,17 @@
+import subprocess
+
 import pytest
 
 from adw_modules import branches
 from adw_modules.data_types import (BranchRequest, IssueBrief, IssueRef, LinkedBranch,
                                     SSSFConfig)
+
+
+def _git(cwd, *args):
+    completed = subprocess.run(["git", *args], cwd=str(cwd),
+                               capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout.strip()
 
 
 @pytest.fixture
@@ -124,6 +133,89 @@ def test_worktrees_disabled_skips_the_whole_thing(cfg, forge, tmp_path):
 
     assert plan.branch == ""
     assert forge["develop_calls"] == []
+
+
+def test_a_joining_run_recovers_an_existing_slugged_branch_via_git(cfg, forge, tmp_path):
+    """The recompute bug re-entered through a different door: the metadata file
+    is gitignored and local-only, so a fresh clone, a `git clean -fdx`, or a
+    second checkout of the same repository loses it while the branch — a real
+    git ref — survives. A joining run (no issue, no prompt: `adw_integrate`,
+    `adw_pr_review`) must land on that branch, not fall through to the bare
+    <prefix><adw_id> and cut a second one from the base, orphaning the run's
+    commits on the first.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
+    (repo / "README.md").write_text("hello\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "first")
+    _git(repo, "branch", "sssf/a1b2c3d4-42-the-original-name")
+
+    plan = branches.plan(cfg, BranchRequest(main_root=repo, adw_id="a1b2c3d4"))
+
+    assert plan.branch == "sssf/a1b2c3d4-42-the-original-name"
+    assert forge["develop_calls"] == []
+
+
+def test_a_joining_run_with_two_matching_branches_falls_through(cfg, forge, tmp_path):
+    """Two matches is ambiguous — "which one?" has no good answer — so this
+    stays conservative and falls through to today's behaviour (the bare name)
+    rather than guessing.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
+    (repo / "README.md").write_text("hello\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "first")
+    _git(repo, "branch", "sssf/a1b2c3d4-42-first-name")
+    _git(repo, "branch", "sssf/a1b2c3d4-99-second-name")
+
+    plan = branches.plan(cfg, BranchRequest(main_root=repo, adw_id="a1b2c3d4"))
+
+    assert plan.branch == "sssf/a1b2c3d4"
+
+
+def test_the_forges_branch_name_wins_when_it_still_decodes(cfg, forge, tmp_path):
+    """The assertion the existing fixture cannot make: `forge`'s stub branch is
+    IDENTICAL to the locally computed name by construction (the fixture's own
+    comment says so), so `result.branch = linked.branch` passes even with that
+    line deleted. Make the forge return something DIFFERENT but still
+    decodable, and assert its answer — not the locally computed one — wins.
+    """
+    forge["linked"] = LinkedBranch(ok=True, created=True, head="abc1234",
+                                   branch="sssf/a1b2c3d4-42-a-sanitised-title")
+
+    plan = branches.plan(cfg, BranchRequest(
+        main_root=tmp_path, adw_id="a1b2c3d4", issue=IssueRef(number=42)))
+
+    assert plan.branch == "sssf/a1b2c3d4-42-a-sanitised-title"
+    assert plan.linked is True
+    assert plan.base_commit == "abc1234"
+
+
+def test_an_undecodable_forge_branch_falls_back_instead_of_being_adopted(cfg, forge,
+                                                                         tmp_path):
+    """If the forge ever answered with a name that does not decode to THIS
+    adw_id, adopting it blindly would make `session_of` return "" for it
+    forever — and `adw_pr_review` refuses to run on a pull request whose head
+    branch it cannot decode, on the one path where a human already asked for a
+    review. The guard must route this down the same fallback as a fetch
+    failure, not adopt it.
+    """
+    forge["linked"] = LinkedBranch(ok=True, created=True, head="abc1234",
+                                   branch="sssf/deadbeef-42-somebody-elses-run")
+
+    plan = branches.plan(cfg, BranchRequest(
+        main_root=tmp_path, adw_id="a1b2c3d4", issue=IssueRef(number=42)))
+
+    assert plan.branch == "sssf/a1b2c3d4"
+    assert plan.linked is False
 
 
 def test_an_unborn_head_still_produces_a_usable_plan(cfg, forge, tmp_path, monkeypatch):

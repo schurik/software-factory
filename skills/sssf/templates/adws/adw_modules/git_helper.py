@@ -87,6 +87,21 @@ def branch_exists(cwd: Pathish, name: str) -> bool:
                     f"refs/heads/{name}").returncode == 0
 
 
+def branches_matching(cwd: Pathish, glob: str) -> list[str]:
+    """Local branch names matching `glob` (git's own `--list` globbing).
+
+    A QUESTION, so it never raises: `branches.plan()` uses this as a last
+    resort when a joining run (`adw_integrate`, `adw_pr_review`) has only an
+    adw_id and no recorded metadata file to read the branch back from — the
+    metadata is gitignored and local-only, so a fresh clone or a
+    `git clean -fdx` loses it while the branch itself, being a git ref, survives.
+    Asking git what branches this session already has beats inventing a bare
+    `<prefix><adw_id>` that no longer matches the real, slugged one.
+    """
+    out = _ask_git(cwd, "branch", "--list", glob, "--format=%(refname:short)").stdout
+    return [line for line in out.splitlines() if line]
+
+
 def commit_all(cwd: Pathish, message: str) -> str:
     """Stage the working tree and commit it. Returns the new short sha."""
     if not is_repo(cwd):

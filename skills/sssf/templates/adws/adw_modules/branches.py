@@ -107,6 +107,26 @@ def plan(cfg: SSSFConfig, request: BranchRequest) -> BranchPlan:
         result.branch = recorded
         return result
 
+    # No record, and no way to re-derive a slug we did not choose. The metadata
+    # file above is gitignored and local-only, so a fresh clone, a
+    # `git clean -fdx`, or a second checkout of the same repository loses it
+    # while the branch — a real git ref — survives. Ask git what this session
+    # already has before inventing a bare name it will not match: that mismatch
+    # is exactly the bug this phase exists to fix, re-entered through a
+    # different door, and it bites hardest in `adw_pr_review`, which has no
+    # integration phase to notice its commits landed somewhere nobody is
+    # looking. Restricted to a genuinely JOINING run — no issue, no prompt —
+    # because a fresh run always has a name to build and must never adopt a
+    # stray branch instead. Exactly one match is required: two is ambiguous,
+    # and falling through to the invented name below is the conservative
+    # answer to "which one?".
+    if request.issue is None and not request.prompt:
+        existing = git_helper.branches_matching(
+            request.main_root, f"{config.branch_prefix}{request.adw_id}*")
+        if len(existing) == 1:
+            result.branch = existing[0]
+            return result
+
     slug = ""
     if request.issue is not None:
         brief = issues.peek(request.main_root, cfg.issues, request.issue)
@@ -127,15 +147,24 @@ def plan(cfg: SSSFConfig, request: BranchRequest) -> BranchPlan:
         ref=request.issue, branch=result.branch,
         base_ref=_base_ref_of(request.main_root, config), remote=remote))
     result.notes.extend(linked.notes)
-    if linked.ok:
+    # `_branch_of` deliberately trusts whatever the forge printed — it sanitises
+    # names, so the string it hands back is not always the one asked for. But
+    # trusting it BLINDLY means a name that does not decode to this adw_id would
+    # still be adopted, and `session_of` would then answer "" for it forever:
+    # `adw_pr_review` refuses to run when it cannot decode a pull request's head
+    # branch, on the one path where a human has already asked for a review. So
+    # the forge's name wins only when it still says who made it.
+    if linked.ok and session_of(linked.branch, config.branch_prefix) == request.adw_id:
         result.branch = linked.branch
         result.base_commit = linked.head
         result.linked = True
     elif linked.created:
-        # The remote branch EXISTS and we cannot use it. Taking its name for a
-        # local branch cut from a different base would diverge from it, and the
-        # divergence would surface as a rejected push at integrate time. Fall all
-        # the way back to the name nothing else can be holding.
+        # The remote branch EXISTS and we cannot use it — either because the
+        # fetch failed, or because the forge handed back a name we cannot
+        # decode. Taking its name for a local branch cut from a different base
+        # would diverge from it, and the divergence would surface as a rejected
+        # push at integrate time. Fall all the way back to the name nothing
+        # else can be holding.
         result.branch = branch_for(config, request.adw_id)
         result.notes.append(f"falling back to {result.branch} so the local branch "
                             f"cannot diverge from the one at the forge")

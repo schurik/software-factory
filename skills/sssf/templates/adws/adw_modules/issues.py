@@ -65,9 +65,28 @@ _REMOTE_PATTERNS = (
 
 
 def _run(argv: list[str], cwd) -> subprocess.CompletedProcess:
-    """Run a forge CLI command. Never raises — a rejected call is data."""
-    return subprocess.run(argv, cwd=str(cwd), env=operator_env(),
-                          capture_output=True, text=True)
+    """Run a forge CLI command. NEVER RAISES — a rejected call is data, and so is
+    a CLI that is not even installed.
+
+    `subprocess.run` raises `FileNotFoundError` (an `OSError`) when `argv[0]` is
+    not on PATH, which is not a hypothetical: `develop_command` and
+    `fetch_command` are config an operator can point at a typo, and `peek()`
+    runs BEFORE the worktree exists, before a single phase has opened, before
+    the Tracer that would otherwise catch the exception and write a trace row
+    for it. A raise here does not fail one phase — it kills the interpreter over
+    a branch name, with no trace, no session row and no console line to say why.
+    So it is caught here, once, for every caller (`peek`, `develop`, `comment`,
+    `set_state`) rather than at each call site.
+
+    127 is the shell's own convention for "command not found" — the caller
+    reads `completed.returncode` exactly as it would for a real invocation that
+    exited nonzero, and a human reading a trace payload recognises the number.
+    """
+    try:
+        return subprocess.run(argv, cwd=str(cwd), env=operator_env(),
+                              capture_output=True, text=True)
+    except OSError as error:      # not on PATH, not executable, or similar
+        return subprocess.CompletedProcess(argv, 127, "", str(error))
 
 
 def resolve_project(config: IssuesConfig | PullRequestsConfig, main_root) -> str:

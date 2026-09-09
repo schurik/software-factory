@@ -178,3 +178,40 @@ def test_develop_reports_a_created_branch_it_could_not_fetch(tmp_path, forge):
     assert result.ok is False
     assert result.created is True
     assert result.branch == "sssf/a1b2c3d4-42-fix-rounding"
+
+
+def test_develop_never_raises_when_the_forge_cli_is_not_installed(tmp_path):
+    """The spec's own acceptance criterion (`docs/phase-8-linked-branches.md`,
+    Verification): a run with `develop_command` pointed at a binary that does
+    not exist must finish accepted and say why the branch is not linked — not
+    die with a traceback. This deliberately does NOT monkeypatch `issues._run`
+    — that would only prove the mock behaves, not that the real function does.
+    A binary that genuinely is not on PATH is fast and hermetic to invoke for
+    real.
+    """
+    config = IssuesConfig(project="acme/widgets",
+                          develop_command=["definitely-not-a-real-binary-xyz",
+                                          "issue", "develop"])
+
+    result = issues.develop(tmp_path, config, _request())
+
+    assert result.ok is False
+    assert result.created is False
+    assert result.notes          # the reason travels with the result, not a traceback
+
+
+def test_peek_never_raises_when_the_forge_cli_is_not_installed(tmp_path):
+    """Same acceptance criterion, for the OTHER caller of `_run` that runs
+    before a run exists: `peek()` is called from `branches.plan()` ahead of the
+    Tracer's construction in `session.py`, so a raise here has no trace row, no
+    session row and no console line to explain it — the least debuggable
+    failure surface in the system, over a branch name.
+    """
+    config = IssuesConfig(project="acme/widgets",
+                          fetch_command=["definitely-not-a-real-binary-xyz",
+                                        "issue", "view"])
+
+    brief = issues.peek(tmp_path, config, IssueRef(number=42))
+
+    assert brief.ok is False
+    assert brief.number == 42
