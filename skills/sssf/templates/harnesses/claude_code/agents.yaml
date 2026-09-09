@@ -50,7 +50,7 @@ agents:
       - Write
 
   - name: scout
-    model: haiku
+    model: sonnet
     thinking: low
     color: "#fbbf24"
     purpose: Find and report where things live; change nothing.
@@ -87,7 +87,7 @@ agents:
       - Write
 
   - name: documenter
-    model: haiku
+    model: sonnet
     color: "#e879f9"
     purpose: Write up the change that was just made, from the diff; document only.
     prompt_engineering:
