@@ -96,6 +96,7 @@ Load one cookbook per request — this overview is the only one you read up fron
 |---|---|
 | Turn a request into the prompt an ADW gets | `how_to_prompt_for_the_eng.md` — **read before every launch** |
 | Set the system up in a repo | `install.md` |
+| Take the system back out of a repo | `uninstall.md` |
 | Write a new ADW script | `create_adw.md` |
 | Change an existing ADW chain | `update_adw.md` |
 | Generate `sssf.config.yaml` | `create_config.md` |

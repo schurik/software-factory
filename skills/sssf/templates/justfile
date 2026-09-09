@@ -192,3 +192,17 @@ worktree-rm ADW_ID *ARGS:
 # boot the trace UI alone, http://localhost:4601 (api on :4600)
 obs:
     uv run {{skill}}/scripts/up.py --config {{config}} --only obs
+
+# ── remove the factory ──────────────────────────────────────────────────────
+# The inverse of install.py, and the one recipe here that cannot be undone: it
+# deletes adws/ entire — the run record and your prompt and config edits with
+# it — plus the run worktrees, .env.sample and this justfile. Always look at
+# `just uninstall-plan` first; the real one asks before it does anything.
+
+# what an uninstall would delete, and what it would keep. Changes nothing
+uninstall-plan:
+    @uv run {{skill}}/scripts/uninstall.py --dry-run --config {{config}}
+
+# delete the stamped factory from this repo. The skill is untouched
+uninstall *ARGS:
+    uv run {{skill}}/scripts/uninstall.py --config {{config}} "$@"

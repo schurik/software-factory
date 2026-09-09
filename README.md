@@ -135,6 +135,8 @@ uv run adws/adw_prompt.py "reply with a one-line summary of this repo" --agent s
 
 Re-running `install.py` is safe. It skips every file that already exists and reports what it skipped, so a second run doubles as a drift check. `--force` refreshes stamped code to the skill's current version, but it overwrites **all** stamped files including your `sssf.config.yaml` and your prompts, so commit first.
 
+Taking it back out is `uninstall.py` — `just uninstall-plan` shows what would go, `just uninstall` does it. It deletes `adws/` entire (the run record and your tuned prompts with it), the per-run worktrees and their git metadata, `.env.sample` and the stamped `justfile`, and it refuses while a run or a watcher is still alive. A `.env` or `justfile` you have written into is kept and reported rather than guessed at, and the skill itself is untouched, so re-stamping is one command.
+
 Green on the smoke test means the whole path works: config validated, session minted, Pi ran, envelope parsed, events landed in `adws/adw_data/sssf.db`. Fix it there before composing anything larger, because every multi-agent chain rides this exact path.
 
 ### Which API keys you actually need
@@ -176,7 +178,7 @@ There are three actors here, and the design keeps them separate on purpose: **th
   <img src="images/03_skill_stamp.svg" alt="The sssf skill directory on the left stamping config, adws, and prompt_engineering into three different target repos" width="780">
 </p>
 
-Everything lives in `skills/sssf/` — after an install, wherever your agent keeps its skills. `SKILL.md` carries the hard rules and routes each request to one of nine cookbooks. `references/` holds the deep specs, `scripts/` holds the generators, `templates/` holds exactly what gets stamped.
+Everything lives in `skills/sssf/` — after an install, wherever your agent keeps its skills. `SKILL.md` carries the hard rules and routes each request to one of ten cookbooks. `references/` holds the deep specs, `scripts/` holds the generators, `templates/` holds exactly what gets stamped.
 
 | What lands in your repo | Where it comes from | Tracked |
 |---|---|---|
@@ -338,9 +340,9 @@ It resolves its target through `--db`, then `SSSF_DB`, then `<cwd>/adws/adw_data
 software-factory/
 ├── skills/sssf/                        # THE PRODUCT — one agent skill, no harness in it
 │   ├── SKILL.md                        # hard rules + request routing table
-│   ├── cookbooks/                      # 9 orchestrator playbooks, loaded lazily
+│   ├── cookbooks/                      # 10 orchestrator playbooks, loaded lazily
 │   ├── references/                     # config / handoff / observability specs
-│   ├── scripts/                        # install.py, up.py, the watchers, make_config.py
+│   ├── scripts/                        # install.py, uninstall.py, up.py, the watchers, make_config.py
 │   ├── apps/visualizer/                # the read-only trace UI (Vue + Vite on Bun)
 │   └── templates/                      # EXACTLY what install.py stamps
 │       ├── sssf.config.yaml            # the starter roster

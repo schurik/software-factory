@@ -1,7 +1,7 @@
 ---
 name: sssf
-description: Super Simple Software Factory — deploy and operate repeatable agents+code workflows (ADWs) in any codebase. Use when the user asks to install the factory (/sssf:sssf install in Claude Code, /skill:sssf install in pi, or plain words in any other agent), wants to create/run/update an ADW, manage the agent roster in sssf.config.yaml, or observe running agent workflows. Keywords - sssf, software factory, ADW, AI developer workflow, agent pipeline, install factory.
-argument-hint: "[install | create adw | run adw | update config | ...]"
+description: Super Simple Software Factory — deploy and operate repeatable agents+code workflows (ADWs) in any codebase. Use when the user asks to install the factory (/sssf:sssf install in Claude Code, /skill:sssf install in pi, or plain words in any other agent), wants to create/run/update an ADW, manage the agent roster in sssf.config.yaml, observe running agent workflows, or uninstall the factory and clean the repo back up. Keywords - sssf, software factory, ADW, AI developer workflow, agent pipeline, install factory, uninstall factory, remove adws.
+argument-hint: "[install | create adw | run adw | update config | uninstall | ...]"
 ---
 
 # Super Simple Software Factory (SSSF)
@@ -75,6 +75,7 @@ It is isolation, not a sandbox — an agent with `bash` can leave the worktree, 
 | Request | Cookbook |
 |---|---|
 | install / set up the factory in this repo | [cookbooks/install.md](cookbooks/install.md) |
+| remove the factory / clean the repo back up | [cookbooks/uninstall.md](cookbooks/uninstall.md) |
 | create a new ADW / workflow | [cookbooks/create_adw.md](cookbooks/create_adw.md) |
 | land a run's branch, clean up worktrees | [references/config.md](references/config.md#worktreeintegration) |
 | start runs from tracked issues, run the watcher | [references/config.md](references/config.md#issues) |
