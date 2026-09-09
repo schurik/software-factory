@@ -461,9 +461,18 @@ def main() -> int:
     root = Path.cwd().resolve()
 
     # The skill keeps every generator and is what makes a re-install possible,
-    # so the one directory this must never be pointed at is its own.
-    if root == SKILL_ROOT or SKILL_ROOT in root.parents or root in SKILL_ROOT.parents:
-        print(f"refusing: {root} is the skill, or holds it ({SKILL_ROOT}).\n"
+    # so the one directory this must never be pointed at is its own. Standing
+    # INSIDE it is the same mistake one level down.
+    #
+    # A repo that merely *holds* the skill is not that mistake, and must not be
+    # refused: a project-scoped install (`.claude/skills/sssf`,
+    # `.agents/skills/sssf`) always sits under the very repo it stamped, so the
+    # parent test would make uninstall unreachable for everyone who vendors the
+    # skill instead of installing it to $HOME. What matters there is whether the
+    # skill is inside something being deleted, which is a question about the
+    # plan rather than the cwd — asked below, once there is a plan to ask it of.
+    if root == SKILL_ROOT or SKILL_ROOT in root.parents:
+        print(f"refusing: {root} is the skill, or is inside it ({SKILL_ROOT}).\n"
               f"run this from the repo the factory was stamped into.", file=sys.stderr)
         return 1
 
@@ -482,6 +491,17 @@ def main() -> int:
             return 1
 
     plan = build_plan(root, db, wt_dir, prefix)
+
+    # The real form of "never delete the skill": nothing on the delete list may
+    # contain it. Cheap, exact, and it still catches the cases the cwd test was
+    # reaching for — a skill vendored under `adws/`, or a `worktree.dir` pointed
+    # somewhere that swallows it.
+    for path in [*plan["delete"], plan["worktree_dir"], *plan["worktrees"]]:
+        if path == SKILL_ROOT or path in SKILL_ROOT.parents:
+            print(f"refusing: this would delete the skill itself — {SKILL_ROOT} is "
+                  f"inside {path}, which is on the delete list.", file=sys.stderr)
+            return 1
+
     if not plan["delete"] and not plan["worktrees"] and not plan["gitignore"]:
         print(f"no factory here — nothing of sssf's is in {root}")
         return 0
