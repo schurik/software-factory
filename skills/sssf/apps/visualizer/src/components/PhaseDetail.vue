@@ -261,6 +261,7 @@ const typeClass: Record<string, string> = {
   tool_call: 't-cyan',
   handoff: 't-violet',
   agent_start: 't-purple',
+  replay: 't-cyan',
   agent_end: 't-green',
 }
 

@@ -629,6 +629,22 @@ class WorktreeInfo(BaseModel):
     prunable: bool = False          # git says the directory is gone
 
 
+class RecordedPhase(BaseModel):
+    """One agent phase this session already completed, as the trace kept it.
+
+    The unit `adw_modules/replay.py` hands back to a resumed run instead of
+    calling the agent again: the phase's name and owner say WHICH call it
+    answers, `output_type` says the contract it was written against, and the
+    payload is the envelope itself, verbatim from the db.
+    """
+
+    seq: int
+    phase: str                      # the phase NAME, unique within a run
+    agent: str
+    output_type: str
+    payload_json: str
+
+
 class RunSpec(BaseModel):
     """Everything the Run object is built from, minus the tracer it writes to."""
 
@@ -638,6 +654,10 @@ class RunSpec(BaseModel):
     adw_id: str
     engineer: str
     workspace: Workspace
+    # Replay this session's recorded agent phases instead of re-running them.
+    # Only ever true for a run that pinned an --adw-id: there is nothing to
+    # resume without the session that recorded it.
+    resume: bool = False
 
 
 # ── Integration (landing a run's branch) ─────────────────────────────────────

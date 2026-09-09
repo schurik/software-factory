@@ -5,7 +5,7 @@
 """ADW Simple SDLC — plan, build, test, review, document, committing as it goes.
 
 Usage:
-    uv run adws/adw_simple_sdlc.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
+    uv run adws/adw_simple_sdlc.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4] [--resume]
 
 Phases: engineer(request) -> planner -> git(commit_plan)
         -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded]
@@ -41,6 +41,12 @@ The documenter measures against the commit this run STARTED from, not against
 `main`, because by then the run has moved `main` itself. That baseline is
 pinned before the first commit phase and printed in the request phase.
 
+A run that dies late does not have to be paid for twice. `--resume` (with the
+session's `--adw-id`, or `just resume <adw_id>`) hands every agent phase this
+session already recorded back from the trace and re-runs everything code owns —
+so the suite runs again against the tree the first run left, and the chain
+picks up AT the phase that failed. `adw_modules/replay.py` has the rules.
+
 All three commits land on the run's own `sssf/<adw_id>` branch, in its own
 worktree — the engineer's checkout is never touched. The last phase lands that
 branch the way the repository asked to have it landed (`worktree.integration`),
@@ -66,11 +72,15 @@ DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the
                   "describes.")
 
 
-def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw_id: str | None = None) -> int:
+def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml",
+         adw_id: str | None = None, resume: bool = False) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
-    run = session.ensure(cfg, adw_id)
-    baseline = git_helper.rev(run.repo_root, "HEAD")   # pinned before this run commits anything
+    run = session.ensure(cfg, adw_id, resume)
+    # Pinned before this run commits anything — and pinned ONCE per session:
+    # a resumed run's HEAD already carries the commits the first one made, so
+    # re-deriving it here would hand the documenter a diff of nothing.
+    baseline = run.pin("baseline", lambda: git_helper.rev(run.repo_root, "HEAD"))
 
     def commit(ph, envelope) -> None:
         """Commit what the preceding phase produced, in that agent's own words.
@@ -81,9 +91,10 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         commit here has to reach the reviewer, not just the branch.
         """
         message = envelope.commit_message or f"sssf({run.adw_id}): {envelope.summary}"
-        sha = git_helper.commit_all(run.repo_root, message)
+        sha = git_helper.commit_all(run.repo_root, message, allow_clean=run.resuming)
         synced = integration.keep_published(run)
-        ph.log(sha=sha, message=message, pushed=synced.pushed,
+        ph.log(sha=sha or "unchanged — this session already committed it",
+               message=message, pushed=synced.pushed,
                notes=" · ".join(synced.notes))
 
     def record(ph, result) -> None:
@@ -209,5 +220,8 @@ if __name__ == "__main__":
     parser.add_argument("prompt", help="inline text or a path to a prompt file")
     parser.add_argument("--config", default="adws/adw_sssf_config/sssf.config.yaml")
     parser.add_argument("--adw-id", default=None, help="join or pin an existing session")
+    parser.add_argument("--resume", action="store_true",
+                        help="replay this session's recorded agent phases instead "
+                             "of paying for them again; needs --adw-id")
     args = parser.parse_args()
-    sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id))
+    sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id, args.resume))

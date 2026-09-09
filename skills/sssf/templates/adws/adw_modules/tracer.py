@@ -11,7 +11,8 @@ import json
 import sqlite3
 from pathlib import Path
 
-from .data_types import AgentConfig, EventRecord, GateReport, Phase, Workspace
+from .data_types import (AgentConfig, EventRecord, GateReport, Phase,
+                         RecordedPhase, Workspace)
 from .utils import ensure_dir, new_id, now_iso
 
 SCHEMA = """
@@ -505,6 +506,34 @@ class Tracer:
         row = self.conn.execute("SELECT MAX(seq) FROM phases WHERE adw_id = ?",
                                 (adw_id,)).fetchone()
         return row[0] if row and row[0] is not None else 0
+
+    def recorded_phases(self, adw_id: str) -> list[RecordedPhase]:
+        """Every agent phase this session completed, with the envelope it produced.
+
+        The read side of a resume (`adw_modules/replay.py`). Three conditions
+        make a row worth handing back, and all three are the trace's own words:
+        the phase SUCCEEDED, it was an agent phase, and its envelope parsed
+        (`valid`). A phase that failed, or one whose agent never produced a
+        usable envelope, is exactly the phase a resumed run has to do again.
+
+        Only the newest valid envelope per phase is returned: a phase that
+        retried past a gate violation wrote one row per attempt, and the last is
+        the one that passed. Ordered by seq, so a session resumed more than once
+        yields its later records last and the caller's "last one wins" keying
+        lands on the most recent.
+        """
+        rows = self.conn.execute(
+            "SELECT p.seq, p.name, p.owner, e.output_type, e.payload_json"
+            "  FROM phases p JOIN envelopes e ON e.phase_id = p.phase_id"
+            " WHERE p.adw_id = ? AND p.kind = 'agent' AND p.status = 'success'"
+            "   AND e.rowid = (SELECT MAX(e2.rowid) FROM envelopes e2"
+            "                   WHERE e2.phase_id = p.phase_id AND e2.valid = 1)"
+            " ORDER BY p.seq",
+            (adw_id,),
+        ).fetchall()
+        return [RecordedPhase(seq=seq, phase=name, agent=owner or "",
+                              output_type=output_type or "", payload_json=payload or "")
+                for seq, name, owner, output_type, payload in rows]
 
     def phase_upsert(self, phase: Phase) -> None:
         p = phase.params

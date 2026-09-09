@@ -36,6 +36,7 @@ adws/
 │   ├── worktree.py              a git worktree + branch per run  ·  integration.py  lands it again
 │   ├── quality.py               lint/typecheck/build/test blocks → QualityResult → envelope
 │   ├── changes.py               git diff vs a resolved base → ChangeSet → envelope for the documenter
+│   ├── replay.py                --resume: recorded agent phases answered from the trace, code re-run
 │   ├── issues.py                fetch a work item, hand it on as an envelope, write the outcome back
 │   ├── pull_requests.py         the same, one step later: read review threads, answer them, resolve them
 │   ├── prompts.py, session.py, tracer.py, console.py, git_helper.py, utils.py

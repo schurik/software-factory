@@ -18,6 +18,7 @@ Location comes from `observability.db` in `sssf.config.yaml`, default `adws/adw_
 | `agent_start` | a coding agent is spawned or resumed for `ph.call(...)` |
 | `tool_call` | a tool (`read`, `bash`, `edit`, `write`) returns — **one event per real call**, named `bash: ls -la src`, payload `{tool, tool_call_id, args, result_snippet, ok, duration_ms, agent}` |
 | `handoff` | an envelope crosses from one agent to the next |
+| `replay` | a resumed run answered an agent phase from this session's record instead of calling the agent — payload carries `source_seq`, `source_phase`, `output_type`, `agent`. No `agent_start`/`agent_end` accompanies it, and the phase adds nothing to the session's tokens or cost, because no agent ran |
 | `gate_pass` | a gate found no failed checks — payload carries `attempt`, `checks` (the evidence), and an empty `violations` |
 | `gate_fail` | a gate found at least one failed check — payload carries `attempt`, `checks`, and `violations` |
 | `log` | an explicit `ph.log(...)` from the ADW script |
@@ -102,7 +103,7 @@ events (
   phase_id      TEXT REFERENCES phases,   -- every event logs against adw + phase
   parent_id     TEXT,                     -- span nesting
   type          TEXT,   -- phase_start | phase_end | agent_start | agent_end | tool_call
-                        -- | handoff | gate_pass | gate_fail | log | error
+                        -- | handoff | gate_pass | gate_fail | replay | log | error
   name          TEXT,
   payload_json  TEXT,
   tokens        INTEGER,

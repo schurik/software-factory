@@ -25,6 +25,7 @@ Extend `adws/adw_modules/` with new low-level logic.
 | `issues.py` | fetch a tracked work item, adapt it into an envelope, write comments and label state back. Names no agent on the receiving end |
 | `pull_requests.py` | the same shape one step later: read a pull request AND its review threads in one graphql snapshot, adapt the open ones into an envelope, reply in each thread and resolve it. `actionable()` is the queue definition and lives here alone. Shares `resolve_project`/`_aim`/`_run` with `issues.py` rather than copying them |
 | `changes.py` | deterministic change capture: resolve the base ref, `git diff` into `context_handoff/changes.diff`, adapt the `ChangeSet` into an envelope an agent can be handed |
+| `replay.py` | what a resumed run answers with instead of calling an agent: this session's recorded envelopes, keyed by phase name + owner + output type. Gates still decide whether a record may be used, and only agent phases are replayed — code re-runs, which is how the resumed run verifies the tree it inherited |
 | `prompts.py` | load system/user prompt refs from config, render placeholders |
 | `session.py` | mint or join `adw_id`, maintain `agent_map.json`, create session dirs incl. `context_handoff/` |
 | `tracer.py` | append JSONL **and** insert every event into `sssf.db` as it happens |

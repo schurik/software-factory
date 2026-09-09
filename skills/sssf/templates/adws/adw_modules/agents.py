@@ -128,6 +128,10 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     agent_dir = run.session_dir / agent.name
     agent_dir.mkdir(parents=True, exist_ok=True)
 
+    replayed = _replay(run, phase, call, agent.name)
+    if replayed is not None:
+        return replayed
+
     variables = {
         "prompt": call.prompt,
         "previous_envelope": call.previous.model_dump_json(indent=2) if call.previous else "(none)",
@@ -223,18 +227,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
 
     # claim gates — violations flow back into the SAME session as corrections
     for gate_attempt in range(1, max(1, phase.params.retries + 1) + 1):
-        violations = []
-        for gate in call.gates:
-            report = _as_report(gate(envelope, run))
-            found = report.violations
-            run.tracer.gate_row(phase, gate.__name__, report, gate_attempt)
-            run.tracer.event(EventRecord(
-                adw_id=run.adw_id, phase_id=phase.phase_id,
-                type="gate_fail" if found else "gate_pass", name=gate.__name__,
-                payload={"attempt": gate_attempt, "violations": found,
-                         "checks": [c.model_dump() for c in report.checks]}))
-            run.console.gate_result(gate.__name__, report)
-            violations.extend(found)
+        violations = _check_gates(run, phase, call, envelope, gate_attempt)
         if not violations:
             break
         if gate_attempt > phase.params.retries:
@@ -295,6 +288,69 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
 
 
 # ── internals ────────────────────────────────────────────────────────────────
+
+def _check_gates(run, phase: Phase, call: AgentCall, envelope: EnvelopeBase,
+                 attempt: int) -> list[str]:
+    """Run this call's gates once against `envelope`. Returns every violation.
+
+    One implementation, two callers: the correction loop above, and the replay
+    check below. A resumed run's recorded envelope has to clear the SAME gates
+    the live one would — measured against the tree as it is now, not as it was
+    — or the resume would be the one path in the factory where a claim is taken
+    on trust.
+    """
+    violations: list[str] = []
+    for gate in call.gates:
+        report = _as_report(gate(envelope, run))
+        found = report.violations
+        run.tracer.gate_row(phase, gate.__name__, report, attempt)
+        run.tracer.event(EventRecord(
+            adw_id=run.adw_id, phase_id=phase.phase_id,
+            type="gate_fail" if found else "gate_pass", name=gate.__name__,
+            payload={"attempt": attempt, "violations": found,
+                     "checks": [c.model_dump() for c in report.checks]}))
+        run.console.gate_result(gate.__name__, report)
+        violations.extend(found)
+    return violations
+
+
+def _replay(run, phase: Phase, call: AgentCall, agent_name: str) -> Optional[EnvelopeBase]:
+    """The recorded answer to this phase, if a resumed run may still use it.
+
+    None means "call the agent" — including the case where a record existed and
+    its gates no longer hold, which is the whole safety story of a resume: the
+    worktree may have been pruned and re-created from the branch, taking the
+    uncommitted half of a build with it, and a replayed envelope claiming files
+    that are no longer there is caught by the same gate that would have caught
+    the agent inventing them.
+
+    A replayed phase is written to the trace like any other — envelope row,
+    envelope.json, handoff event — because everything downstream reads the
+    record, not this function. What it does NOT write is usage: no agent ran, so
+    the phase costs nothing and says so.
+    """
+    envelope = run.replay.envelope_for(phase, call.output_type)
+    if envelope is None:
+        return None
+    record = run.replay.records[phase.params.name]
+    if _check_gates(run, phase, call, envelope, attempt=0):
+        run.console.note(f"replay rejected by its gates — running {agent_name} for real")
+        return None
+    run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
+                                 type="replay", name=agent_name,
+                                 payload={"source_seq": record.seq,
+                                          "source_phase": record.phase,
+                                          "output_type": record.output_type,
+                                          "agent": agent_name}))
+    run.console.replayed(phase.params.name, record.seq)
+    _persist_envelope(run, phase, agent_name, call, envelope, attempt=0, valid=True)
+    run.console.envelope_summary(envelope)
+    run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
+                                 type="handoff", name=agent_name,
+                                 payload={"artifacts": envelope.artifacts,
+                                          "summary": envelope.summary}))
+    return envelope
+
 
 def _as_report(result) -> GateReport:
     """Accept a GateReport, or a legacy gate that returned a violations list."""

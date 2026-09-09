@@ -18,7 +18,7 @@ import json
 import time
 from contextlib import contextmanager
 
-from . import agents, worktree
+from . import agents, replay, worktree
 from .console import Console
 from .data_types import (AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams,
                          RunSpec)
@@ -84,6 +84,40 @@ class Run:
         self._agent_map_path = self.session_dir / "agent_map.json"
         self.agent_map: dict = (json.loads(self._agent_map_path.read_text())
                                 if self._agent_map_path.exists() else {})
+        # Resuming: replay the agent phases this session already recorded rather
+        # than paying for them twice. Inert on a normal run — see replay.py for
+        # what is replayed and what is deliberately re-run.
+        self.resuming = spec.resume
+        self.replay = replay.load(tracer, spec.adw_id, spec.resume)
+        # Values a run pins once and must not re-derive on the way back in (the
+        # documenter's diff baseline is the one that matters). Written every
+        # run, read only by a resumed one — see `pin`.
+        self._pins_path = self.session_dir / "pins.json"
+        self._pins: dict = (json.loads(self._pins_path.read_text())
+                            if self._pins_path.exists() else {})
+
+    # ── pinned values (what a resumed run must not re-derive) ───────────────
+    def pin(self, key: str, produce) -> str:
+        """Remember a value this process derived, or hand back the resumed one.
+
+        `baseline = run.pin("baseline", lambda: git_helper.rev(run.repo_root, "HEAD"))`.
+
+        The problem it solves is one line long: a chain pins its diff baseline
+        at HEAD before it commits anything, so a resumed run — whose HEAD now
+        carries the commits the FIRST run made — would pin a baseline after its
+        own work and hand the documenter an empty diff.
+
+        Read only when resuming, written always. A joined run (`--adw-id`
+        without `--resume`) is a new increment of the session and derives its
+        own value, which is what makes "plan under one id, then build under it"
+        keep documenting the right thing.
+        """
+        if self.resuming and key in self._pins:
+            return str(self._pins[key])
+        value = produce()
+        self._pins[key] = value
+        self._pins_path.write_text(json.dumps(self._pins, indent=2))
+        return value
 
     # ── agent map (adw_id -> per-agent coding-agent session ids) ────────────
     def save_agent_map(self, agent: str, entry: dict) -> None:

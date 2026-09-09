@@ -4,6 +4,12 @@
 exactly that id (pinned ids for repeatable runs); omitted, a fresh id is
 minted and printed so the next ADW can pick it up.
 
+`resume=True` adds one thing to joining: the agent phases this session already
+recorded are handed back from the trace instead of being asked again, so a
+chain that died in its last phase restarts AT that phase rather than at the top.
+It needs a pinned `adw_id` — there is nothing to resume without one — and
+everything code owns still runs for real. See `adw_modules/replay.py`.
+
 This is also where a run stops being able to hurt the engineer's checkout. The
 worktree is created here, before anything else exists, because everything
 downstream derives its tree from `run.repo_root`: agents are spawned in it, the
@@ -52,7 +58,10 @@ def _finalize_when_killed(run: Run) -> None:
         signal.signal(sig, handler)
 
 
-def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
+def ensure(cfg: SSSFConfig, adw_id: str | None = None, resume: bool = False) -> Run:
+    if resume and not adw_id:
+        raise SystemExit("--resume needs --adw-id: there is nothing to resume without "
+                         "the session that recorded it. `just sessions` lists them.")
     adw_id = adw_id or new_id(8)
     main_root = git_helper.main_root()          # the engineer's checkout, always
     workspace = worktree.ensure(WorktreeRequest(main_root=main_root, adw_id=adw_id,
@@ -60,7 +69,7 @@ def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
     tracer = Tracer(anchor(main_root, cfg.observability.db),
                     anchor(main_root, f"{cfg.defaults.data_dir}/sessions/{adw_id}/events.jsonl"))
     run = Run(RunSpec(cfg=cfg, adw_id=adw_id, engineer=engineer_name(),
-                      workspace=workspace), tracer)
+                      workspace=workspace, resume=resume), tracer)
     tracer.session_start(adw_id, run.engineer, adw_name=Path(sys.argv[0]).stem)
     # Read AFTER session_start, so a brand-new session has its row to read from
     # and a joined one has the first process's answer rather than this one's
@@ -77,6 +86,8 @@ def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
     _finalize_when_killed(run)
     run.console.session_started(adw_id, run.engineer)
     run.console.note(_workspace_line(workspace))
+    if resume:
+        run.console.note(run.replay.summary())
     return run
 
 
