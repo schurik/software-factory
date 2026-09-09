@@ -56,7 +56,7 @@ These are settled; the phase documents assume them rather than re-argue them.
 | 5 | [Issue tracking](phase-5-issue-tracking.md) | A run starts from an issue, and reports back to it | **built** — see its *As built* section |
 | 6 | [Harness split](phase-6-harness-split.md) | A harness is one module plus one template directory — its own roster, prompts and options; the install asks which | **built** — see its *As built* section |
 | 7 | [One-command startup](phase-7-one-command-startup.md) | `just up` runs the UI and both watchers as one supervised process; a heartbeat makes "is anything watching?" answerable from `just status` and the trace UI | **built** — see its *As built* section |
-| 8 | [Linked branches](phase-8-linked-branches.md) | An issue-triggered run's branch appears in the issue's Development panel while the run is still going, and every branch name says what it is about | not started |
+| 8 | [Linked branches](phase-8-linked-branches.md) | An issue-triggered run's branch appears in the issue's Development panel while the run is still going, and every branch name says what it is about | **built** — see its *As built* section |
 
 ### Dependency order
 

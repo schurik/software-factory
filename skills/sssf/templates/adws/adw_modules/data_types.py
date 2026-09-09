@@ -756,8 +756,10 @@ class BranchPlan(BaseModel):
     """The name the run's branch will have, and how it came to have it.
 
     `base_commit` is set only when the FORGE created the branch — that is the one
-    case where the branch point is not derivable from the local checkout, and
-    every diff in the run measures from it.
+    case where the branch point is not derivable from the local checkout. It is
+    the honest branch point for a forge-created branch: not something every diff
+    in the run measures from, but the value `integration.py` compares HEAD
+    against to decide a branch has nothing to land.
     """
 
     branch: str = ""
