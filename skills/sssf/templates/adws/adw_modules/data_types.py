@@ -476,8 +476,9 @@ class BudgetConfig(BaseModel):
     chain, then `just integrate`, then a review run answering comments on the
     pull request it opened are three processes against one adw_id, and a
     ceiling that reset with each of them would bound nothing. `Run` seeds
-    itself from `sessions.total_tokens` / `total_cost`, so a joined run starts
-    where the last one stopped.
+    itself from the session's own `run.json` — never the trace db, which nothing
+    in the factory reads — so a joined run starts where the last one stopped
+    whether or not that db was ever written.
 
     Both default to 0 — no ceiling, exactly as every version before this one
     behaved. A repository that runs the factory unattended (an issue watcher,
@@ -670,6 +671,63 @@ class WorktreeInfo(BaseModel):
     prunable: bool = False          # git says the directory is gone
 
 
+class RecordedPhase(BaseModel):
+    """One agent phase this session already completed, as its own record kept it.
+
+    Written to `sessions/<adw_id>/envelopes/<phase_id>.json` when the phase
+    produces its envelope, and handed back by `adw_modules/replay.py` to a
+    resumed run instead of calling the agent again: the phase's name and owner
+    say WHICH call it answers, `output_type` says the contract it was written
+    against, and the payload is the envelope itself, verbatim.
+    """
+
+    phase_id: str                   # "<adw_id>_<seq>_<name>" — the file's name
+    seq: int
+    phase: str                      # the phase NAME, unique within a run
+    agent: str
+    output_type: str
+    payload_json: str
+
+
+class RunState(BaseModel):
+    """What `sessions/<adw_id>/run.json` says about the session itself.
+
+    The one thing the rest of the session directory cannot say: which process
+    took this session, what argv started it, and how it ended. `events.jsonl`
+    describes phases; this describes the run that opened them, which is what
+    `just resume` needs to launch the same workflow a second time.
+
+    `command` is the argv as a LIST, never a joined string — no quoting to undo,
+    and no clipping, so a run started from a long inline prompt resumes as
+    exactly the run it was.
+    """
+
+    adw_id: str
+    workflows: list[str] = Field(default_factory=list)   # every ADW this session ran, in order
+    command: list[str] = Field(default_factory=list)     # argv of the NEWEST process
+    pid: int = 0
+    engineer: str = ""
+    status: str = "running"         # running | success | fail
+    started_at: str = ""
+    ended_at: str = ""
+    repo_root: str = ""             # the worktree the run works in
+    branch: str = ""
+    trigger: str = "engineer"       # engineer | issue | pr_review
+    issue_url: str = ""
+    pr_url: str = ""
+    # What the SESSION has spent, across every process that joined it. Here
+    # rather than only in `sessions.total_tokens` because `budget:` is enforced
+    # against it, and a limit that needed the db would be one the factory
+    # cannot honor where the db was never written.
+    total_tokens: int = 0
+    total_cost: float = 0.0
+
+    @property
+    def adw_name(self) -> str:
+        """The session's workflows the way the trace and the UI name them."""
+        return " + ".join(self.workflows)
+
+
 class RunSpec(BaseModel):
     """Everything the Run object is built from, minus the tracer it writes to."""
 
@@ -679,6 +737,10 @@ class RunSpec(BaseModel):
     adw_id: str
     engineer: str
     workspace: Workspace
+    # Replay this session's recorded agent phases instead of re-running them.
+    # Only ever true for a run that pinned an --adw-id: there is nothing to
+    # resume without the session that recorded it.
+    resume: bool = False
 
 
 # ── Integration (landing a run's branch) ─────────────────────────────────────

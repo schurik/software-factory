@@ -103,6 +103,15 @@ class Console:
     def agent_finished(self, name: str, tokens: int, cost: float) -> None:
         self._emit(f"  [dim]└ {escape(name)} used {tokens:,} tokens · ${cost:.4f}[/dim]")
 
+    def replayed(self, name: str, seq: int) -> None:
+        """A resumed run answering from the record instead of calling the agent.
+
+        Its own mark, never the agent's: a reader who cannot tell a replayed
+        phase from one that ran has no way to see why a run cost nothing.
+        """
+        self._emit(f"  [cyan]↺[/cyan] {escape(name)} [dim]replayed from phase "
+                   f"{seq:02d} of this session — no agent ran, nothing spent[/dim]")
+
     def retry(self, name: str, attempt: int, limit: int, reason: str) -> None:
         self._emit(f"  [yellow]⟳[/yellow] {escape(name)} retry {attempt}/{limit} "
                    f"[dim]— same session · {escape(_clip(reason))}[/dim]", level="warn")

@@ -70,10 +70,11 @@ from adw_modules.data_types import AgentCall, BuildOutput, PhaseParams, PlanOutp
 REQUIRED_AGENTS = ["planner", "builder"]        # names, never models
 
 
-def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw_id: str | None = None) -> int:
+def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml",
+         adw_id: str | None = None, resume: bool = False) -> int:
     cfg = agents.load_config(config)            # 1. point to config
     agents.validate(cfg, REQUIRED_AGENTS)       # 2. fail fast — nothing spawns on a half-valid config
-    run = session.ensure(cfg, adw_id)           # 3. pin-or-create the session → the Run object
+    run = session.ensure(cfg, adw_id, resume)   # 3. pin-or-create the session → the Run object
 
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:
@@ -96,11 +97,15 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         # in and none of them defaults, because with a worktree per run there
         # are at least two trees on disk — committing into the wrong one is the
         # bug this signature makes unwritable.
-        sha = git_helper.commit_all(run.repo_root, message)
+        # allow_clean, because a RESUMED run reaches this phase with the
+        # commit already made — a clean tree there is the expected answer, not
+        # the "nothing to commit" failure it is on a first run.
+        sha = git_helper.commit_all(run.repo_root, message, allow_clean=run.resuming)
         # A session whose branch is already pushed keeps its pull request
         # current — on a branch nobody published this is a no-op.
         synced = integration.keep_published(run)
-        ph.log(sha=sha, message=message, pushed=synced.pushed,
+        ph.log(sha=sha or "unchanged — this session already committed it",
+               message=message, pushed=synced.pushed,
                notes=" · ".join(synced.notes))
 
     return run.finish()
@@ -111,11 +116,23 @@ if __name__ == "__main__":
     parser.add_argument("prompt", help="inline text or a path to a prompt file")
     parser.add_argument("--config", default="adws/adw_sssf_config/sssf.config.yaml")
     parser.add_argument("--adw-id", default=None, help="join or pin an existing session")
+    parser.add_argument("--resume", action="store_true",
+                        help="replay this session's recorded agent phases instead "
+                             "of paying for them again; needs --adw-id")
     args = parser.parse_args()
-    sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id))
+    sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id, args.resume))
 ```
 
 The `Phases:` line in the docstring is not decoration: the orchestrator lists every ADW by reading exactly that line at startup. An ADW without one is invisible in that table.
+
+**`--resume` belongs to a CHAIN, not to a single-agent ADW.** Replaying the one
+agent phase of a one-agent workflow leaves the run with nothing left to do, so
+those never take the flag — `just resume` says so by name rather than failing in
+argparse. Everything a resumed run needs is in the skeleton above: the flag, the
+third argument to `session.ensure`, and `allow_clean` on the commit. If the chain
+pins a value before it commits (a diff baseline is the one that matters), pin it
+through `run.pin("baseline", …)` so the resumed run reuses the first run's
+answer instead of deriving one after its own commits. See `adw_modules/replay.py`.
 
 **Two things this skeleton does not show**, because they belong to chains that produce code worth landing:
 

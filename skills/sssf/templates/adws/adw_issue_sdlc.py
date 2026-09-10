@@ -5,7 +5,7 @@
 """ADW Issue SDLC — a tracked work item, planned, built, tested, reviewed, landed.
 
 Usage:
-    uv run adws/adw_issue_sdlc.py 42 [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
+    uv run adws/adw_issue_sdlc.py 42 [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4] [--resume]
 
 Phases: issue(fetch) -> planner -> git(commit_plan)
         -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded]
@@ -59,11 +59,14 @@ DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the
 
 
 def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
-         adw_id: str | None = None) -> int:
+         adw_id: str | None = None, resume: bool = False) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
-    run = session.ensure(cfg, adw_id)
-    baseline = git_helper.rev(run.repo_root, "HEAD")   # pinned before this run commits anything
+    run = session.ensure(cfg, adw_id, resume)
+    # Pinned before this run commits anything — and pinned ONCE per session:
+    # a resumed run's HEAD already carries the commits the first one made, so
+    # re-deriving it here would hand the documenter a diff of nothing.
+    baseline = run.pin("baseline", lambda: git_helper.rev(run.repo_root, "HEAD"))
 
     def commit(ph, envelope) -> None:
         """Commit what the preceding phase produced, in that agent's own words.
@@ -74,9 +77,10 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
         commit here has to reach the reviewer, not just the branch.
         """
         message = envelope.commit_message or f"sssf({run.adw_id}): {envelope.summary}"
-        sha = git_helper.commit_all(run.repo_root, message)
+        sha = git_helper.commit_all(run.repo_root, message, allow_clean=run.resuming)
         synced = integration.keep_published(run)
-        ph.log(sha=sha, message=message, pushed=synced.pushed,
+        ph.log(sha=sha or "unchanged — this session already committed it",
+               message=message, pushed=synced.pushed,
                notes=" · ".join(synced.notes))
 
     def record(ph, result) -> None:
@@ -245,5 +249,8 @@ if __name__ == "__main__":
     parser.add_argument("number", type=int, help="the issue number to work")
     parser.add_argument("--config", default="adws/adw_sssf_config/sssf.config.yaml")
     parser.add_argument("--adw-id", default=None, help="join or pin an existing session")
+    parser.add_argument("--resume", action="store_true",
+                        help="replay this session's recorded agent phases instead "
+                             "of paying for them again; needs --adw-id")
     args = parser.parse_args()
-    sys.exit(main(args.number, args.config, args.adw_id))
+    sys.exit(main(args.number, args.config, args.adw_id, args.resume))

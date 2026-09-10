@@ -5,7 +5,7 @@
 """ADW PR Review — answer the review feedback on a run's own pull request.
 
 Usage:
-    uv run adws/adw_pr_review.py 17 [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
+    uv run adws/adw_pr_review.py 17 [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4] [--resume]
 
 Phases: pr(fetch) -> builder(address) -> code(test) [-> builder(fix) -> code(test) ... bounded]
         -> git(commit) -> pr(report)
@@ -60,7 +60,7 @@ def _session_of(branch: str, prefix: str) -> str:
 
 
 def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
-         adw_id: str | None = None) -> int:
+         adw_id: str | None = None, resume: bool = False) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
 
@@ -91,7 +91,7 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
               file=sys.stderr)
         return 2
 
-    run = session.ensure(cfg, resolved)
+    run = session.ensure(cfg, resolved, resume)
 
     with run.phase(PhaseParams(name="pr", kind="code", owner="review",
                                description="Read the reviewers' own words and where "
@@ -162,12 +162,13 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
                                                "already looking, on the branch they "
                                                "are reviewing")) as ph:
             message = build.commit_message or f"sssf({run.adw_id}): {build.summary}"
-            sha = git_helper.commit_all(run.repo_root, message)
+            sha = git_helper.commit_all(run.repo_root, message, allow_clean=run.resuming)
             # The whole delivery. This branch has been pushed before — that is
             # what made it a pull request — so keep_published carries the new
             # commits to it. Nothing here opens a second one or touches the base.
             synced = integration.keep_published(run)
-            ph.log(sha=sha, message=message, pushed=synced.pushed,
+            ph.log(sha=sha or "unchanged — this session already committed it",
+                   message=message, pushed=synced.pushed,
                    notes=" · ".join(synced.notes))
 
     # The reviewers hear back either way, as the tracker does in the issue
@@ -243,5 +244,8 @@ if __name__ == "__main__":
     parser.add_argument("--config", default="adws/adw_sssf_config/sssf.config.yaml")
     parser.add_argument("--adw-id", default=None,
                         help="the session to join; must match the pull request's branch")
+    parser.add_argument("--resume", action="store_true",
+                        help="replay this session's recorded agent phases instead "
+                             "of paying for them again; needs --adw-id")
     args = parser.parse_args()
-    sys.exit(main(args.number, args.config, args.adw_id))
+    sys.exit(main(args.number, args.config, args.adw_id, args.resume))

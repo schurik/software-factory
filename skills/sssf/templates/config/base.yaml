@@ -9,7 +9,8 @@
 # What one SESSION may spend, across every process that joins it — a chain,
 # then `just integrate`, then a review run answering comments on the pull
 # request it opened are three processes and one budget. A run seeds itself from
-# what the trace says the session already spent, so re-entry cannot reset it.
+# what its own run.json says the session already spent, so re-entry cannot
+# reset it — and so the ceiling holds with the trace db deleted.
 #
 # Both OFF by default (0 = no ceiling), because a ceiling that fires halfway
 # through a chain the engineer is watching is worse than no ceiling at all.

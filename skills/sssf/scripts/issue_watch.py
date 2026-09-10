@@ -96,10 +96,10 @@ def _running_count(cfg, main_root) -> int:
     A recycled pid can make a dead run look alive. That errs toward launching
     too FEW runs, which the next poll fixes — the opposite mistake spends money.
     """
-    from adw_modules.tracer import running_adw_pids
-    from adw_modules.utils import anchor
+    from adw_modules import artifacts
     alive = 0
-    for adw_id, pid in running_adw_pids(anchor(main_root, cfg.observability.db)).items():
+    sessions = artifacts.sessions_root(main_root, cfg.defaults.data_dir)
+    for adw_id, pid in artifacts.running_pids(sessions).items():
         try:
             os.kill(pid, 0)
             alive += 1
@@ -112,19 +112,26 @@ def _running_count(cfg, main_root) -> int:
 
 def _beat(cfg, main_root, status: str, *, project: str = "",
           interval: int = 0, note: str = "") -> None:
-    """Say, in the trace db, that this watcher exists and what it just did.
+    """Say that this watcher exists and what it just did — in a file, and in the db.
 
-    The whole point is that "nothing is happening" stops being ambiguous: `just
-    status` and the trace UI read this row, so a watcher nobody started reads as
-    absent rather than as a quiet one. Thin over `tracer.watcher_beat`, and
-    tolerant of a stamped factory older than it — an out-of-date repo loses the
-    badge, not the watcher.
+    The whole point is that "nothing is happening" stops being ambiguous: a
+    watcher nobody started reads as absent rather than as a quiet one. The FILE
+    is what `just status` reads, so the answer holds on a machine with no db;
+    the db row is what the trace UI's badge renders, and writing it costs
+    nothing. Tolerant of a stamped factory older than either — an out-of-date
+    repo loses the badge, not the watcher.
     """
     try:
+        from adw_modules import artifacts
         from adw_modules.tracer import watcher_beat
-        from adw_modules.utils import anchor
+        from adw_modules.utils import anchor, now_iso
     except ImportError:
         return
+    artifacts.watcher_beat(
+        artifacts.watchers_dir(main_root, cfg.defaults.data_dir), "issues",
+        {"status": status, "pid": os.getpid(), "project": project,
+         "interval_s": interval, "note": note,
+         "started_at": now_iso(), "last_poll_at": now_iso()})
     watcher_beat(anchor(main_root, cfg.observability.db), "issues", status,
                  pid=os.getpid(), project=project, interval_s=interval, note=note)
 

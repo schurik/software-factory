@@ -13,8 +13,8 @@ nobody is watching for:
   `just kill`. Nobody notices at 02:00.
 - **The loop that pays for itself.** A builder that cannot make a suite pass
   retries through its gate corrections, each one a fresh send against the API.
-  Every send is recorded (`sessions.total_cost`) and no send was ever refused
-  because of what the ones before it cost.
+  Every send was recorded and no send was ever refused because of what the
+  ones before it cost.
 
 So: one wall clock per agent turn, one ceiling per session, both configured
 (`defaults.timeout_seconds`, the `budget:` block) and both off-switchable with

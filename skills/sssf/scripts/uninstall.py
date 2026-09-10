@@ -35,10 +35,10 @@ to work on a factory that is already broken, which is when it is most wanted.
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
-import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -52,6 +52,7 @@ TEMPLATES = _harness.TEMPLATES
 
 CONFIG = "adws/adw_sssf_config/sssf.config.yaml"
 DEFAULT_DB = "adws/adw_data/sssf.db"
+DEFAULT_DATA_DIR = "adws/adw_data"
 DEFAULT_WORKTREE_DIR = ".sssf-worktrees"
 DEFAULT_BRANCH_PREFIX = "sssf/"
 
@@ -89,39 +90,43 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def live_processes(db: Path) -> list[str]:
-    """Runs and watchers the trace believes are alive AND whose pid still is.
+def live_processes(root: Path, data_dir: str) -> list[str]:
+    """Runs and watchers the RECORD believes are alive AND whose pid still is.
 
-    Both halves are needed. A SIGKILL or a reboot leaves a session row saying
-    `running` forever, so the row alone would block an uninstall on a machine
-    where nothing has run for a week; the pid alone would miss a run whose
-    process is healthy. A pid that has been recycled onto some stranger's
+    Both halves are needed. A SIGKILL or a reboot leaves a session's `run.json`
+    saying `running` forever, so the record alone would block an uninstall on a
+    machine where nothing has run for a week; the pid alone would miss a run
+    whose process is healthy. A pid that has been recycled onto some stranger's
     process is the acceptable error here — it costs a `--force`, not a kill.
+
+    Read from the session directories and the watcher heartbeat files, never
+    from the trace db: the factory does not depend on that db existing, and an
+    uninstall is the last moment to start.
     """
-    if not db.exists():
-        return []
-    try:
-        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
-    except sqlite3.Error:
-        return []
+    def read(path: Path) -> dict:
+        try:
+            return json.loads(path.read_text())
+        except (OSError, ValueError):
+            return {}
+
     alive = []
-    try:
-        rows = conn.execute(
-            "SELECT s.adw_id, p.pid FROM sessions s"
-            "  JOIN processes p ON p.adw_id = s.adw_id"
-            " WHERE s.status = 'running' AND p.kind = 'adw' AND p.ended_at IS NULL"
-        ).fetchall()
-        alive += [f"run {adw_id} (pid {pid}) — stop it with: just kill {adw_id}"
-                  for adw_id, pid in rows if pid and _pid_alive(pid)]
-        rows = conn.execute(
-            "SELECT kind, pid FROM watchers WHERE status IN ('polling', 'working')"
-        ).fetchall()
-        alive += [f"{kind} watcher (pid {pid}) — ctrl-c the `just up` that owns it"
-                  for kind, pid in rows if pid and _pid_alive(pid)]
-    except sqlite3.Error:
-        pass                                       # no schema yet, or mid-write
-    finally:
-        conn.close()
+    sessions = root / data_dir / "sessions"
+    if sessions.is_dir():
+        for child in sorted(sessions.iterdir()):
+            state = read(child / "run.json") if child.is_dir() else {}
+            pid = state.get("pid") or 0
+            if state.get("status") == "running" and pid and _pid_alive(pid):
+                adw_id = state.get("adw_id") or child.name
+                alive.append(f"run {adw_id} (pid {pid}) — stop it with: just kill {adw_id}")
+
+    watchers = root / data_dir / "watchers"
+    if watchers.is_dir():
+        for child in sorted(watchers.glob("*.json")):
+            row = read(child)
+            pid = row.get("pid") or 0
+            if row.get("status") in ("polling", "working") and pid and _pid_alive(pid):
+                alive.append(f"{row.get('kind') or child.stem} watcher (pid {pid}) — "
+                             f"ctrl-c the `just up` that owns it")
     return alive
 
 
@@ -480,6 +485,7 @@ def main() -> int:
     wt_dir = scalar(text, "worktree", "dir") or DEFAULT_WORKTREE_DIR
     prefix = scalar(text, "worktree", "branch_prefix") or DEFAULT_BRANCH_PREFIX
     db = root / (scalar(text, "observability", "db") or DEFAULT_DB)
+    data_dir = scalar(text, "defaults", "data_dir") or DEFAULT_DATA_DIR
 
     # Deleting the tree you are standing in half-works and is confusing about
     # which half. A run's worktree is also the one place your own uncommitted
@@ -508,7 +514,7 @@ def main() -> int:
 
     describe(plan, root, args.branches)
 
-    alive = live_processes(db)
+    alive = live_processes(root, data_dir)
     if alive and not args.force:
         print("\nstill running — stop these first, or pass --force:", file=sys.stderr)
         for line in alive:
