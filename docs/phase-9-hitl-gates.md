@@ -1,8 +1,9 @@
 # Phase 9 — Human-in-the-loop gates
 
-> **Status: brainstorm.** Options and open questions, with a recommendation
-> per question. Nothing here is built, and the *Open questions* at the end
-> decide the plan. Read this as the conversation before the spec.
+> **Status: planned.** The brainstorm below stands as written; the seven open
+> questions at its end are answered in *Decisions*, and the implementation plan
+> is [`superpowers/plans/2026-09-10-hitl-gates.md`](superpowers/plans/2026-09-10-hitl-gates.md).
+> Nothing is built yet.
 
 ## Goal
 
@@ -349,8 +350,8 @@ The UI badge and buttons are slice two; the forge channel slice three.
 
 ## Open questions
 
-Answers here change the plan; everything above them is a recommendation
-that can be overruled.
+Asked on 2026-09-10 and answered the same day — see *Decisions* below. Kept
+as asked, so the reasoning above still reads against them.
 
 1. **Shape A (own engineer phase + loop) as the primitive, with force mode C
    as approve/abort-only?** The alternative is B, which is more generic and
@@ -366,3 +367,19 @@ that can be overruled.
    safe default is `suspend`; the useful one for an overnight queue is `auto`.
 7. **Trace UI gets a write path for decisions, or stays read-only and the CLI
    is the only writer in v1?**
+
+## Decisions
+
+The recommendation on every question, taken as decided on 2026-09-10.
+
+| # | Decision |
+|---|---|
+| 1 | Shape **A**: a gate is its own engineer phase plus a chain-level revise loop, behind `hitl.gated()`. Force mode **C** ships as `--hitl every`, approve/abort only. Shape B is not built. |
+| 2 | **Suspend** is the mechanism — exit 75, `just approve` re-launches through `--resume`. A terminal prompt blocks only while stdin is a TTY, and detaches into the suspend on `d` or after `wait_seconds`. |
+| 3 | Policy is keyed by **gate name**. An agent-level shorthand is a follow-up. |
+| 4 | A fourth session status **`waiting`**, on `run.json`, the db and the UI — and the gate **phase** closes as `waiting` too. |
+| 5 | **Unbounded** rounds by default (`max_rounds: 0`). |
+| 6 | Issue- and PR-triggered runs **suspend** at an on-gate (`when_unattended: suspend`); `auto` is available. Posting the subject to the forge is a follow-up. |
+| 7 | The **CLI** is the only writer in v1. The trace UI shows `waiting`; its write path is a follow-up. |
+
+The plan turns these into nine tasks, each test-first on the fake harness.
