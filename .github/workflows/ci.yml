@@ -1,0 +1,129 @@
+name: CI
+
+# The factory stamps ~26k lines of Python into other people's repositories.
+# Everything below runs without an agent, without a network call and without a
+# token: the `fake` harness answers from a script, so a whole ADW chain — phases,
+# gates, retries, envelopes, permissions, budgets, the trace — is exercised here
+# for free. See skills/sssf/tests/README.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # The same four the ADW scripts declare in their PEP-723 headers, plus
+      # pytest. Unpinned on purpose: a stamped repo installs whatever `uv run`
+      # resolves that day, so CI should meet the same versions its users do —
+      # and `filterwarnings = error::DeprecationWarning` is what turns "a
+      # dependency moved on" into a red build here instead of in their repo.
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip pydantic python-dotenv pyyaml rich pytest
+
+      # session.ensure() cuts a real worktree and permissions.py reads a real
+      # `git diff`, so the tests do a real `git init`. A runner with no identity
+      # cannot commit.
+      - name: Configure git
+        run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "sssf ci"
+          git config --global init.defaultBranch main
+
+      - run: pytest
+
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip ruff
+      # Configured in pyproject.toml, so this is the same command a contributor
+      # runs with no arguments.
+      - run: ruff check .
+
+  smoke:
+    name: install into a scratch repo
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        harness: [claude_code, pi]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # `install.py` and every ADW carry a `#!/usr/bin/env -S uv run` shebang
+      # and a PEP-723 dependency block. Running them through uv is the path a
+      # user actually takes, and it is the only thing that proves those blocks
+      # resolve — pytest invokes the installer with `sys.executable`, which
+      # never reads them.
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Configure git
+        run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "sssf ci"
+          git config --global init.defaultBranch main
+
+      - name: Stamp the factory into a fresh repository
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/scratch"
+          cd "$RUNNER_TEMP/scratch"
+          git init -q .
+          printf '# scratch\n' > README.md
+          printf '{"scripts": {"test": "vitest run", "lint": "eslint ."}}\n' > package.json
+          git add -A && git commit -qm init
+          uv run "$GITHUB_WORKSPACE/skills/sssf/scripts/install.py" \
+            --harness "${{ matrix.harness }}"
+
+      # The generated config is what every other module then assumes. A stamped
+      # repo whose own roster the factory cannot read is a broken install that
+      # looks like a working one.
+      - name: Load the generated roster the way a run does
+        run: |
+          set -euxo pipefail
+          cd "$RUNNER_TEMP/scratch"
+          uv run --with pydantic --with python-dotenv --with pyyaml --with rich \
+            python "$GITHUB_WORKSPACE/.github/scripts/check_install.py" \
+            "${{ matrix.harness }}"
+
+      - name: The runtime and the worktrees must be gitignored
+        run: |
+          set -euxo pipefail
+          cd "$RUNNER_TEMP/scratch"
+          git add -A
+          # A chain's commit phase runs `git add -A`; anything staged here that
+          # belongs to the runtime would be committed into the user's repo.
+          if git diff --cached --name-only | grep -E '^adws/adw_data/sessions/|\.pyc$|^\.sssf-worktrees/'; then
+            echo "::error::the install staged its own runtime — check GITIGNORE_ENTRIES"
+            exit 1
+          fi

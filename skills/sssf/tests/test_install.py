@@ -1,0 +1,159 @@
+"""The installer against a scratch repo — the path every user hits first.
+
+`install.py` is the only script that runs before anything else exists, and its
+output is the thing every other module then assumes: a stamped `adws/`, a
+generated `sssf.config.yaml`, a `.gitignore` that keeps the runtime and the
+worktrees out of the tree.
+
+It is exercised as a subprocess, not imported, because that is how it runs: it
+stamps into `Path.cwd()` and reads `sys.stdin.isatty()` to decide whether it may
+ask which harness. Importing it would test neither.
+
+The assertion that matters most is the last one: the generated config must load
+and validate through `agents.load_config`. A stamped repo whose own config the
+factory cannot read is a broken install that looks like a working one.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from adw_modules import agents
+
+from conftest import SKILL_ROOT, git
+
+INSTALL = SKILL_ROOT / "scripts" / "install.py"
+CONFIG = "adws/adw_sssf_config/sssf.config.yaml"
+
+
+def install(cwd: Path, *args: str) -> subprocess.CompletedProcess:
+    """Run the installer the way a user does: as a script, in their repo.
+
+    Without a terminal to ask at (`stdin` is a pipe here), a missing --harness
+    is an error rather than a silent default — which is itself worth testing.
+    """
+    return subprocess.run([sys.executable, str(INSTALL), *args], cwd=cwd,
+                          capture_output=True, text=True, stdin=subprocess.DEVNULL)
+
+
+@pytest.fixture(params=["claude_code", "pi"])
+def harness(request) -> str:
+    return request.param
+
+
+def test_a_fresh_repo_is_stamped_and_its_config_loads(repo: Path, harness: str):
+    result = install(repo, "--harness", harness, "--no-detect-quality")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    for relative in ("adws/adw_modules/agents.py", "adws/adw_modules/harnesses/fake.py",
+                     "adws/adw_plan.py", "justfile", CONFIG, ".env.sample",
+                     "adws/adw_data/prompt_engineering/planner/system.md"):
+        assert (repo / relative).is_file(), f"{relative} was not stamped"
+
+    cfg = agents.load_config(str(repo / CONFIG))
+    assert cfg.agents, "the generated roster has no agents"
+    assert {a.harness for a in cfg.agents} == {harness}
+    for a in cfg.agents:
+        assert (repo / a.prompt_engineering.system).is_file()
+        assert (repo / a.prompt_engineering.user).is_file()
+
+
+def test_the_generated_roster_validates_against_its_own_harness_rules(repo: Path,
+                                                                     harness: str):
+    """Not just parseable — every model pattern and tool name is checked by the
+    harness that owns it. A roster that only loads is a roster that fails at the
+    first agent call instead of at validation."""
+    from adw_modules.harnesses import HARNESSES
+    driver = HARNESSES[harness]
+    try:
+        driver.reachable()
+    except RuntimeError as unreachable:
+        # pi resolves models against `pi --list-models`, so this half of the
+        # check needs that CLI. Skipped rather than weakened: on a machine that
+        # has it, it runs and means something.
+        pytest.skip(f"{harness}: {unreachable}")
+    install(repo, "--harness", harness, "--no-detect-quality")
+    cfg = agents.load_config(str(repo / CONFIG))
+    for a in cfg.agents:
+        driver.resolve_model(a.model)
+        assert driver.validate_agent(a) == [], f"{a.name}: {driver.validate_agent(a)}"
+
+
+def test_the_runtime_and_the_worktrees_are_gitignored(repo: Path):
+    """Chains that commit call `git add -A`. Without these entries a run's first
+    commit stages the tree it is running in, plus every .pyc beside the modules."""
+    install(repo, "--harness", "claude_code", "--no-detect-quality")
+    ignored = (repo / ".gitignore").read_text()
+    for entry in ("adws/adw_data/sessions/", "adws/adw_data/sssf.db*",
+                  ".sssf-worktrees/", "__pycache__/", "*.pyc", ".env"):
+        assert entry in ignored
+
+    git(repo, "add", "-A")
+    staged = git(repo, "diff", "--cached", "--name-only").splitlines()
+    assert not [p for p in staged if p.startswith("adws/adw_data/sessions/")]
+    assert not [p for p in staged if p.endswith(".pyc")]
+
+
+def test_a_second_install_skips_what_is_already_there(repo: Path):
+    """Idempotent: a re-install must not overwrite an edited roster."""
+    install(repo, "--harness", "claude_code", "--no-detect-quality")
+    (repo / CONFIG).write_text((repo / CONFIG).read_text() + "\n# edited by the engineer\n")
+
+    result = install(repo, "--harness", "claude_code", "--no-detect-quality")
+
+    assert result.returncode == 0
+    assert "# edited by the engineer" in (repo / CONFIG).read_text()
+
+
+def test_force_overwrites(repo: Path):
+    install(repo, "--harness", "claude_code", "--no-detect-quality")
+    (repo / CONFIG).write_text("# clobbered\n")
+    install(repo, "--harness", "claude_code", "--no-detect-quality", "--force")
+    assert "# clobbered" not in (repo / CONFIG).read_text()
+
+
+def test_an_unknown_harness_is_refused_by_name(repo: Path):
+    result = install(repo, "--harness", "codex")
+    assert result.returncode != 0
+    assert "unknown harness" in (result.stdout + result.stderr)
+
+
+def test_the_fake_harness_is_not_installable(repo: Path):
+    """It is selectable per agent in a roster and never as the repository's own
+    harness — see harnesses/fake.py."""
+    result = install(repo, "--harness", "fake")
+    assert result.returncode != 0
+    assert "unknown harness" in (result.stdout + result.stderr)
+
+
+def test_without_a_terminal_a_missing_harness_is_an_error_not_a_default(repo: Path):
+    """Which harness a repository runs on is a decision the repository owns."""
+    result = install(repo, "--no-detect-quality")
+    assert result.returncode != 0
+    assert "which harness?" in (result.stdout + result.stderr)
+    assert not (repo / "adws").exists(), "nothing may be stamped before the answer"
+
+
+def test_quality_detection_writes_this_repo_s_real_commands(repo: Path):
+    """`quality.py` shipped with placeholders that everybody skipped wiring up,
+    so the installer reads the repository and fills them in."""
+    (repo / "package.json").write_text(
+        '{"scripts": {"test": "vitest run", "lint": "eslint ."}}\n')
+    install(repo, "--harness", "claude_code")
+    stamped = (repo / "adws" / "adw_modules" / "quality.py").read_text()
+    assert 'argv=["npm", "run", "test"]' in stamped
+    assert 'argv=["npm", "run", "lint"]' in stamped
+    # And what it could NOT find stays a placeholder, which fails loudly when
+    # a run reaches it rather than passing as an unperformed check.
+    assert '_placeholder("typecheck")' in stamped
+
+
+def test_no_detect_quality_leaves_every_block_a_placeholder(repo: Path):
+    (repo / "package.json").write_text('{"scripts": {"test": "vitest run"}}\n')
+    install(repo, "--harness", "claude_code", "--no-detect-quality")
+    stamped = (repo / "adws" / "adw_modules" / "quality.py").read_text()
+    assert '_placeholder("test")' in stamped

@@ -36,12 +36,20 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from . import claude_code, pi
+from . import claude_code, fake, pi
 
 # Registration is explicit: an import here is what makes a harness selectable,
 # and a directory scan would turn a half-written module into a runtime surprise
 # during config validation rather than an import error at startup.
-HARNESSES: dict[str, ModuleType] = {pi.NAME: pi, claude_code.NAME: claude_code}
+#
+# `fake` is the one that is not a coding agent: it answers from a script and
+# never calls a model. It is here so a roster can name it per agent — that is
+# what makes the factory's own test suite and a new ADW's first ten iterations
+# free — and it is deliberately absent from `templates/harnesses/`, so the
+# installer never offers it as the harness a repository runs on. Its
+# `credentials()` says what it is in every `just doctor` report.
+HARNESSES: dict[str, ModuleType] = {pi.NAME: pi, claude_code.NAME: claude_code,
+                                    fake.NAME: fake}
 
 NAMES = sorted(HARNESSES)
 

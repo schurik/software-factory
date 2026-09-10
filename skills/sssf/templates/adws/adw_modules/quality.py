@@ -234,7 +234,13 @@ def typecheck(run) -> QualityCheckResult:
 
 
 def build(run) -> QualityCheckResult:
+    # Where a wired-up build writes its bundle, created here so the argv below
+    # can simply point at it. `_check_dir` makes the check's own directory; the
+    # bundle subdirectory under it is this block's, and a build tool that will
+    # not create its own --outdir would otherwise fail on a path that does not
+    # exist yet.
     output_dir = _check_dir(run, "build") / "bundle"
+    output_dir.mkdir(parents=True, exist_ok=True)
     return _run(QualityCheckSpec(
         name="build",
         area="backend",
