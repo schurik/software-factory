@@ -5,14 +5,14 @@
 """ADW Simple SDLC — plan, build, test, review, document, committing as it goes.
 
 Usage:
-    uv run adws/adw_simple_sdlc.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4] [--resume]
+    uv run adws/adw_simple_sdlc.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4] [--resume] [--hitl all|none|every|plan]
 
-Phases: engineer(request) -> planner -> git(commit_plan)
+Phases: engineer(request) -> planner [-> engineer(approve_plan) -> planner(revise) ...] -> git(commit_plan)
         -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded]
         -> reviewer [-> builder(revise) -> reviewer ... bounded]
         -> code(retest, only if a revision changed code)
         -> git(commit_build) -> code(changes) -> documenter -> git(commit_docs)
-        -> git(integrate)
+        -> engineer(approve_integrate, approve/abort only) -> git(integrate)
 
 Three commits, three work products, three authors. The plan, the code, and the
 write-up each land in their own commit, and each commit message is the words of
@@ -58,11 +58,11 @@ the branch is kept, so integration stays a thing a human can finish by hand.
 import argparse
 import sys
 
-from adw_modules import (agents, changes, gates, git_helper, integration, quality,
-                         session, utils)
+from adw_modules import (agents, changes, gates, git_helper, hitl, integration,
+                         quality, session, utils)
 from adw_modules.data_types import (AgentCall, BuildOutput, ChangeCapture,
-                                    DocumentOutput, IntegrationRequest, PhaseParams,
-                                    PlanOutput, ReviewOutput)
+                                    DocumentOutput, Gate, IntegrationRequest,
+                                    PhaseParams, PlanOutput, ReviewOutput)
 
 REQUIRED_AGENTS = ["planner", "builder", "reviewer", "documenter"]
 MAX_FIX_LOOPS = 3
@@ -74,10 +74,10 @@ DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the
 
 
 def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml",
-         adw_id: str | None = None, resume: bool = False) -> int:
+         adw_id: str | None = None, resume: bool = False, hitl_mode: str = "") -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
-    run = session.ensure(cfg, adw_id, resume)
+    run = session.ensure(cfg, adw_id, resume, hitl_mode)
     # Pinned before this run commits anything — and pinned ONCE per session:
     # a resumed run's HEAD already carries the commits the first one made, so
     # re-deriving it here would hand the documenter a diff of nothing.
@@ -108,10 +108,15 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml",
                                description="Capture the incoming ask")) as ph:
         ph.log(input=prompt, baseline=git_helper.short_sha(run.repo_root, baseline))
 
+    plan_call = AgentCall(output_type=PlanOutput, prompt=prompt,
+                          gates=[gates.artifacts_exist, gates.files_non_empty])
     with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
                                description="Turn the request into an implementable plan")) as ph:
-        plan = ph.call(AgentCall(output_type=PlanOutput, prompt=prompt,
-                                 gates=[gates.artifacts_exist, gates.files_non_empty]))
+        plan = ph.call(plan_call)
+    # A human may stop here. Off unless `hitl:` in the config or --hitl says
+    # otherwise; on reject the planner reworks its plan in the same session and
+    # the run asks again. See adw_modules/hitl.py.
+    plan = hitl.gated(run, Gate(name="plan", owner="planner", call=plan_call), plan)
 
     with run.phase(PhaseParams(name="commit_plan", kind="code", owner="git",
                                description="Put the spec on record before any code exists to blur it")) as ph:
@@ -224,5 +229,9 @@ if __name__ == "__main__":
     parser.add_argument("--resume", action="store_true",
                         help="replay this session's recorded agent phases instead "
                              "of paying for them again; needs --adw-id")
+    parser.add_argument("--hitl", default="",
+                        help="which gates stop for you: all | none | every | gate,names "
+                             "— over the config's hitl: block and SSSF_HITL")
     args = parser.parse_args()
-    sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id, args.resume))
+    sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id, args.resume,
+                  args.hitl))

@@ -9,6 +9,7 @@ const ordered = computed(() => props.phases.toSorted((a, b) => (a.seq ?? 0) - (b
 const glyph: Record<string, string> = {
   success: '●',
   running: '◐',
+  waiting: '◔',
   queued: '○',
   fail: '✗',
 }
@@ -47,6 +48,10 @@ const glyph: Record<string, string> = {
 .d.running {
   color: var(--blue);
   animation: pulse 1.2s ease-in-out infinite;
+}
+
+.d.waiting {
+  color: var(--amber);
 }
 
 .d.queued {

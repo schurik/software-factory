@@ -85,6 +85,23 @@ Three distinctions worth keeping straight:
 - **Phase retries vs. fix loops.** `retries=N` on `PhaseParams` re-attempts one agent phase's gate corrections, re-sent into the same session with its context intact. (Code-phase re-execution is not implemented in v1.) A fix loop is a *chain* of phases repeated — different agents, new envelopes each pass.
 - **The test phase succeeds when it runs and reports correctly.** A failing suite does not fail that phase; it fails the run, checked at the end. The runner did its job; the code didn't.
 
+## Add a human gate
+
+A gate stops the chain after a phase and hands its artifact to the engineer. It is one call, placed **after** the phase whose work it shows, and `adw_modules/hitl.py` owns the phases it opens (`approve_<gate>`, `<gate>_revise_<n>`), the wait, and the decision file:
+
+```python
+    plan_call = AgentCall(output_type=PlanOutput, prompt=prompt,
+                          gates=[gates.artifacts_exist, gates.files_non_empty])
+    with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
+                               description="Turn the request into an implementable plan")) as ph:
+        plan = ph.call(plan_call)
+    plan = hitl.gated(run, Gate(name="plan", owner="planner", call=plan_call), plan)
+```
+
+`call` is what a **reject** re-sends — the same output type and gates, with the decision as `previous_envelope`, in the same coding-agent session — so the agent revises its own work rather than starting over. Give the gate no `call` when nothing can revise (after a code phase, before `integrate`): it is then approve/abort only, and `paths=[...]` names the subject to show, such as the run's diff. Place a gate in `adw_simple_sdlc` **before** `commit_plan`, so the plan that lands is the approved one.
+
+Whether a placed gate fires is not the ADW's decision: `hitl:` in the config and `--hitl` on the command line are, and the default is off. Every chain that takes `--resume` also takes `--hitl`, and `--hitl every` stops after every agent phase without any gate being placed — so "let me watch each step" needs no code. The gate `name` is what policy keys on; keep it short and stable.
+
 ## Keep scripts thin
 
 An ADW is sequencing and acceptance — nothing else. The moment you are writing parsing, subprocess handling, retry mechanics, or a reusable predicate inside `adw_*.py`, it belongs in `adw_modules/`. See `update_modules.md`.

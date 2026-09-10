@@ -177,6 +177,27 @@ What that means when you report it:
   because of a prompt, a gate, or a config, change that before resuming or it
   fails in the same place — for free up to that point, but in the same place.
 
+## When a run is waiting for you
+
+A chain that exits **75** did not fail: it stopped at a human gate. The session reads `waiting`, the console's last panel names the gate and the file to read, and `run.json` under `data_dir/sessions/<adw_id>/` says the same (`waiting_for`). Nothing spends while it waits.
+
+```bash
+just pending                     # every run stopped at a gate, oldest first
+just show <adw_id>               # the artifact it wants read — a plan, a diff
+just approve <adw_id> -m "…"     # continue; the remarks reach the next agent
+just reject <adw_id> -m "…"      # send it back; the agent revises, then asks again
+just abort <adw_id>              # end the run, not accepted
+```
+
+Each of the three verdicts writes one decision file and re-launches the workflow with `--resume`, so the agent phases already paid for replay and the chain reaches the gate with its answer. A reject stops at the gate again, one round later — `approve_plan_2` — with the revised artifact.
+
+What that means when you report it:
+
+- **Report the gate and the path; do not read the db for it.** `run.json` and `just show` are the record.
+- **Never approve on the engineer's behalf.** The gate exists because a person asked to decide. Put the artifact in front of them and wait.
+- **A refused answer is not an error.** A decision whose digest no longer matches the artifact (it changed since it was shown) is ignored and the run stops at the same gate, saying `stale`. `just show` and answer again.
+- **`--hitl all` and `--hitl every` are yours to pass** when the engineer asks to review a plan, or every step, on a repo whose config leaves gates off.
+
 ## Where the work went
 
 A run commits to `sssf/<adw_id>` in its own worktree, never to the engineer's branch. So when a chain reports success and `git log` on their branch shows nothing, nothing is wrong — the work is on the run's branch, waiting to be landed:

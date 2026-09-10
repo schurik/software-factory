@@ -5,7 +5,7 @@
 """ADW Issue SDLC — a tracked work item, planned, built, tested, reviewed, landed.
 
 Usage:
-    uv run adws/adw_issue_sdlc.py 42 [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4] [--resume]
+    uv run adws/adw_issue_sdlc.py 42 [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4] [--resume] [--hitl all|none|every|plan]
 
 Phases: issue(fetch) -> planner -> git(commit_plan)
         -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded]
@@ -59,10 +59,10 @@ DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the
 
 
 def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
-         adw_id: str | None = None, resume: bool = False) -> int:
+         adw_id: str | None = None, resume: bool = False, hitl_mode: str = "") -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
-    run = session.ensure(cfg, adw_id, resume)
+    run = session.ensure(cfg, adw_id, resume, hitl_mode)
     # Pinned before this run commits anything — and pinned ONCE per session:
     # a resumed run's HEAD already carries the commits the first one made, so
     # re-deriving it here would hand the documenter a diff of nothing.
@@ -252,5 +252,9 @@ if __name__ == "__main__":
     parser.add_argument("--resume", action="store_true",
                         help="replay this session's recorded agent phases instead "
                              "of paying for them again; needs --adw-id")
+    parser.add_argument("--hitl", default="",
+                        help="which gates stop for you: all | none | every | gate,names "
+                             "— over the config's hitl: block and SSSF_HITL")
     args = parser.parse_args()
-    sys.exit(main(args.number, args.config, args.adw_id, args.resume))
+    sys.exit(main(args.number, args.config, args.adw_id, args.resume,
+                  args.hitl))

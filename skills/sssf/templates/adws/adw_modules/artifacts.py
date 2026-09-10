@@ -43,7 +43,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .data_types import RecordedPhase, RunState
+from .data_types import RecordedPhase, RunState, WaitingFor
 from .utils import ensure_dir
 
 RUN_FILE = "run.json"
@@ -91,6 +91,9 @@ def start_run(session_dir: Path, state: RunState) -> RunState:
         state.trigger = state.trigger or previous.trigger
         state.issue_url = state.issue_url or previous.issue_url
         state.pr_url = state.pr_url or previous.pr_url
+        # A session stopped at a gate is picked up by the process that answers
+        # it, and that process has to reach the gate knowing what was asked.
+        state.waiting_for = state.waiting_for or previous.waiting_for
         # Spend is the session's, not the process's, and a new process starts
         # its record at zero — so carrying it is what keeps `budget:` a ceiling
         # on the work rather than on whoever happens to be running it. Dropping
@@ -133,6 +136,55 @@ def update_run(session_dir: Path, **fields) -> None:
         write_run(session_dir, state)
     except OSError:
         pass
+
+
+# ── run.json: waiting on a human ─────────────────────────────────────────────
+
+DECISIONS_DIR = "decisions"
+
+
+def decisions_dir(session_dir: Path) -> Path:
+    return Path(session_dir) / DECISIONS_DIR
+
+
+def suspend_run(session_dir: Path, waiting: WaitingFor) -> None:
+    """Record that this session stopped for a human, and that nothing of it is alive.
+
+    Not `finish_run`: `ended_at` stays empty, because a waiting run has not
+    ended — it will be picked up by `just approve` and continue as the same
+    session. The pid is cleared and the process rows closed for the same reason
+    `finish_run` closes them: the process IS gone, and a watcher counting live
+    runs must not count this one.
+    """
+    state = read_run(session_dir)
+    if state is None:
+        return
+    state.status = "waiting"
+    state.waiting_for = waiting
+    state.pid = 0
+    try:
+        write_run(session_dir, state)
+    except OSError:
+        pass
+    end_all_processes(session_dir)
+
+
+def clear_waiting(session_dir: Path) -> None:
+    """The decision was consumed; the session no longer waits on it."""
+    state = read_run(session_dir)
+    if state is None or state.waiting_for is None:
+        return
+    state.waiting_for = None
+    try:
+        write_run(session_dir, state)
+    except OSError:
+        pass
+
+
+def waiting_sessions(sessions_dir: Path) -> dict[str, WaitingFor]:
+    """{adw_id: what it waits for} for every session stopped at a gate."""
+    return {adw_id: state.waiting_for for adw_id, state in scan(sessions_dir).items()
+            if state.status == "waiting" and state.waiting_for is not None}
 
 
 # ── envelopes/<phase_id>.json ────────────────────────────────────────────────

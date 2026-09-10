@@ -84,8 +84,9 @@ class Console:
     def phase_ended(self, phase: Phase, seconds: float) -> None:
         ok = phase.status == "success"
         self.results.append(phase.status)
-        line = (f"  {'[green]✓[/green]' if ok else '[red]✗[/red]'} "
-                f"{escape(phase.params.name)} [dim]{seconds:.1f}s[/dim]")
+        mark = {"success": "[green]✓[/green]", "waiting": "[cyan]⏸[/cyan]"}.get(
+            phase.status, "[red]✗[/red]")
+        line = f"  {mark} {escape(phase.params.name)} [dim]{seconds:.1f}s[/dim]"
         if not ok and phase.error:
             line += f"  [red]{escape(_clip(phase.error))}[/red]"
         self._emit(line, level="info" if ok else "error")
@@ -94,6 +95,28 @@ class Console:
     def note(self, message: str) -> None:
         """Free-form detail inside the current phase — what `ph.log()` recorded."""
         self._emit(f"  [dim]· {escape(_clip(message))}[/dim]")
+
+    # ── human gates ─────────────────────────────────────────────────────────
+    def waiting(self, waiting, how: str) -> None:
+        """The closing panel of a run that stopped for a person. No `session_finished`
+        follows it: the session is not over, and saying so would be a lie in the
+        trace as well as on the screen."""
+        rows = [f" [dim]gate[/dim]     {escape(waiting.gate)} · round {waiting.round}",
+                f" [dim]subject[/dim]  {escape(_clip(waiting.summary))}",
+                *[f" [dim]file[/dim]     {escape(path)}" for path in waiting.paths],
+                f" [dim]answer[/dim]   {escape(how)}"]
+        panel = Panel(Text.from_markup("\n".join(rows)),
+                      title="[bold]waiting for you[/bold]", border_style="cyan", expand=False)
+        self._emit(escape(f"session {self.adw_id} waiting at gate {waiting.gate}"),
+                   renderable=panel)
+
+    def decided(self, decision) -> None:
+        color = {"approve": "green", "reject": "yellow", "abort": "red"}[decision.verdict]
+        line = (f"  [{color}]⚑ {escape(decision.verdict)}[/{color}] [dim]by "
+                f"{escape(decision.by)} · {escape(decision.channel)}[/dim]")
+        if decision.notes:
+            line += f"  {escape(_clip(decision.notes))}"
+        self._emit(line)
 
     # ── agents ──────────────────────────────────────────────────────────────
     def agent_started(self, name: str, model: str, session_id: str) -> None:

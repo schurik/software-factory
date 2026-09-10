@@ -339,6 +339,16 @@ class Tracer:
         )
         self.processes_end_all(adw_id)   # nothing of this run is alive any more
 
+    def session_waiting(self, adw_id: str, gate: str) -> None:
+        """The run stopped at a gate. Its process is gone; its session is not over.
+
+        `ended_at` stays NULL for the reason `artifacts.suspend_run` leaves it
+        empty: the session continues when a human answers. The next process's
+        `session_start` flips the row back to `running`.
+        """
+        self.conn.execute("UPDATE sessions SET status='waiting' WHERE adw_id=?", (adw_id,))
+        self.processes_end_all(adw_id)
+
     def session_add_usage(self, adw_id: str, tokens: int, cost: float) -> None:
         """Spend, for the UI's card. The BUDGET reads `run.json`, not this row:
         a ceiling that only worked where the db exists would be a ceiling this

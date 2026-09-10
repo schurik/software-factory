@@ -5,7 +5,7 @@
 """ADW PR Review — answer the review feedback on a run's own pull request.
 
 Usage:
-    uv run adws/adw_pr_review.py 17 [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4] [--resume]
+    uv run adws/adw_pr_review.py 17 [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4] [--resume] [--hitl all|none|every|plan]
 
 Phases: pr(fetch) -> builder(address) -> code(test) [-> builder(fix) -> code(test) ... bounded]
         -> git(commit) -> pr(report)
@@ -60,7 +60,7 @@ def _session_of(branch: str, prefix: str) -> str:
 
 
 def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
-         adw_id: str | None = None, resume: bool = False) -> int:
+         adw_id: str | None = None, resume: bool = False, hitl_mode: str = "") -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
 
@@ -91,7 +91,7 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
               file=sys.stderr)
         return 2
 
-    run = session.ensure(cfg, resolved, resume)
+    run = session.ensure(cfg, resolved, resume, hitl_mode)
 
     with run.phase(PhaseParams(name="pr", kind="code", owner="review",
                                description="Read the reviewers' own words and where "
@@ -247,5 +247,9 @@ if __name__ == "__main__":
     parser.add_argument("--resume", action="store_true",
                         help="replay this session's recorded agent phases instead "
                              "of paying for them again; needs --adw-id")
+    parser.add_argument("--hitl", default="",
+                        help="which gates stop for you: all | none | every | gate,names "
+                             "— over the config's hitl: block and SSSF_HITL")
     args = parser.parse_args()
-    sys.exit(main(args.number, args.config, args.adw_id, args.resume))
+    sys.exit(main(args.number, args.config, args.adw_id, args.resume,
+                  args.hitl))

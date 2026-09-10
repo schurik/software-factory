@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, Circle, LoaderCircle, X } from 'lucide-vue-next'
+import { Check, Circle, Hourglass, LoaderCircle, X } from 'lucide-vue-next'
 
 defineProps<{ status: string }>()
 
@@ -7,6 +7,7 @@ const ICONS: Record<string, unknown> = {
   success: Check,
   fail: X,
   running: LoaderCircle,
+  waiting: Hourglass,
   queued: Circle,
 }
 </script>
@@ -64,6 +65,15 @@ const ICONS: Record<string, unknown> = {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* Stopped at a human gate: nothing is running, nothing has failed — someone
+   has to answer. Amber, and no spin, because nothing is happening. */
+.chip.waiting {
+  color: var(--amber);
+  border-color: rgba(232, 182, 74, 0.45);
+  background: rgba(232, 182, 74, 0.09);
+  box-shadow: 0 0 12px rgba(232, 182, 74, 0.14);
 }
 
 .chip.queued {

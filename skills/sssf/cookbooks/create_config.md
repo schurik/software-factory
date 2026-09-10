@@ -105,6 +105,7 @@ engineer rather than to pick for them:
 
 - **`worktree.integration.mode`** — may a machine move the base branch? `merge` for a solo repo, `pr` where a human reviews first, `none` to leave every branch for a person.
 - **`issues`** — may an issue start a run at all? Off until the repo opts in; this is the one path where the prompt is written by whoever can file an issue.
+- **`hitl.default` / `hitl.gates`** — may a run stop for a person? Off by default; `{plan: on}` stops every planning chain after its plan until someone approves it, and `--hitl all` does the same for one run without touching the config.
 - **`defaults.protected_files`** — what an agent may never edit. The factory's own code by default, so nothing can edit the machinery that judges its work.
 
 Full field-by-field spec, thinking-level mapping, and model resolution: `references/config.md` — including [worktree per run](../references/config.md#worktree-per-run), [integration](../references/config.md#worktreeintegration), [issues](../references/config.md#issues) and [write permissions](../references/config.md#write-permissions--writes-and-protected_files). Retuning an existing roster: `update_config.md`.

@@ -262,6 +262,7 @@ const typeClass: Record<string, string> = {
   handoff: 't-violet',
   agent_start: 't-purple',
   replay: 't-cyan',
+  decision: 't-amber',
   agent_end: 't-green',
 }
 
@@ -1262,5 +1263,9 @@ h3:first-child {
 
 .t-violet {
   color: var(--violet);
+}
+
+.t-amber {
+  color: var(--amber);
 }
 </style>

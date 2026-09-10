@@ -45,6 +45,7 @@ def roster(**agent_scripts) -> dict:
     `agent_scripts` is {name: {"replies": [...], "writes": [...], ...}} — the
     per-agent entry minus the boilerplate every entry repeats.
     """
+    hitl = agent_scripts.pop("hitl", None)
     entries = []
     for name, spec in agent_scripts.items():
         replies = spec.pop("replies", [])
@@ -67,6 +68,7 @@ def roster(**agent_scripts) -> dict:
         "worktree": {"enabled": True, "keep_on_success": False},
         "observability": {"db": "adws/adw_data/sssf.db"},
         "agents": entries,
+        **({"hitl": hitl} if hitl else {}),
     }
 
 
@@ -522,3 +524,365 @@ def test_a_run_with_no_phases_at_all_is_not_a_success(factory):
     cfg = factory(planner={"replies": [{"envelope": envelope()}]})
     run = session.ensure(cfg)
     assert run.finish() == 1
+
+
+# ── human-in-the-loop: the wait ──────────────────────────────────────────────
+
+from adw_modules import artifacts, hitl                                    # noqa: E402
+from adw_modules.data_types import Decision, Subject                       # noqa: E402
+
+
+def approve_phase(run, envelope, gate="plan", round=1):
+    name = f"approve_{gate}" if round == 1 else f"approve_{gate}_{round}"
+    with run.phase(PhaseParams(name=name, kind="engineer", owner=run.engineer,
+                               description="Hand the plan to the engineer and wait "
+                                           "for a verdict")) as ph:
+        return ph.decide(Subject(gate=gate, round=round, summary=envelope.summary,
+                                 paths=envelope.artifacts))
+
+
+def one_plan(**extra):
+    return {"writes": ["specs/"], "replies": [
+        {"writes": {"specs/plan.md": "# Plan\n"},
+         "envelope": envelope(artifacts=["specs/plan.md"])}], **extra}
+
+
+def test_a_gate_with_no_decision_suspends_the_run_with_exit_75(factory, repo):
+    cfg = factory(planner=one_plan())
+    run = session.ensure(cfg, hitl="all")
+    plan = plan_phase(run)
+
+    with pytest.raises(SystemExit) as stop:
+        approve_phase(run, plan)
+    assert stop.value.code == hitl.EXIT_WAITING
+
+    state = artifacts.read_run(run.session_dir)
+    assert state.status == "waiting"
+    assert state.waiting_for.gate == "plan"
+    assert state.waiting_for.round == 1
+    subject = Path(run.repo_root) / "specs" / "plan.md"
+    assert state.waiting_for.paths == [str(subject)]
+    assert state.waiting_for.subject_digest == hitl.digest([subject])
+    assert state.pid == 0
+    # The phase closed as WAITING — neither running forever nor failed.
+    assert run.phases[-1].status == "waiting"
+    assert db_rows(repo, "select status from sessions") == [("waiting",)]
+    assert db_rows(repo, "select status from phases where name='approve_plan'") == [("waiting",)]
+    assert db_rows(repo, "select count(*) from processes where ended_at is null") == [(0,)]
+    # Its worktree is kept: the uncommitted plan is the subject.
+    assert Path(run.repo_root).exists()
+
+
+def test_a_resumed_run_reaches_the_gate_and_reads_its_decision(factory, repo):
+    cfg = factory(planner=one_plan(strict=True))
+    first = session.ensure(cfg, hitl="all")
+    plan = plan_phase(first)
+    with pytest.raises(SystemExit):
+        approve_phase(first, plan)
+
+    waiting = artifacts.read_run(first.session_dir).waiting_for
+    hitl.record(first.session_dir, Decision(
+        gate="plan", round=1, verdict="approve", notes="ship it", by="alice",
+        channel="cli", subject_digest=waiting.subject_digest))
+
+    second = session.ensure(cfg, adw_id=first.adw_id, resume=True, hitl="all")
+    plan = plan_phase(second)                      # replayed: the strict planner has ONE reply
+    decision = approve_phase(second, plan)
+
+    assert decision.approved and decision.by == "alice"
+    assert artifacts.read_run(second.session_dir).waiting_for is None
+    assert "decision" in [e["type"] for e in events_of(second)]
+    assert second.finish() == 0
+    assert db_rows(repo, "select status from sessions") == [("success",)]
+
+
+def test_a_decision_for_a_changed_subject_is_refused(factory):
+    cfg = factory(planner=one_plan())
+    first = session.ensure(cfg, hitl="all")
+    plan = plan_phase(first)
+    with pytest.raises(SystemExit):
+        approve_phase(first, plan)
+    hitl.record(first.session_dir, Decision(
+        gate="plan", round=1, verdict="approve", by="alice", channel="cli",
+        subject_digest="not-the-plan-that-was-shown"))
+
+    second = session.ensure(cfg, adw_id=first.adw_id, resume=True, hitl="all")
+    plan = plan_phase(second)
+    with pytest.raises(SystemExit) as stop:             # waits again, and says why
+        approve_phase(second, plan)
+    assert stop.value.code == hitl.EXIT_WAITING
+    notes = [e["payload"].get("message", "") for e in events_of(second) if e["type"] == "log"]
+    assert any("stale" in note for note in notes)
+
+
+def test_an_attended_run_asks_in_place(factory):
+    """The terminal path, with the prompt scripted instead of a TTY."""
+    cfg = factory(planner=one_plan())
+    run = session.ensure(cfg, hitl="all")
+    run.hitl.ask = lambda waiting: ("approve", "looks right")     # what a keypress returns
+    plan = plan_phase(run)
+    decision = approve_phase(run, plan)
+    assert decision.approved and decision.channel == "terminal"
+    assert decision.by == run.engineer and decision.notes == "looks right"
+    assert hitl.read_decision(run.session_dir, "plan", 1) == decision
+    assert artifacts.read_run(run.session_dir).waiting_for is None
+    assert run.finish() == 0
+
+
+def test_an_attended_run_honours_a_decision_written_from_another_terminal(factory):
+    cfg = factory(planner=one_plan())
+    run = session.ensure(cfg, hitl="all")
+
+    def someone_else_answers(waiting):
+        hitl.record(run.session_dir, Decision(gate="plan", round=1, verdict="approve",
+                                              by="bob", channel="cli",
+                                              subject_digest=waiting.subject_digest))
+        return "", ""                                    # this keypress poll saw nothing
+    run.hitl.ask = someone_else_answers
+    decision = approve_phase(run, plan_phase(run))
+    assert decision.by == "bob"
+
+
+def test_an_attended_detach_suspends(factory):
+    cfg = factory(planner=one_plan())
+    run = session.ensure(cfg, hitl="all")
+    run.hitl.ask = lambda waiting: ("detach", "")
+    plan = plan_phase(run)
+    with pytest.raises(SystemExit) as stop:
+        approve_phase(run, plan)
+    assert stop.value.code == hitl.EXIT_WAITING
+    assert artifacts.read_run(run.session_dir).status == "waiting"
+
+
+def test_notify_command_runs_on_suspend_with_the_subject_on_stdin(factory, repo):
+    log = repo / "notified.json"
+    cfg = factory(planner=one_plan(),
+                  hitl={"notify_command": [sys.executable, "-c",
+                                           f"import sys; open({str(log)!r}, 'w').write(sys.stdin.read())"]})
+    run = session.ensure(cfg, hitl="all")
+    with pytest.raises(SystemExit):
+        approve_phase(run, plan_phase(run))
+    assert json.loads(log.read_text())["gate"] == "plan"
+
+
+# ── human-in-the-loop: the loop ──────────────────────────────────────────────
+
+from adw_modules.data_types import Gate                                    # noqa: E402
+
+
+def plan_gate(prompt="do the thing"):
+    return Gate(name="plan", owner="planner",
+                call=AgentCall(output_type=PlanOutput, prompt=prompt,
+                               gates=[gates.artifacts_exist, gates.files_non_empty]))
+
+
+def test_a_trusted_gate_records_a_policy_approval_and_opens_no_phase(factory):
+    cfg = factory(planner=one_plan())
+    run = session.ensure(cfg)                          # config default: off
+    plan = hitl.gated(run, plan_gate(), plan_phase(run))
+    assert plan.artifacts == ["specs/plan.md"]
+    assert [p.params.name for p in run.phases] == ["plan"]
+    recorded = hitl.read_decision(run.session_dir, "plan", 1)
+    assert recorded.by == "policy" and recorded.channel == "auto" and recorded.approved
+    assert recorded.subject_digest == hitl.digest([Path(run.repo_root) / "specs/plan.md"])
+    assert run.finish() == 0
+
+
+def test_a_rejection_revises_in_the_same_session_and_asks_again(factory):
+    """The planner has TWO scripted replies in ONE session: the plan, then the
+    revision. A revise that started a fresh session would find no second reply."""
+    cfg = factory(planner={"writes": ["specs/"], "strict": True, "replies": [
+        {"writes": {"specs/plan.md": "# Plan\n"},
+         "envelope": envelope(artifacts=["specs/plan.md"], summary="v1")},
+        {"writes": {"specs/plan.md": "# Plan, split migration\n"},
+         "envelope": envelope(artifacts=["specs/plan.md"], summary="v2")}]})
+    run = session.ensure(cfg, hitl="all")
+    answers = iter([("reject", "split the migration"), ("approve", "")])
+    run.hitl.ask = lambda waiting: next(answers)
+
+    plan = hitl.gated(run, plan_gate(), plan_phase(run))
+
+    assert plan.summary == "v2"
+    assert [p.params.name for p in run.phases] == [
+        "plan", "approve_plan", "plan_revise_1", "approve_plan_2"]
+    assert all(p.status == "success" for p in run.phases)
+    # The revise prompt carried the human's words, through previous_envelope.
+    sent = (run.session_dir / "planner" / "prompts" / "user.md").read_text()
+    assert "split the migration" in sent and '"verdict": "reject"' in sent
+    assert hitl.read_decision(run.session_dir, "plan", 2).approved
+    assert run.finish() == 0
+
+
+def test_approve_with_remarks_carries_them_to_the_next_agent(factory):
+    cfg = factory(planner={"writes": ["specs/"], "replies": [
+        {"writes": {"specs/plan.md": "# Plan\n"},
+         "envelope": envelope(artifacts=["specs/plan.md"],
+                              notes_for_next_agent="use the existing helper")}]})
+    run = session.ensure(cfg, hitl="all")
+    run.hitl.ask = lambda waiting: ("approve", "keep the migration reversible")
+    plan = hitl.gated(run, plan_gate(), plan_phase(run))
+    assert "use the existing helper" in plan.notes_for_next_agent
+    assert "keep the migration reversible" in plan.notes_for_next_agent
+
+
+def test_an_abort_ends_the_run_as_not_accepted(factory, repo):
+    cfg = factory(planner=one_plan())
+    run = session.ensure(cfg, hitl="all")
+    run.hitl.ask = lambda waiting: ("abort", "wrong feature")
+    with pytest.raises(SystemExit) as stop:
+        hitl.gated(run, plan_gate(), plan_phase(run))
+    assert stop.value.code not in (0, hitl.EXIT_WAITING)
+    assert run.phases[-1].params.name == "approve_plan"
+    assert run.phases[-1].status == "fail"
+    assert "wrong feature" in run.phases[-1].error
+    assert db_rows(repo, "select status from sessions") == [("fail",)]
+    assert artifacts.read_run(run.session_dir).status == "fail"
+    assert Path(run.repo_root).exists()                # a failed run keeps its tree
+
+
+def test_a_gate_without_a_revise_target_cannot_be_rejected(factory):
+    cfg = factory(planner=one_plan())
+    run = session.ensure(cfg, hitl="all")
+    run.hitl.ask = lambda waiting: ("reject", "no")
+    with pytest.raises(SystemExit):
+        hitl.gated(run, Gate(name="integrate"), plan_phase(run))
+    assert "approve/abort" in run.phases[-1].error
+
+
+def test_max_rounds_bounds_the_loop_when_set(factory):
+    cfg = factory(planner=one_plan(), hitl={"default": "on", "max_rounds": 1})
+    run = session.ensure(cfg)
+    run.hitl.ask = lambda waiting: ("reject", "again")
+    with pytest.raises(SystemExit):
+        hitl.gated(run, plan_gate(), plan_phase(run))
+    assert "max_rounds" in run.phases[-1].error
+
+
+def test_a_suspended_reject_round_resumes_into_the_revise_phase(factory):
+    """The whole loop across two processes: suspend, reject from the CLI, resume —
+    the plan replays, the revise phase runs live, the second gate suspends."""
+    cfg = factory(planner={"writes": ["specs/"], "strict": True, "replies": [
+        {"writes": {"specs/plan.md": "# Plan\n"},
+         "envelope": envelope(artifacts=["specs/plan.md"], summary="v1")},
+        {"writes": {"specs/plan.md": "# Plan 2\n"},
+         "envelope": envelope(artifacts=["specs/plan.md"], summary="v2")}]})
+    first = session.ensure(cfg, hitl="all")
+    with pytest.raises(SystemExit):
+        hitl.gated(first, plan_gate(), plan_phase(first))
+    waiting = artifacts.read_run(first.session_dir).waiting_for
+    hitl.record(first.session_dir, Decision(gate="plan", round=1, verdict="reject",
+                                            notes="more", by="alice", channel="cli",
+                                            subject_digest=waiting.subject_digest))
+
+    second = session.ensure(cfg, adw_id=first.adw_id, resume=True, hitl="all")
+    with pytest.raises(SystemExit) as stop:
+        hitl.gated(second, plan_gate(), plan_phase(second))
+    assert stop.value.code == hitl.EXIT_WAITING
+    assert [p.params.name for p in second.phases] == [
+        "plan", "approve_plan", "plan_revise_1", "approve_plan_2"]
+    assert [p.status for p in second.phases] == ["success", "success", "success", "waiting"]
+    assert artifacts.read_run(second.session_dir).waiting_for.round == 2
+    assert (Path(second.repo_root) / "specs/plan.md").read_text() == "# Plan 2\n"
+
+
+# ── human-in-the-loop: --hitl every ──────────────────────────────────────────
+
+def test_hitl_every_checkpoints_after_each_agent_phase(factory):
+    cfg = factory(planner=one_plan(), builder={"replies": [{"envelope": envelope()}]})
+    run = session.ensure(cfg, hitl="every")
+    asked = []
+    run.hitl.ask = lambda waiting: asked.append(waiting.gate) or ("approve", "")
+
+    plan_phase(run)
+    with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
+                               description="Implement what the plan asked for")) as ph:
+        ph.call(AgentCall(output_type=BuildOutput, prompt="build"))
+
+    assert asked == ["plan", "build"]
+    assert [p.params.name for p in run.phases] == [
+        "plan", "approve_plan", "build", "approve_build"]
+    assert run.finish() == 0
+
+
+def test_hitl_every_cannot_revise_so_a_reject_at_a_checkpoint_aborts(factory):
+    cfg = factory(planner=one_plan())
+    run = session.ensure(cfg, hitl="every")
+    run.hitl.ask = lambda waiting: ("reject", "again")
+    with pytest.raises(SystemExit):
+        plan_phase(run)
+    assert "approve/abort" in run.phases[-1].error
+
+
+def test_hitl_every_shares_its_approval_with_a_gate_the_adw_placed(factory):
+    """The checkpoint after `plan` and the gate `gated()` opens are the SAME gate,
+    so one ask serves both: the placed gate finds the checkpoint's approval."""
+    cfg = factory(planner=one_plan())
+    run = session.ensure(cfg, hitl="every")
+    asked = []
+    run.hitl.ask = lambda waiting: asked.append(waiting.gate) or ("approve", "")
+    plan = hitl.gated(run, plan_gate(), plan_phase(run))
+    assert asked == ["plan"]
+    assert [p.params.name for p in run.phases] == ["plan", "approve_plan"]
+    assert plan.artifacts == ["specs/plan.md"]
+
+
+def test_hitl_every_checkpoint_that_suspends_leaves_the_agent_phase_green(factory):
+    cfg = factory(planner=one_plan())
+    run = session.ensure(cfg, hitl="every")
+    run.hitl.ask = lambda waiting: ("detach", "")
+    with pytest.raises(SystemExit) as stop:
+        plan_phase(run)
+    assert stop.value.code == hitl.EXIT_WAITING
+    assert [(p.params.name, p.status) for p in run.phases] == [
+        ("plan", "success"), ("approve_plan", "waiting")]
+
+
+# ── the whole slice: a stamped chain, suspended, answered, resumed ───────────
+
+def test_adw_plan_build_stops_at_the_plan_gate_and_finishes_once_approved(factory, repo):
+    """`adw_plan_build.main()` itself, twice: the first process stops at the gate
+    with exit 75, the CLI's `answer()` records the verdict, the second process
+    replays the plan, reads the decision, builds and commits the approved plan."""
+    import adw_plan_build
+
+    factory(planner={"writes": ["specs/"], "strict": True, "replies": [
+                {"writes": {"specs/plan.md": "# Plan\n"},
+                 "envelope": envelope(artifacts=["specs/plan.md"])},
+                {"writes": {"specs/plan.md": "# Plan, with tests\n"},
+                 "envelope": envelope(artifacts=["specs/plan.md"])}]},
+            builder={"replies": [{"envelope": envelope(commit_message="Add the thing")}]})
+    sessions = repo / "adws" / "adw_data" / "sessions"
+
+    with pytest.raises(SystemExit) as stop:
+        adw_plan_build.main("do the thing", config=CONFIG_PATH, hitl_mode="all")
+    assert stop.value.code == hitl.EXIT_WAITING
+    [session_dir] = list(sessions.iterdir())
+    assert artifacts.read_run(session_dir).waiting_for.gate == "plan"
+
+    # Round 1: reject from the CLI. The resumed run replays the plan, revises
+    # it in the same session (the strict planner's second reply), and stops at
+    # round 2.
+    hitl.answer(session_dir, "reject", "add tests", by="alice")
+    with pytest.raises(SystemExit) as stop:
+        adw_plan_build.main("do the thing", config=CONFIG_PATH, adw_id=session_dir.name,
+                            resume=True, hitl_mode="all")
+    assert stop.value.code == hitl.EXIT_WAITING
+    assert artifacts.read_run(session_dir).waiting_for.round == 2
+
+    # Round 2: approve. The resumed run replays the plan AND round 1's reject —
+    # whose digest no longer matches, because the revise rewrote plan.md in
+    # place; a consumed decision is honoured like a recorded envelope — then
+    # the revise, then reads the approve, builds and commits.
+    hitl.answer(session_dir, "approve", "fine", by="alice")
+    code = adw_plan_build.main("do the thing", config=CONFIG_PATH, adw_id=session_dir.name,
+                               resume=True, hitl_mode="all")
+    assert code == 0
+    state = artifacts.read_run(session_dir)
+    assert state.status == "success" and state.waiting_for is None
+    assert git(repo, "log", "--format=%s", "-1", state.branch) == "Add the thing"
+    phases = db_rows(repo, f"select name, status from phases "
+                           f"where adw_id='{session_dir.name}' order by seq")
+    assert ("approve_plan", "waiting") in phases and ("approve_plan", "success") in phases
+    assert ("plan_revise_1", "success") in phases and ("approve_plan_2", "success") in phases
+    assert phases[-1] == ("commit", "success")
+    assert git(repo, "show", f"{state.branch}:specs/plan.md") == "# Plan, with tests"

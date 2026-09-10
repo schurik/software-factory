@@ -436,6 +436,14 @@ def status(config_path: str) -> int:
     for adw_id, pid in sorted(live_runs.items()):
         print(f"  {adw_id}  pid {pid}")
 
+    # Stopped at a gate: no process, so not "in flight", and not ended either.
+    # The most expensive silence after an unwatched label is a plan nobody
+    # knows is waiting to be read.
+    waiting = artifacts.waiting_sessions(sessions)
+    print(f"waiting for a human: {len(waiting)}" + ("   (`just pending`)" if waiting else ""))
+    for adw_id, what in sorted(waiting.items()):
+        print(f"  {adw_id}  gate {what.gate} round {what.round}  since {_age(what.since)}")
+
     try:
         from adw_modules import worktree
         trees = worktree.inventory(main_root, cfg.worktree, str(sessions))

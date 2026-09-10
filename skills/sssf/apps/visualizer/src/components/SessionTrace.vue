@@ -354,7 +354,10 @@ function blockStyle(p: Phase, lane: Lane): Record<string, string> | undefined {
     left: geom.left,
     width: geom.width,
     background: `linear-gradient(180deg, ${hexAlpha(lane.color, 0.2)}, ${hexAlpha(lane.color, 0.05)})`,
-    borderColor: p.status === 'fail' ? 'rgba(255, 111, 103, 0.8)' : hexAlpha(lane.color, 0.55),
+    borderColor:
+      p.status === 'fail' ? 'rgba(255, 111, 103, 0.8)'
+      : p.status === 'waiting' ? 'rgba(232, 182, 74, 0.8)'
+      : hexAlpha(lane.color, 0.55),
     '--lane-glow': hexAlpha(lane.color, 0.28),
   }
 }
