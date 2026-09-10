@@ -197,7 +197,7 @@ What that means when you report it:
 - **Never approve on the engineer's behalf.** The gate exists because a person asked to decide. Put the artifact in front of them and wait.
 - **A refused answer is not an error.** A decision whose digest no longer matches the artifact (it changed since it was shown) is ignored and the run stops at the same gate, saying `stale`. `just show` and answer again.
 - **`--hitl all` and `--hitl every` are yours to pass** when the engineer asks to review a plan, or every step, on a repo whose config leaves gates off.
-- **A watcher-launched run that waits keeps its `sssf:running` label.** The watcher will not mark it `sssf:failed` — it did not fail — but nothing moves the label to `sssf:done` or `sssf:failed` once someone answers either, because `just approve` re-launches the run in a process the watcher never sees. When you report on an issue run that waited, say so and name the label, rather than reading `sssf:running` as "still executing"; `just pending` is the authority on what is actually waiting.
+- **A watcher-launched run that waits keeps its `sssf:running` label** until someone answers. The watcher will not mark it `sssf:failed` — it did not fail — and the verdict you type lands the real label, because `just approve` / `reject` / `abort` re-launch the run through `resume.py`, which moves the issue to `sssf:done` or `sssf:failed` when the run actually ends. So `sssf:running` on an issue means "a person has not answered yet", not "still executing"; `just pending` is the authority on which runs those are.
 
 ## Where the work went
 

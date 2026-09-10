@@ -22,6 +22,11 @@ That is what makes this work with the db deleted, and it is why the argv comes
 back exactly as it went in — a list, never a joined string clipped to fit a
 column. The db stays the queryable mirror the visualizer polls.
 
+THE PROCESS THAT ENDS A RUN OWNS ITS LABEL. A run that stopped for a human was
+started by the watcher but FINISHES here, once `just approve` brings it back —
+so an issue-triggered run lands its `done` or `failed` from this file, and the
+watcher's flip covers only the runs that never suspended. See `_land_label`.
+
 Deliberately not an ADW. Choosing what to launch takes no prompt and no
 judgement, so it is code — the same reason `kill_run.py` is not one either.
 """
@@ -82,6 +87,61 @@ def _rebuild(command: list[str], adw_id: str, config: str) -> list[str]:
     return ["uv", "run", f"adws/{script}", *rest, "--adw-id", adw_id, "--resume"]
 
 
+def _land_label(cfg, main_root, state, code: int) -> None:
+    """Move an issue-triggered run's label now that this process has ended it.
+
+    THE LABEL BELONGS TO WHOEVER ENDS THE RUN, and until now that was assumed to
+    be the watcher. It stopped being true the moment a run could suspend: the
+    watcher launched it, saw exit 75, and correctly left the issue on `running`
+    — but `just approve` brings the run back HERE, in a process the watcher
+    never sees, and this is where it actually finishes. Nothing moved the label
+    afterwards, so an answered issue sat on `running` forever, which is a
+    quieter lie than the `failed` it replaced but a lie all the same.
+
+    This is also the reason it is in `relaunch` rather than in `hitl.py`: the
+    three verdicts and a bare `just resume` all funnel through here, so this is
+    the one place that sees the end of every re-entered run. A `just resume` on
+    a run that failed and now succeeds moves it off `failed` for the same
+    reason.
+
+    Only `running` is removed, never a terminal label — that keeps this to the
+    one removal that cannot fail, since `gh issue edit --remove-label` errors on
+    a name the repository never defined, and the claim in `issue_watch.py`
+    already cleared every other state before the run began.
+
+    NEVER RAISES and never changes the exit code. The run's outcome is a fact
+    about the work; a tracker that could not be reached is a fact about the
+    network, and the second must not be reported as the first.
+    """
+    from adw_modules.data_types import IssueUpdate
+    from adw_modules.hitl import EXIT_WAITING
+    from adw_modules.issues import set_state
+    if state.trigger != "issue" or not state.issue_number:
+        return
+    if not cfg.issues.enabled:
+        # The label state machine is the watcher's, and this repo has not turned
+        # it on — so `just issue 42` by hand is a run against a tracker that
+        # keeps no sssf state, and inventing some for it would be this script
+        # deciding a workflow the config declined.
+        return
+    if code == EXIT_WAITING:
+        return              # it stopped at the NEXT gate; still running, still claimed
+    landed = cfg.issues.states.done if code == 0 else cfg.issues.states.failed
+    try:
+        result = set_state(main_root, cfg.issues, IssueUpdate(
+            number=state.issue_number, project=state.issue_project,
+            add_labels=[landed], remove_labels=[cfg.issues.states.running]))
+    except Exception as error:                      # noqa: BLE001 — see the docstring
+        print(f"  #{state.issue_number}: label not moved to {landed} ({error}); "
+              f"move it by hand")
+        return
+    if result.ok:
+        print(f"  #{state.issue_number}: {landed}")
+    else:
+        print(f"  #{state.issue_number}: label not moved to {landed} — "
+              f"{' · '.join(result.notes)}; move it by hand")
+
+
 def relaunch(adw_id: str, config: str, dry_run: bool = False,
              passthrough: tuple[str, ...] = ()) -> int:
     """Re-launch the workflow that recorded `adw_id`, with `--resume`.
@@ -89,12 +149,17 @@ def relaunch(adw_id: str, config: str, dry_run: bool = False,
     Everything `main()` does after parsing, so `hitl.py` can answer a gate and
     bring the run back in one step. Returns the exit code to hand on — the
     relaunched run's own, or 1 with a printed reason when nothing was launched.
+
+    This is also where an issue-triggered run lands its label, because this is
+    where such a run ENDS once it has stopped for a human at least once. See
+    `_land_label`.
     """
     from adw_modules import agents, artifacts, git_helper, hitl
     from adw_modules.utils import anchor
 
     cfg = agents.load_config(config)
-    sessions = anchor(git_helper.main_root(), f"{cfg.defaults.data_dir}/sessions")
+    main_root = git_helper.main_root()
+    sessions = anchor(main_root, f"{cfg.defaults.data_dir}/sessions")
     session_dir = sessions / adw_id
 
     state = artifacts.read_run(session_dir)
@@ -143,7 +208,9 @@ def relaunch(adw_id: str, config: str, dry_run: bool = False,
     print(f"  {' '.join(shlex.quote(part) for part in argv)}")
     if dry_run:
         return 0
-    return subprocess.run(argv).returncode
+    code = subprocess.run(argv).returncode
+    _land_label(cfg, main_root, state, code)
+    return code
 
 
 def main() -> int:

@@ -416,3 +416,106 @@ def test_the_claim_only_removes_labels_the_issue_actually_carries(forge, monkeyp
     claim = [call for call in calls() if call[0] == "edit"][0]
     assert claim.count("--remove-label") == 1        # `queued`, and nothing invented
     assert "sssf:done" not in claim and "sssf:failed" not in claim
+
+
+# ── the process that ends a run owns its label ──────────────────────────────
+
+def _run_state(**fields):
+    from adw_modules.data_types import RunState
+    return RunState(**{"adw_id": "a6d783e4", "status": "waiting", **fields})
+
+
+@pytest.fixture
+def resumable(forge, monkeypatch):
+    """A session that a watcher claimed and that then stopped at a gate.
+
+    Returns (calls, land) — `land(code)` is `resume._land_label` for a run that
+    ended with that exit status, against the same fake forge the watcher used.
+    """
+    calls, _ = forge
+    resume = _load("resume")
+    from adw_modules import agents
+    cfg = agents.load_config(CONFIG_PATH)
+
+    def land(code: int, **overrides):
+        fields = {"trigger": "issue", "issue_number": 68,
+                  "issue_project": "acme/widgets", **overrides}
+        resume._land_label(cfg, Path.cwd(), _run_state(**fields), code)
+    return calls, land
+
+
+@pytest.mark.parametrize("code,expected", [(0, "sssf:done"), (1, "sssf:failed")])
+def test_an_answered_run_lands_its_label_where_it_actually_ended(resumable, code, expected):
+    """The watcher launched this run, saw exit 75 and correctly left the issue
+    on `running` — but `just approve` brings the run back in a process the
+    watcher never sees, and that is where it finishes. Before this, nothing
+    moved the label afterwards and an answered issue sat on `running` forever."""
+    calls, land = resumable
+    land(code)
+    added, removed = _labels(calls, 68)
+    assert added == [expected]
+    assert removed == ["sssf:running"]      # only what the claim put there
+
+
+def test_a_run_that_stopped_at_the_NEXT_gate_keeps_its_claim(resumable):
+    """A reject sends the artifact back and the run asks again, so exit 75 the
+    second time means the same thing it meant the first: still claimed, still
+    waiting, nothing to land."""
+    calls, land = resumable
+    land(75)
+    assert _labels(calls, 68) == ([], [])
+
+
+@pytest.mark.parametrize("overrides", [
+    {"trigger": "engineer", "issue_number": 0, "issue_project": ""},   # not an issue run
+    {"trigger": "pr_review", "issue_number": 0, "issue_project": ""},  # a review run
+    {"trigger": "issue", "issue_number": 0},                           # too old to know
+])
+def test_only_an_issue_run_that_knows_its_number_touches_the_tracker(resumable, overrides):
+    """`issue_number` is 0 for a session recorded before this field existed, and
+    a resume of one must be a no-op rather than a guess — the url is not a
+    number, and a tracker that is not the forge does not spell it the same way."""
+    calls, land = resumable
+    land(0, **overrides)
+    assert calls() == []
+
+
+def test_a_tracker_that_cannot_be_reached_does_not_change_the_run_s_outcome(forge, monkeypatch, capsys):
+    """The run's exit code is a fact about the work; an unreachable forge is a
+    fact about the network. Raising here would tell an engineer their build
+    broke because a label did not move — so it says so and returns."""
+    calls, _ = forge
+    resume = _load("resume")
+    from adw_modules import agents, issues as issues_module
+    cfg = agents.load_config(CONFIG_PATH)
+
+    def down(*_args, **_kwargs):
+        raise OSError("forge unreachable")
+    monkeypatch.setattr(issues_module, "set_state", down)
+
+    resume._land_label(cfg, Path.cwd(), _run_state(trigger="issue", issue_number=68), 0)
+    assert calls() == []                              # nothing reached the tracker
+    assert "move it by hand" in capsys.readouterr().out
+
+
+def test_a_forge_that_refuses_the_edit_is_reported_not_swallowed(resumable, capsys):
+    """A `gh` that ran and said no is different from one that could not be run,
+    and an operator has to know the label is now theirs to move."""
+    calls, land = resumable
+    Path("forge.py").write_text("import sys; sys.exit(1)")     # the forge refuses
+    land(0)
+    said = capsys.readouterr().out
+    assert "label not moved to sssf:done" in said and "move it by hand" in said
+
+
+def test_the_label_machine_is_left_alone_when_the_tracker_workflow_is_off(forge, monkeypatch):
+    """`just issue 42` by hand on a repo that never turned the watcher on is a
+    run against a tracker keeping no sssf state; inventing some would be this
+    script deciding a workflow the config declined."""
+    calls, _ = forge
+    resume = _load("resume")
+    from adw_modules import agents
+    cfg = agents.load_config(CONFIG_PATH)
+    cfg.issues.enabled = False
+    resume._land_label(cfg, Path.cwd(), _run_state(trigger="issue", issue_number=68), 0)
+    assert calls() == []

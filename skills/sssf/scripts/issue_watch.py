@@ -319,12 +319,12 @@ def once(config_path: str, interval: int = 0) -> int:
             # thing: only `queued` is dequeued, so the issue cannot be claimed
             # a second time while a person is still deciding.
             #
-            # THE LABEL DOES NOT COME BACK ON ITS OWN. `just approve` re-launches
-            # the run with --resume in a process this watcher never sees, so
-            # `running` is the last word said here and it outlives the run that
-            # earned it. `just pending` is where the truth lives meanwhile. A
-            # terminal label for an answered run wants the answering path to own
-            # the flip, which is a wider change than this one.
+            # THE PROCESS THAT ENDS A RUN OWNS ITS LABEL, and for this one that
+            # is no longer this process: `just approve` brings the run back with
+            # --resume somewhere this watcher never sees, and `resume.py` lands
+            # the `done` or `failed` from there. So `running` here is not a
+            # guess left lying around — it is true for exactly as long as a
+            # person has not answered, and `just pending` names who is waiting.
             if code == EXIT_WAITING:
                 waiting += 1
                 print(f"  #{number}: stopped for a human at a gate — left on "
