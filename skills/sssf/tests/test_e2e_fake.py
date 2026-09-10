@@ -835,3 +835,54 @@ def test_hitl_every_checkpoint_that_suspends_leaves_the_agent_phase_green(factor
     assert stop.value.code == hitl.EXIT_WAITING
     assert [(p.params.name, p.status) for p in run.phases] == [
         ("plan", "success"), ("approve_plan", "waiting")]
+
+
+# ── the whole slice: a stamped chain, suspended, answered, resumed ───────────
+
+def test_adw_plan_build_stops_at_the_plan_gate_and_finishes_once_approved(factory, repo):
+    """`adw_plan_build.main()` itself, twice: the first process stops at the gate
+    with exit 75, the CLI's `answer()` records the verdict, the second process
+    replays the plan, reads the decision, builds and commits the approved plan."""
+    import adw_plan_build
+
+    factory(planner={"writes": ["specs/"], "strict": True, "replies": [
+                {"writes": {"specs/plan.md": "# Plan\n"},
+                 "envelope": envelope(artifacts=["specs/plan.md"])},
+                {"writes": {"specs/plan.md": "# Plan, with tests\n"},
+                 "envelope": envelope(artifacts=["specs/plan.md"])}]},
+            builder={"replies": [{"envelope": envelope(commit_message="Add the thing")}]})
+    sessions = repo / "adws" / "adw_data" / "sessions"
+
+    with pytest.raises(SystemExit) as stop:
+        adw_plan_build.main("do the thing", config=CONFIG_PATH, hitl_mode="all")
+    assert stop.value.code == hitl.EXIT_WAITING
+    [session_dir] = list(sessions.iterdir())
+    assert artifacts.read_run(session_dir).waiting_for.gate == "plan"
+
+    # Round 1: reject from the CLI. The resumed run replays the plan, revises
+    # it in the same session (the strict planner's second reply), and stops at
+    # round 2.
+    hitl.answer(session_dir, "reject", "add tests", by="alice")
+    with pytest.raises(SystemExit) as stop:
+        adw_plan_build.main("do the thing", config=CONFIG_PATH, adw_id=session_dir.name,
+                            resume=True, hitl_mode="all")
+    assert stop.value.code == hitl.EXIT_WAITING
+    assert artifacts.read_run(session_dir).waiting_for.round == 2
+
+    # Round 2: approve. The resumed run replays the plan AND round 1's reject —
+    # whose digest no longer matches, because the revise rewrote plan.md in
+    # place; a consumed decision is honoured like a recorded envelope — then
+    # the revise, then reads the approve, builds and commits.
+    hitl.answer(session_dir, "approve", "fine", by="alice")
+    code = adw_plan_build.main("do the thing", config=CONFIG_PATH, adw_id=session_dir.name,
+                               resume=True, hitl_mode="all")
+    assert code == 0
+    state = artifacts.read_run(session_dir)
+    assert state.status == "success" and state.waiting_for is None
+    assert git(repo, "log", "--format=%s", "-1", state.branch) == "Add the thing"
+    phases = db_rows(repo, f"select name, status from phases "
+                           f"where adw_id='{session_dir.name}' order by seq")
+    assert ("approve_plan", "waiting") in phases and ("approve_plan", "success") in phases
+    assert ("plan_revise_1", "success") in phases and ("approve_plan_2", "success") in phases
+    assert phases[-1] == ("commit", "success")
+    assert git(repo, "show", f"{state.branch}:specs/plan.md") == "# Plan, with tests"

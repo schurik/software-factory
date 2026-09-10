@@ -416,6 +416,12 @@ class Decision(EnvelopeBase):
     channel: str = ""               # terminal | cli | auto
     subject_digest: str = ""
     decided_at: str = ""
+    # Set the moment a run ACTS on this decision. A resumed run re-walking a
+    # round it already walked honours a consumed decision without the digest,
+    # the way replay honours a recorded envelope: the subject has legitimately
+    # moved on (a revise rewrote the plan in place), and the human already saw
+    # this one. The digest guards decisions nobody has acted on yet.
+    consumed_at: str = ""
 
     def model_post_init(self, _context: Any) -> None:
         if not self.summary:

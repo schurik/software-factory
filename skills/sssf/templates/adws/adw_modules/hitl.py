@@ -233,6 +233,16 @@ def decide(run, phase: Phase, subject: Subject) -> Decision:
 
     recorded = read_decision(run.session_dir, subject.gate, subject.round)
     if recorded is not None:
+        if recorded.consumed_at and run.resuming:
+            # This round was already walked by an earlier process, and the
+            # chain is re-walking it under --resume. The subject may since have
+            # moved on — a reject's revise rewrote the plan in place — so the
+            # digest cannot hold and is not asked to: the human already saw
+            # this one, and acting on it again is what replay means.
+            run.console.note(f"↺ decision {subject.gate}_{subject.round} replayed — "
+                             f"{recorded.verdict} by {recorded.by}, already acted on by "
+                             f"an earlier process of this session")
+            return _consume(run, phase, recorded)
         if recorded.subject_digest == fingerprint:
             return _consume(run, phase, recorded)
         run.console.note(f"decision {subject.gate}_{subject.round} is stale — it decided "
@@ -254,6 +264,8 @@ def _consume(run, phase: Phase, decision: Decision) -> Decision:
     """Record that a decision was taken, in the trace and by clearing the wait."""
     if not decision.decided_at:
         decision.decided_at = now_iso()
+    if not decision.consumed_at:
+        decision.consumed_at = now_iso()
     record(run.session_dir, decision)
     artifacts.clear_waiting(run.session_dir)
     run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
@@ -414,8 +426,10 @@ def _already_approved(run, gate: Gate, envelope: EnvelopeBase) -> bool:
 def _pass_by_policy(run, gate: Gate, envelope: EnvelopeBase) -> EnvelopeBase:
     """Trust, written down: the gate was passed, and the record says by whom."""
     paths = resolve_paths(run, gate.paths or envelope.artifacts)
+    stamp = now_iso()
     decision = Decision(gate=gate.name, round=1, verdict="approve", by="policy",
-                        channel="auto", subject_digest=digest(paths), decided_at=now_iso())
+                        channel="auto", subject_digest=digest(paths), decided_at=stamp,
+                        consumed_at=stamp)
     record(run.session_dir, decision)
     run.tracer.event(EventRecord(adw_id=run.adw_id,
                                  phase_id=run.phases[-1].phase_id if run.phases else "",
