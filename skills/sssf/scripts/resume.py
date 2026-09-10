@@ -209,7 +209,16 @@ def relaunch(adw_id: str, config: str, dry_run: bool = False,
     if dry_run:
         return 0
     code = subprocess.run(argv).returncode
-    _land_label(cfg, main_root, state, code)
+    # RE-READ, because `state` above is a snapshot from before the run started
+    # and the process that just ended is the authority on what this session
+    # knows now. That is not a nicety: a session recorded before `run.json`
+    # carried `issue_number` has it as 0 here, and the resumed chain BACKFILLS
+    # it — the issue phase is `kind="code"`, so `replay.py` re-runs it for real
+    # and `Run.record_issue` writes the number and project on the way past.
+    # Landing the label off the stale snapshot would decline every session that
+    # predates the field, which is precisely the set of runs already suspended
+    # at a gate when this shipped.
+    _land_label(cfg, main_root, artifacts.read_run(session_dir) or state, code)
     return code
 
 

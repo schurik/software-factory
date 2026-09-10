@@ -519,3 +519,58 @@ def test_the_label_machine_is_left_alone_when_the_tracker_workflow_is_off(forge,
     cfg.issues.enabled = False
     resume._land_label(cfg, Path.cwd(), _run_state(trigger="issue", issue_number=68), 0)
     assert calls() == []
+
+
+# ── the seam: a session recorded before run.json carried the issue number ────
+
+def test_a_session_older_than_the_field_is_backfilled_by_its_own_resume(forge, monkeypatch):
+    """The set of runs already suspended at a gate when this shipped is exactly
+    the set whose `run.json` has no `issue_number` — so if the label could only
+    be landed from the pre-run snapshot, the feature would decline the runs that
+    needed it most.
+
+    It does not, because the resumed chain rewrites the field on its way past:
+    `adw_issue_sdlc`'s issue phase is `kind="code"`, `replay.py` replays only
+    agent phases, so the fetch runs for real and `Run.record_issue` records the
+    number and project again. `relaunch` therefore re-reads `run.json` AFTER the
+    subprocess rather than deciding from the snapshot it took before it.
+    """
+    from adw_modules import artifacts
+    from adw_modules.data_types import RunState, WaitingFor
+    calls, _ = forge
+    resume = _load("resume")
+
+    sessions = artifacts.sessions_root(Path.cwd(), "adws/adw_data")
+    session_dir = sessions / "a6d783e4"
+    session_dir.mkdir(parents=True)
+    # Exactly the keys such a run.json has: trigger and issue_url, no number.
+    artifacts.write_run(session_dir, RunState(
+        adw_id="a6d783e4", status="waiting", pid=0, trigger="issue",
+        issue_url="https://forge/acme/widgets/issues/68",
+        command=["adw_issue_sdlc.py", "68"],
+        waiting_for=WaitingFor(gate="plan", round=1, subject_digest="abc")))
+    assert artifacts.read_run(session_dir).issue_number == 0
+
+    # The decision the human wrote, so relaunch does not refuse to resume.
+    from adw_modules.data_types import Decision
+    from adw_modules import hitl as hitl_module
+    hitl_module.record(session_dir, Decision(gate="plan", round=1, verdict="approve",
+                                             by="alice", channel="cli",
+                                             subject_digest="abc"))
+
+    # `subprocess` is one shared module object, so intercept only the chain's
+    # own argv and hand everything else (git_helper's calls) to the real one.
+    real_run = resume.subprocess.run
+
+    def resumed_chain(argv, **kwargs):
+        """What the re-run `issue` code phase does: record the issue again."""
+        if "adws/adw_issue_sdlc.py" not in argv:
+            return real_run(argv, **kwargs)
+        artifacts.update_run(session_dir, issue_number=68, issue_project="acme/widgets")
+        return type("Completed", (), {"returncode": 0})()
+    monkeypatch.setattr(resume.subprocess, "run", resumed_chain)
+
+    assert resume.relaunch("a6d783e4", CONFIG_PATH) == 0
+    added, removed = _labels(calls, 68)
+    assert added == ["sssf:done"], "the pre-field session was declined"
+    assert removed == ["sssf:running"]
