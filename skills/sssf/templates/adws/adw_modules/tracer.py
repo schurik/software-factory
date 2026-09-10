@@ -4,12 +4,20 @@ Files are the raw record; sssf.db is the queryable mirror the UI polls.
 No push transport — the flow is always: agents -> sqlite -> web ui.
 WAL mode so the UI can read while ADW processes write.
 
-A RUN ONLY WRITES HERE. Nothing a workflow does at runtime reads this db back:
-what a session has already produced is answered from the session's own
-directory (`adw_modules/artifacts.py`), so a run whose db was deleted still
-resumes, still numbers its phases, and still knows its own provenance. The
-module-level readers below exist for the maintenance tools that ask ABOUT
-sessions — the watchers, `just worktrees` — never for the runs themselves.
+THE FACTORY ONLY WRITES HERE. Nothing in it reads this db back — not a run,
+not a watcher, not a maintenance command. Every question about what a session
+did is answered from that session's own directory, through
+`adw_modules/artifacts.py`.
+
+That is not tidiness, it is portability: the db is a local mirror of the event
+stream, and the day those events go to a hosted API instead there is no file on
+this machine to query. Code that reads it would have to be written twice. Code
+that reads the session directory does not, because the session directory is
+where the run actually happened.
+
+`watcher_beat` is the one row here that is not a run's: it is written for the
+trace UI's badges, and `just status` reads the same heartbeat from
+`adw_data/watchers/<kind>.json` rather than from this file.
 """
 
 from __future__ import annotations
@@ -142,100 +150,6 @@ MIGRATIONS = [("agent_sessions", "color", "TEXT"),
               ("sessions", "pr_url", "TEXT")]
 
 
-def running_adw_pids(db_path: str | Path) -> dict[str, int]:
-    """{adw_id: pid} for every session that BELIEVES it is running, read-only.
-
-    "Believes" is the point. A session goes to `running` at start and is only
-    ever closed by `run.finish()` or the SIGTERM/SIGINT handler — a SIGKILL, an
-    OOM or a reboot leaves the row saying `running` forever. Anything that
-    budgets on that count (the issue watcher's max_concurrent) would wedge
-    permanently after two such deaths, and the symptom is indistinguishable
-    from a genuinely busy factory.
-
-    The pid is the way out: the caller checks whether the process still exists.
-    That is why the adw process row is written before the first phase opens.
-    """
-    path = Path(db_path)
-    if not path.exists():
-        return {}
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
-    try:
-        rows = conn.execute(
-            "SELECT s.adw_id, p.pid FROM sessions s "
-            "  JOIN processes p ON p.adw_id = s.adw_id "
-            " WHERE s.status = 'running' AND p.kind = 'adw' AND p.ended_at IS NULL"
-        ).fetchall()
-    except sqlite3.Error:
-        return {}
-    finally:
-        conn.close()
-    return {adw_id: pid for adw_id, pid in rows if pid}
-
-
-def session_statuses(db_path: str | Path) -> dict[str, str]:
-    """{adw_id: status} for every session, read-only. {} when there is no db.
-
-    Opened read-only and on its own connection: the callers are maintenance
-    tools that must never create a trace db as a side effect of asking a
-    question about one, and must never block a run that is writing.
-    """
-    if not Path(db_path).exists():
-        return {}
-    conn = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
-    try:
-        return {row[0]: row[1] or "unknown"
-                for row in conn.execute("SELECT adw_id, status FROM sessions")}
-    except sqlite3.Error:
-        return {}
-    finally:
-        conn.close()
-
-
-def session_pr_urls(db_path: str | Path) -> dict[str, str]:
-    """{adw_id: pr_url} for every session that has one, read-only. {} with no db.
-
-    The third of these module-level readers, and here for the reason the other
-    two are: `pr_watch.py` needs to ask which pull request a session became, and
-    constructing a Tracer to ask would open a WRITE connection and create an
-    events file — a maintenance tool leaving a trail in the record it is only
-    reading. Sessions without a pull request are omitted rather than returned
-    empty, because every caller filters them out anyway.
-    """
-    if not Path(db_path).exists():
-        return {}
-    conn = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
-    try:
-        return {row[0]: row[1] for row in conn.execute(
-            "SELECT adw_id, pr_url FROM sessions WHERE pr_url IS NOT NULL "
-            "AND pr_url != ''")}
-    except sqlite3.Error:
-        return {}
-    finally:
-        conn.close()
-
-
-def session_adw_names(db_path: str | Path) -> dict[str, str]:
-    """{adw_id: adw_name} for every session, read-only. {} when there is no db.
-
-    Which WORKFLOW a session ran, as recorded by `run.finish()` — the fourth of
-    these readers, and here because `pr_watch._reap` must not treat every run
-    that happens to be attached to a merged pull request the same. Stopping a
-    review run whose branch has landed is cleanup; stopping the SDLC run that
-    opened that pull request and is still writing its docs is destroying work.
-    Only the workflow's name tells the two apart.
-    """
-    if not Path(db_path).exists():
-        return {}
-    conn = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
-    try:
-        return {row[0]: row[1] or "" for row in
-                conn.execute("SELECT adw_id, adw_name FROM sessions")}
-    except sqlite3.Error:
-        return {}
-    finally:
-        conn.close()
-
-
 def ensure_db(db_path: str | Path) -> sqlite3.Connection:
     """Open the trace db, creating it with the FULL schema if it is missing.
 
@@ -262,12 +176,16 @@ def watcher_beat(db_path: str | Path, kind: str, status: str, *,
                  note: str = "") -> None:
     """Record that a watcher is alive and what it last saw. Never raises.
 
-    The only write in this module that does not belong to a run. It exists
-    because a watcher that is not running and a watcher with nothing to
-    do look identical from the outside — which is the single most expensive
-    confusion in operating this thing: you label an issue, wait, and find out
-    an hour later that nothing was polling. A row here is what lets `just
-    status` and the trace UI answer "is it up" without guessing.
+    The only write in this module that does not belong to a run, and it is for
+    the TRACE UI: the badges in its top bar read this table. `just status` reads
+    the same heartbeat from `adw_data/watchers/<kind>.json`, which
+    `artifacts.watcher_beat` writes on the same poll — so the answer survives a
+    machine with no db, and the badge keeps working on one that has it.
+
+    Either way it exists because a watcher that is not running and a watcher
+    with nothing to do look identical from the outside — the single most
+    expensive confusion in operating this thing: you label an issue, wait, and
+    find out an hour later that nothing was polling.
 
     Written on every poll, so `last_poll_at` doubles as the liveness signal for
     a watcher that is idling. It is NOT the signal for one that is mid-run:
@@ -297,25 +215,6 @@ def watcher_beat(db_path: str | Path, kind: str, status: str, *,
             conn.close()
     except (sqlite3.Error, OSError):
         pass
-
-
-def watcher_states(db_path: str | Path) -> dict[str, dict]:
-    """{kind: row} for every watcher that has ever beaten here, read-only.
-
-    A kind that is absent has never been started in this repo — which is a
-    different thing from `stopped`, and the reason readers render the two
-    differently. {} when there is no db, same contract as the readers above.
-    """
-    if not Path(db_path).exists():
-        return {}
-    conn = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True, timeout=5)
-    conn.row_factory = sqlite3.Row
-    try:
-        return {row["kind"]: dict(row) for row in conn.execute("SELECT * FROM watchers")}
-    except sqlite3.Error:
-        return {}                       # a db written before this table existed
-    finally:
-        conn.close()
 
 
 class Tracer:
@@ -419,28 +318,6 @@ class Tracer:
             return
         self.conn.execute("UPDATE sessions SET trigger=? WHERE adw_id=?",
                           (trigger, adw_id))
-
-    def session_provenance(self, adw_id: str) -> tuple[str, str, str]:
-        """(trigger, issue_url, pr_url) for a session, "" when unknown. Read only.
-
-        A run is one PROCESS but a session can span several — `just integrate
-        <adw_id>` re-enters an ADW hours later — and provenance that lived only
-        in the first process's memory was gone by then. `force_pr` then read
-        "engineer" on an issue-triggered session and merged into the base
-        branch: the one control this phase put in code rather than in config,
-        defeated by the documented follow-up path.
-
-        `pr_url` rides along for the same reason and for a second one: a session
-        whose branch is already a pull request must not open a second one, and
-        the process that opened it is long gone. Without this, a later chain in
-        the same session re-ran `pr create` against a branch that already had a
-        PR, the forge refused, and an integration whose push had ALREADY updated
-        the pull request was recorded as a failed run.
-        """
-        row = self.conn.execute(
-            "SELECT trigger, issue_url, pr_url FROM sessions WHERE adw_id=?", (adw_id,)
-        ).fetchone()
-        return (row[0] or "", row[1] or "", row[2] or "") if row else ("", "", "")
 
     def session_pr(self, adw_id: str, url: str) -> None:
         """Record the pull request this run's branch became.

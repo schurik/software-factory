@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import git_helper, tracer
+from . import artifacts, git_helper
 from .data_types import Workspace, WorktreeConfig, WorktreeInfo, WorktreeRequest
 from .utils import anchor, ensure_dir, now_iso
 
@@ -189,16 +189,17 @@ def remove(main_root, path, force: bool = False) -> str:
     return f"removed {path}"
 
 
-def inventory(main_root, config: WorktreeConfig, db_path: str = "") -> list[WorktreeInfo]:
+def inventory(main_root, config: WorktreeConfig, sessions_dir: str = "") -> list[WorktreeInfo]:
     """Every run worktree on disk, with the state of the run that owns it.
 
     "Left behind" and "orphaned" are different things: a killed run keeps its
-    worktree on purpose, and only the trace db knows the difference — git has no
-    idea whether the process that made this directory is still alive. Statuses
-    come from there; git supplies the paths.
+    worktree on purpose, and git has no idea whether the process that made this
+    directory is still alive. The runs' own records say so — one `run.json` per
+    session, never the trace db, which may not exist on this machine at all.
+    Statuses come from there; git supplies the paths.
     """
     root = anchor(main_root, config.dir)
-    statuses = tracer.session_statuses(db_path) if db_path else {}
+    statuses = artifacts.statuses(Path(sessions_dir)) if sessions_dir else {}
     found: list[WorktreeInfo] = []
     for entry in git_helper.worktree_list(main_root):
         path = Path(entry["path"])

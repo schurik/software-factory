@@ -48,7 +48,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        from adw_modules import agents, git_helper, worktree
+        from adw_modules import agents, artifacts, git_helper, worktree
     except ImportError as error:
         print(f"no factory here — run this from a repo with adws/ stamped in ({error})",
               file=sys.stderr)
@@ -60,7 +60,9 @@ def main() -> int:
         return 1
     cfg = agents.load_config(args.config)
     git_helper.worktree_prune(root)               # forget records whose directory is gone
-    found = worktree.inventory(root, cfg.worktree, str(cfg.observability.db))
+    found = worktree.inventory(
+        root, cfg.worktree,
+        str(artifacts.sessions_root(root, cfg.defaults.data_dir)))
 
     if args.action == "list":
         _show(found)

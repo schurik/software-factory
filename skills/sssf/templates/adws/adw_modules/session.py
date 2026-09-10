@@ -72,20 +72,21 @@ def ensure(cfg: SSSFConfig, adw_id: str | None = None, resume: bool = False) -> 
     run = Run(RunSpec(cfg=cfg, adw_id=adw_id, engineer=engineer_name(),
                       workspace=workspace, resume=resume), tracer)
     tracer.session_start(adw_id, run.engineer, adw_name=Path(sys.argv[0]).stem)
-    # What the session already knows about itself, from its own directory — the
-    # db answer is the fallback, and only for a session recorded before run.json
-    # existed. An issue-triggered session that a later ADW re-enters must still
-    # know it was issue-triggered — integration.py refuses to merge on that —
-    # and a session whose branch is already a pull request must know THAT, or it
-    # proposes the branch a second time instead of pushing to the PR it has.
+    # What the session already knows about itself, from its own directory. An
+    # issue-triggered session that a later ADW re-enters must still know it was
+    # issue-triggered — integration.py refuses to merge on that — and a session
+    # whose branch is already a pull request must know THAT, or it proposes the
+    # branch a second time instead of pushing to the PR it has.
     recorded = artifacts.read_run(run.session_dir)
-    run.adopt_provenance(*((recorded.trigger, recorded.issue_url, recorded.pr_url)
-                           if recorded else tracer.session_provenance(adw_id)))
+    if recorded:
+        run.adopt_provenance(recorded.trigger, recorded.issue_url, recorded.pr_url)
     tracer.session_workspace(adw_id, workspace)
     # This process is the run. Record it before any phase opens, so a run that
     # hangs in its first agent call is still killable by adw_id.
     tracer.process_start(adw_id, "adw", "", os.getpid(),
                          " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]))
+    artifacts.record_process(run.session_dir, "adw", "", os.getpid(),
+                             " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]))
     # The same fact in the session's OWN directory, and the only place it is
     # written whole: `command` is the argv as a list, so `just resume` can launch
     # this workflow again without a db, without unquoting, and without the 500

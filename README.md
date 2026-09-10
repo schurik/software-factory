@@ -309,7 +309,7 @@ The output contract lives in three places and they are one thing: the type in `d
   <img src="images/06_trace_path.svg" alt="Running agents to tracer.py to a WAL SQLite db with seven tables, read by a cursor poll query, with no websocket and no ingest endpoint" width="780">
 </p>
 
-One data path, no exceptions: **agents write to SQLite, readers poll SQLite.** The harness module (`adw_modules/harnesses/pi.py`, `claude_code.py`) tails the coding agent's JSONL stdout line by line and the tracer inserts each event while the agent is still working, so tool calls are visible mid-run instead of batched at the end.
+One data path, no exceptions: **agents write to SQLite, readers poll SQLite.** And only readers: the factory itself never queries it back — every question a run, `just kill`, `just status` or `just resume` asks about a session is answered from that session's own directory (`run.json`, `envelopes/`, `processes.jsonl`, `events.jsonl`). The db is a local mirror, so the day the events go to a hosted API instead, nothing but `tracer.py` changes. The harness module (`adw_modules/harnesses/pi.py`, `claude_code.py`) tails the coding agent's JSONL stdout line by line and the tracer inserts each event while the agent is still working, so tool calls are visible mid-run instead of batched at the end.
 
 Eleven event types land across seven tables: `sessions`, `phases`, `events`, `envelopes`, `gate_results`, `agent_sessions`, and `processes` (adw_id to pid, so a stuck run can be found and stopped). Every event logs against both its `adw_id` and its `phase_id`, and `parent_id` nests spans, so an agent phase expands into its own tool calls.
 

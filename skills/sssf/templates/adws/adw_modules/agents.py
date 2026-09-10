@@ -201,10 +201,8 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
         result = driver.run(
             request,
             on_event=forward,
-            on_spawn=lambda pid: run.tracer.process_start(
-                run.adw_id, "agent", agent.name, pid,
-                f"{agent.harness} {agent.name} {agent.model}"),
-            on_exit=lambda pid: run.tracer.process_end(run.adw_id, pid))
+            on_spawn=lambda pid: _spawned(run, agent, pid),
+            on_exit=lambda pid: _exited(run, pid))
         run.add_usage(result.tokens, result.cost)
         spent.merge(result.usage)
         latest = result
@@ -289,6 +287,23 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
 
 
 # ── internals ────────────────────────────────────────────────────────────────
+
+def _spawned(run, agent: AgentConfig, pid: int) -> None:
+    """A coding agent child, recorded in both places `just kill` might look.
+
+    The file is the one that matters — it is what `kill_run.py` reads, and it is
+    there on a machine with no db — while the row keeps the trace UI's process
+    view complete.
+    """
+    command = f"{agent.harness} {agent.name} {agent.model}"
+    run.tracer.process_start(run.adw_id, "agent", agent.name, pid, command)
+    artifacts.record_process(run.session_dir, "agent", agent.name, pid, command)
+
+
+def _exited(run, pid: int) -> None:
+    run.tracer.process_end(run.adw_id, pid)
+    artifacts.end_process(run.session_dir, pid)
+
 
 def _check_gates(run, phase: Phase, call: AgentCall, envelope: EnvelopeBase,
                  attempt: int) -> list[str]:

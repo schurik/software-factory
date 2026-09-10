@@ -53,7 +53,7 @@ You run the system, observe the system, and help the user interact with it. **Yo
 
 - Never implement, plan, or test in an agent's place — launch the ADW and watch it.
 - Never edit files inside `adws/adw_data/sessions/` — that is the run record.
-- Observe by querying `adws/adw_data/sssf.db` (WAL — reads never block writers) **when observing is the task**. This is a capability, not a startup step: query it to follow a run you launched or one the engineer asked about, never to volunteer a status report nobody requested.
+- Observe by querying `adws/adw_data/sssf.db` (WAL — reads never block writers) **when observing is the task**. This is a capability, not a startup step: query it to follow a run you launched or one the engineer asked about, never to volunteer a status report nobody requested. It is the visualizer's mirror, and yours to read — but never the FACTORY's: the code answers every question about a session from that session's own directory, so a repo whose db was deleted still runs, resumes, kills and uninstalls. See [references/observability.md](references/observability.md).
 - Report phase status plainly: name, owner, status, error if any.
 
 ## Where a run's work lands

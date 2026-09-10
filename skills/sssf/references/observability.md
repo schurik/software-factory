@@ -6,7 +6,17 @@ The event schema, the seven SQLite tables, and the polling contract — the one 
 
 **Files are the raw record** (`events.jsonl`, `run.json`, `envelopes/<phase_id>.json`, `raw_output.jsonl` streams, `envelope.json`, `agent_map.json`); **SQLite (`sssf.db`) is the queryable mirror** the UI reads. `tracer.py` writes both. Losing the db loses nothing that can't be rebuilt from files.
 
-**A run only ever WRITES to the db.** Everything a workflow needs to know about a session it has already run — what a resumed phase produced, how far the phase numbering got, where the run came from — is read from that session's own directory through `adw_modules/artifacts.py`. So a run resumes correctly with `sssf.db` deleted, and the db can be removed to reclaim disk without costing the factory anything but the UI's history. The readers in `tracer.py` belong to the maintenance tools (the watchers, `just worktrees`), which ask *about* sessions rather than running them.
+**The factory only ever WRITES to the db — nothing in it reads back.** Not a run, not a watcher, not `just kill`, `just status`, `just worktrees` or the uninstaller. Every question about a session is answered from that session's own directory through `adw_modules/artifacts.py`:
+
+| Question | File |
+|---|---|
+| what did this phase produce (a resume) | `sessions/<adw_id>/envelopes/<phase_id>.json` |
+| which phases passed, how far the numbering got | `sessions/<adw_id>/events.jsonl` |
+| which workflow ran, with what argv, how it ended, where it came from | `sessions/<adw_id>/run.json` |
+| what has this run got alive, and how do I stop it | `sessions/<adw_id>/processes.jsonl` |
+| is a watcher up, and what did it last see | `watchers/<kind>.json` |
+
+That is portability, not tidiness: the db is a local mirror of the event stream, and the day those events go to a hosted API instead there is no file here to query — code that reads it would have to be written twice. Delete `sssf.db` and every command above still works; all you lose is the visualizer's history. The watcher heartbeat is written to BOTH (the file for `just status`, the row for the UI's badges), because a write is free and the badge is the visualizer's.
 
 Location comes from `observability.db` in `sssf.config.yaml`, default `adws/adw_data/sssf.db` — inside the **target** repo, gitignored.
 

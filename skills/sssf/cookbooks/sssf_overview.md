@@ -47,10 +47,12 @@ adws/
     ├── sessions/{adw_id}/                               gitignored runtime
     │   ├── run.json             the session's own state: workflows, argv, pid, outcome — what `just resume` reads
     │   ├── envelopes/{phase_id}.json   one per agent PHASE, so a resume can answer each one
+    │   ├── processes.jsonl      what this run spawned and what ended — what `just kill` reads
     │   ├── agent_map.json       agent → harness session_id + model
     │   ├── context_handoff/     the one place agents write files for the agents that follow
     │   └── {agent}/{prompts/, raw_output.jsonl, envelope.json}
-    └── sssf.db                  gitignored SQLite trace db the visualizer polls
+    ├── watchers/{kind}.json     watcher heartbeat — what `just status` reads
+    └── sssf.db                  gitignored SQLite mirror the visualizer polls. THE FACTORY ONLY WRITES IT
 ```
 
 **Every run gets its own worktree and branch.** `.sssf-worktrees/<adw_id>` on `sssf/<adw_id>`, cut from whatever the main checkout had at run start. The engineer's tree is never touched, two runs can execute at once, and a failed run keeps its worktree because that is where you go to see what happened. A chain's commits are therefore **on its branch, not on the engineer's** until the integration phase lands them the way `worktree.integration` says to — a branch that has not landed is not a failed run. `just worktrees`, `just worktrees-prune`, `just integrate <adw_id>`.
