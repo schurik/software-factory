@@ -16,7 +16,7 @@ from typing import Any, Callable, Literal, Optional, Type
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 PhaseKind = Literal["engineer", "agent", "code"]
-PhaseStatus = Literal["queued", "running", "success", "fail"]
+PhaseStatus = Literal["queued", "running", "success", "fail", "waiting"]
 
 # Wall clock for one agent turn, unless the roster says otherwise. Generous on
 # purpose — a builder working a real change legitimately runs for many minutes,
@@ -388,6 +388,90 @@ class AgentCall(BaseModel):
     gates: list[Callable] = Field(default_factory=list)   # gate(envelope, run) -> list[str]
 
 
+# ── Human-in-the-loop (adw_modules/hitl.py) ──────────────────────────────────
+
+Verdict = Literal["approve", "reject", "abort"]
+
+
+class Decision(EnvelopeBase):
+    """What a human said at a gate, in the shape the next agent already reads.
+
+    An ENVELOPE, so `previous=decision` hands a rejection to the agent that
+    produced the artifact with no new plumbing: `notes_for_next_agent` is the
+    human's notes, and `summary` says who decided what. `status` is always
+    "success" — the decision happened; whether the WORK passed is `verdict`.
+
+    `subject_digest` names exactly what was decided on: a hash of the artifact
+    files at the moment the human was asked. A decision whose digest no longer
+    matches the subject in front of the run is refused, so a stale
+    `just approve` from an earlier round can never wave a changed plan through.
+    """
+
+    status: Literal["success", "fail"] = "success"
+    gate: str
+    round: int = 1
+    verdict: Verdict
+    notes: str = ""
+    by: str = ""                    # engineer name, forge login, or "policy"
+    channel: str = ""               # terminal | cli | auto
+    subject_digest: str = ""
+    decided_at: str = ""
+
+    def model_post_init(self, _context: Any) -> None:
+        if not self.summary:
+            who = self.by or "someone"
+            self.summary = (f"{self.verdict} by {who}"
+                            + (f": {self.notes}" if self.notes else ""))
+        if not self.notes_for_next_agent:
+            self.notes_for_next_agent = self.notes
+
+    @property
+    def approved(self) -> bool:
+        return self.verdict == "approve"
+
+
+class Subject(BaseModel):
+    """What a gate shows the human, and what its digest is taken over."""
+
+    gate: str
+    round: int = 1
+    summary: str = ""               # the envelope's own one-liner
+    paths: list[str] = Field(default_factory=list)   # absolute, or relative to repo_root
+    notes: str = ""                 # the producing agent's notes_for_next_agent
+
+
+class Gate(BaseModel):
+    """One human gate at a call site: what to show, and how to revise on reject.
+
+    `call` is the agent call to repeat when the human rejects — the SAME output
+    type and gates, with `previous=` replaced by the decision. None makes the
+    gate approve/abort only, which is what a gate after a code phase is.
+    """
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    name: str                       # the id policy keys on: "plan", "integrate"
+    owner: str = ""                 # the agent that revises; "" = nobody can
+    call: Optional[AgentCall] = None
+    retries: int = 1                # gate-correction retries on the revise phase
+    description: str = ""           # for the approve phase; a default is composed
+    paths: list[str] = Field(default_factory=list)   # subject; default = envelope.artifacts
+
+
+class WaitingFor(BaseModel):
+    """What a suspended session is waiting on — `run.json.waiting_for`."""
+
+    gate: str
+    round: int = 1
+    phase_id: str = ""
+    phase_name: str = ""
+    since: str = ""
+    subject_digest: str = ""
+    paths: list[str] = Field(default_factory=list)
+    summary: str = ""
+    notes: str = ""
+
+
 # ── Config ───────────────────────────────────────────────────────────────────
 
 class PromptEngineering(BaseModel):
@@ -530,6 +614,29 @@ class BudgetConfig(BaseModel):
     max_tokens: int = 0             # 0 = no ceiling
 
 
+class HitlConfig(BaseModel):
+    """Which gates stop for a human, and what a stopped run does.
+
+    Placement is the ADW's (`hitl.gated(...)` at a call site names a gate);
+    this decides whether a placed gate FIRES. Most specific wins: the `--hitl`
+    flag, then `SSSF_HITL`, then `gates` by name, then `default`.
+
+    Off by default, so a stamped repository behaves exactly as it did.
+    """
+
+    default: str = "off"                 # off | on
+    gates: dict[str, str] = Field(default_factory=dict)   # {"plan": "on"}
+    wait_seconds: int = 900              # attended: prompt this long, then suspend
+    max_rounds: int = 0                  # 0 = until the human approves or aborts
+    # What an issue- or PR-triggered run does at an on-gate: `suspend` stops
+    # and waits (there is no terminal to ask); `auto` records a policy approval
+    # and continues. The safe default is the first.
+    when_unattended: str = "suspend"     # suspend | auto
+    # Run when a gate suspends, with the subject on stdin — a known command is
+    # code. [] runs nothing.
+    notify_command: list[str] = Field(default_factory=list)
+
+
 class ObservabilityConfig(BaseModel):
     db: str = "adws/adw_data/sssf.db"
     poll_ms: int = 500
@@ -647,6 +754,7 @@ class PullRequestsConfig(BaseModel):
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
+    hitl: HitlConfig = Field(default_factory=HitlConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     worktree: WorktreeConfig = Field(default_factory=WorktreeConfig)
     issues: IssuesConfig = Field(default_factory=IssuesConfig)
@@ -744,7 +852,7 @@ class RunState(BaseModel):
     command: list[str] = Field(default_factory=list)     # argv of the NEWEST process
     pid: int = 0
     engineer: str = ""
-    status: str = "running"         # running | success | fail
+    status: str = "running"         # running | success | fail | waiting
     started_at: str = ""
     ended_at: str = ""
     repo_root: str = ""             # the worktree the run works in
@@ -752,6 +860,10 @@ class RunState(BaseModel):
     trigger: str = "engineer"       # engineer | issue | pr_review
     issue_url: str = ""
     pr_url: str = ""
+    # Set while a gate waits on a human; cleared when the decision is consumed.
+    # `status == "waiting"` says the PROCESS is gone; this says why, and what
+    # `just approve` would be approving.
+    waiting_for: Optional[WaitingFor] = None
     # What the SESSION has spent, across every process that joined it. Here
     # rather than only in `sessions.total_tokens` because `budget:` is enforced
     # against it, and a limit that needed the db would be one the factory
