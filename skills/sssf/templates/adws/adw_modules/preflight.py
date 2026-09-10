@@ -9,8 +9,8 @@ to surface partway into a chain, after a planner had already been paid for.
 So the checks live here, in one module, and they are asked in two places:
 
   * `before_run(cfg)` — the cheap, unconditional subset, called by
-    `session.ensure()` before a worktree, a session row or a process record
-    exists. A fatal finding aborts while the repo is still untouched.
+    `session.ensure()` before the worktree, the session's own `run.json` or a
+    process record exists. A fatal finding aborts while the repo is untouched.
   * `everything(cfg)` — the full sweep, which is what `just doctor` prints.
     It includes the checks that are too slow, too situational or too noisy to
     put in front of every run: harness reachability, the forge CLI, the quality
