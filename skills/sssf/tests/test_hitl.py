@@ -175,3 +175,20 @@ def test_answer_reaches_a_blocked_run_that_is_still_polling(session_dir):
     artifacts.update_run(session_dir, waiting_for=WaitingFor(gate="plan", subject_digest="x"))
     assert artifacts.read_run(session_dir).status == "running"
     assert hitl.answer(session_dir, "approve", "", by="alice").approved
+
+
+def test_the_config_reads_on_and_off_as_yaml_writes_them():
+    """PyYAML reads `on`/`off` as booleans. The stamped config says `default: off`,
+    and a roster that could not be loaded would break every install."""
+    import yaml
+    raw = yaml.safe_load("hitl:\n  default: off\n  gates: {plan: on, build: off}\n")
+    config = HitlConfig(**raw["hitl"])
+    assert config.default is False and config.gates == {"plan": True, "build": False}
+    policy = HitlPolicy(config)
+    assert policy.mode("plan", "engineer") == "on"
+    assert policy.mode("build", "engineer") == "auto"
+    assert HitlConfig(default="on").default is True           # the word, quoted or in Python
+    with pytest.raises(ValueError):
+        HitlConfig(default="sometimes")
+    with pytest.raises(ValueError):
+        HitlConfig(when_unattended="ask")

@@ -300,8 +300,8 @@ class HitlConfig(BaseModel):
     Off by default, so a stamped repository behaves exactly as it did.
     """
 
-    default: str = "off"                 # off | on
-    gates: dict[str, str] = Field(default_factory=dict)   # {"plan": "on"}
+    default: bool = False                # off | on — YAML booleans; the words are accepted too
+    gates: dict[str, bool] = Field(default_factory=dict)   # {"plan": on}
     wait_seconds: int = 900              # attended: prompt this long, then suspend
     max_rounds: int = 0                  # 0 = until the human approves or aborts
     # What an issue- or PR-triggered run does at an on-gate: `suspend` stops

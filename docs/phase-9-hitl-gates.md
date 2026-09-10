@@ -407,6 +407,12 @@ stamped scratch repository rather than by reading:
   reject there ends the run with a message saying where a reject belongs, and
   `gated()` finds the checkpoint's *approval* (same gate name, same digest) and
   does not open a second `approve_plan` phase.
+- **`on` and `off` are YAML booleans.** `hitl.default: off` in the stamped
+  config arrives as `False`, and a `HitlConfig` typed as strings refused every
+  fresh install — found by running the CI smoke path (`install.py`, then
+  `check_install.py`) locally, not by the suite, whose fixture dumps its
+  config through `yaml.safe_dump` and so quoted the words. The two fields are
+  booleans now, the words are accepted too, and a test parses raw YAML.
 - **The keyboard lives on the policy.** `HitlPolicy.ask` is the attended
   answerer — the real one reads a TTY, a test injects a scripted one — because
   "is anyone at the keyboard" is a policy input, and it is the one run-scoped

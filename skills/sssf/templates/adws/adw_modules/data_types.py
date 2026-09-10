@@ -630,8 +630,11 @@ class HitlConfig(BaseModel):
     Off by default, so a stamped repository behaves exactly as it did.
     """
 
-    default: str = "off"                 # off | on
-    gates: dict[str, str] = Field(default_factory=dict)   # {"plan": "on"}
+    # `on` and `off` are what a config says — and in YAML those ARE booleans,
+    # so `default: off` arrives here as False. Stored as bool; the words are
+    # accepted too, for a config written with quotes or by hand in Python.
+    default: bool = False                # off | on
+    gates: dict[str, bool] = Field(default_factory=dict)   # {"plan": on}
     wait_seconds: int = 900              # attended: prompt this long, then suspend
     max_rounds: int = 0                  # 0 = until the human approves or aborts
     # What an issue- or PR-triggered run does at an on-gate: `suspend` stops
@@ -641,6 +644,31 @@ class HitlConfig(BaseModel):
     # Run when a gate suspends, with the subject on stdin — a known command is
     # code. [] runs nothing.
     notify_command: list[str] = Field(default_factory=list)
+
+    @field_validator("default", "gates", mode="before")
+    @classmethod
+    def _words_are_switches(cls, value: Any) -> Any:
+        return ({k: _switch(v) for k, v in value.items()} if isinstance(value, dict)
+                else _switch(value))
+
+    @field_validator("when_unattended")
+    @classmethod
+    def _suspend_or_auto(cls, value: str) -> str:
+        if value not in ("suspend", "auto"):
+            raise ValueError(f"hitl.when_unattended: {value!r} is not suspend | auto")
+        return value
+
+
+def _switch(value: Any) -> Any:
+    """`on`/`off` (and yes/no, true/false) as a bool; anything else is left for
+    pydantic to refuse with its own message."""
+    if isinstance(value, str):
+        word = value.strip().lower()
+        if word in ("on", "true", "yes"):
+            return True
+        if word in ("off", "false", "no"):
+            return False
+    return value
 
 
 class ObservabilityConfig(BaseModel):

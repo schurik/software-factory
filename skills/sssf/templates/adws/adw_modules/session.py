@@ -126,7 +126,7 @@ def ensure(cfg: SSSFConfig, adw_id: str | None = None, resume: bool = False,
             run.console.note(f"fix: {finding.fix}")
     if resume:
         run.console.note(run.replay.summary())
-    if run.hitl.override or cfg.hitl.default == "on" or cfg.hitl.gates:
+    if run.hitl.override or cfg.hitl.default or any(cfg.hitl.gates.values()):
         run.console.note(run.hitl.summary())
     return run
 

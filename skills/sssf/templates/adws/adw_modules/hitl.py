@@ -165,8 +165,7 @@ class HitlPolicy:
             return "auto"
         if self._named:
             return "on" if gate in self._named else "auto"
-        wanted = self.config.gates.get(gate, self.config.default) == "on"
-        if not wanted:
+        if not self.config.gates.get(gate, self.config.default):
             return "auto"
         if trigger != "engineer" and self.config.when_unattended == "auto":
             return "auto"
@@ -175,12 +174,12 @@ class HitlPolicy:
     def summary(self) -> str:
         """The one line the console prints when any gate may fire."""
         source = f"--hitl {self.override}" if self.override else "config"
-        on = sorted(gate for gate, value in self.config.gates.items() if value == "on")
+        on = sorted(gate for gate, value in self.config.gates.items() if value)
         line = f"hitl: {source}"
         if self.every:
             line += " · a checkpoint after every agent phase"
         elif not self.override:
-            line += f" · default {self.config.default}"
+            line += f" · default {'on' if self.config.default else 'off'}"
             if on:
                 line += f" · on: {', '.join(on)}"
         return line + (" · attended" if self.ask else " · unattended, gates suspend")
