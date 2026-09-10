@@ -22,7 +22,7 @@ adws/
 ├── adw_plan_build_test_quality.py   the above, folded into one chain
 ├── adw_simple_sdlc.py           plan → build → test → review → document → integrate; commits each product
 ├── adw_integrate.py             land a finished run's branch, the way the config says to
-├── adw_issue_sdlc.py            the same chain, but a labelled issue is the ask and hears the outcome
+├── adw_issue_sdlc.py            the same chain scouted first, and a labelled issue is the ask and hears the outcome
 ├── adw_issue_scout.py           read-only triage of an issue; comments its findings back
 ├── adw_pr_review.py             answer the review threads on a run's own PR, in that same session
 ├── adw_modules/                 ALL low-level logic — ADW scripts stay thin
