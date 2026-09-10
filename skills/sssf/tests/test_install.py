@@ -16,6 +16,7 @@ factory cannot read is a broken install that looks like a working one.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -217,3 +218,78 @@ def test_no_detect_quality_leaves_every_block_a_placeholder(repo: Path):
     install(repo, "--harness", "claude_code", "--no-detect-quality")
     stamped = (repo / "adws" / "adw_modules" / "quality.py").read_text()
     assert '_placeholder("test")' in stamped
+
+
+# ── what --force re-detects ─────────────────────────────────────────────────
+#
+# `--force` replaces `adws/adw_modules/quality.py` and re-reads the repository
+# to re-wire it, which makes detection load-bearing on every upgrade rather than
+# only on day one. These pin the rule the whole thing rests on.
+
+import importlib.util                                                    # noqa: E402
+
+
+def _detect_module():
+    spec = importlib.util.spec_from_file_location(
+        "_detect", SKILL_ROOT / "scripts" / "_detect.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_declared_script_beats_an_inference_about_the_same_block(tmp_path: Path):
+    """`bun run test` and `bun test` are different programs. The first runs the
+    repository's `test` script; the second runs Bun's own test runner, which in
+    a vitest repo collects a completely different set of files and fails.
+
+    Step 1 of `detect` takes the repository's own words and step 2 only
+    `offer`s, which is a no-op once a block is answered — so a `bun.lock` beside
+    a declared `test` script must yield the script, not the runner. Nothing
+    pinned that, and an upgrade now re-detects on every `--force`: getting it
+    backwards would rewire a working test block into a failing one and report it
+    as detected.
+    """
+    (tmp_path / "bun.lock").write_text("")
+    (tmp_path / "package.json").write_text(json.dumps(
+        {"scripts": {"test": "vitest run", "lint": "eslint .", "build": "vite build"}}))
+
+    found = _detect_module().detect(tmp_path)
+
+    assert found["test"].argv == ["bun", "run", "test"]
+    assert found["lint"].argv == ["bun", "run", "lint"]
+    assert found["build"].argv == ["bun", "run", "build"]
+    assert "package.json" in found["test"].because
+
+
+def test_the_bare_runner_is_offered_only_when_nothing_was_declared(tmp_path: Path):
+    """The inference is not wrong — it is the answer for a bun repo that really
+    has no test script. It just must never outrank one that does."""
+    (tmp_path / "bun.lock").write_text("")
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"build": "vite build"}}))
+
+    found = _detect_module().detect(tmp_path)
+
+    assert found["test"].argv == ["bun", "test"]
+    assert found["test"].because == "bun.lock"
+
+
+def test_the_package_manager_comes_from_the_lockfile(tmp_path: Path):
+    """`npm run test` in a pnpm repo is a different resolution and sometimes a
+    different script. The lockfile is the only thing that knows."""
+    detect = _detect_module().detect
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": "vitest run"}}))
+    for lockfile, runner in (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"),
+                             ("package-lock.json", "npm")):
+        (tmp_path / lockfile).write_text("")
+        assert detect(tmp_path)["test"].argv == [runner, "run", "test"]
+        (tmp_path / lockfile).unlink()
+
+
+def test_a_block_with_no_evidence_stays_unanswered(tmp_path: Path):
+    """An unanswered block stays a placeholder, and a placeholder FAILS a run —
+    which is the point. Guessing one would be the installer inventing a command
+    that runs against somebody's repository."""
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"build": "vite build"}}))
+    found = _detect_module().detect(tmp_path)
+    assert "build" in found
+    assert "lint" not in found and "typecheck" not in found
