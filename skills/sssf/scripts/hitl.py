@@ -123,21 +123,55 @@ def decide(verdict: str, adw_id: str, notes: str, config: str, no_resume: bool) 
     return code
 
 
-def main() -> int:
+def _config_on(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """Let `--config` be written AFTER the subcommand as well as before it.
+
+    This is the only script here with subcommands, and argparse binds a
+    parent-level option on the parent side of one only: `hitl.py --config x
+    approve <id>` parses, and `hitl.py approve <id> --config x` exits 2 with
+    `unrecognized arguments`. The justfile writes the second order on all five
+    recipes — which is also the order a person types — so every one of them
+    failed, and failed QUIETLY: argparse writes to stderr, `just approve`
+    printed nothing an operator would notice, and the run stayed waiting. A
+    gate that cannot be answered through the documented interface is a gate
+    that cannot be answered.
+
+    `SUPPRESS`, never a default, on the subcommand's copy. argparse parses a
+    subcommand into a fresh namespace and copies every name in it back over the
+    outer one, so a copy carrying a default would overwrite the `--config` an
+    operator typed BEFORE the subcommand with that default — silently, which is
+    worse than the exit 2 it replaces. Suppressed, the name is absent unless it
+    was actually typed, and the outer value survives. `parents=[...]` cannot do
+    this: the shared Action is one object, and both orders lose the outer value.
+    """
+    parser.add_argument("--config", default=argparse.SUPPRESS,
+                        help="the config this repo runs on (also accepted before "
+                             "the subcommand)")
+    return parser
+
+
+def _parser() -> argparse.ArgumentParser:
+    """The CLI, built where a test can reach it — `templates/justfile` and this
+    are a contract, and nothing else checks that the lines it writes parse."""
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default=CONFIG)
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("pending", help="runs stopped at a gate")
-    sub.add_parser("show", help="what a waiting run wants you to read").add_argument("adw_id")
+    _config_on(sub.add_parser("pending", help="runs stopped at a gate"))
+    _config_on(sub.add_parser("show", help="what a waiting run wants you to read")
+               ).add_argument("adw_id")
     for verdict in ("approve", "reject", "abort"):
-        one = sub.add_parser(verdict)
+        one = _config_on(sub.add_parser(verdict))
         one.add_argument("adw_id")
         one.add_argument("-m", "--notes", default="",
                          help="your words for the agent (required on reject)")
         one.add_argument("--no-resume", action="store_true",
                          help="record the decision and stop; do not relaunch the run")
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    args = _parser().parse_args()
 
     if args.command == "pending":
         return pending(args.config)

@@ -282,3 +282,78 @@ def test_pr_watch_skips_a_pull_request_whose_run_is_waiting(repo, monkeypatch):
     assert watch._waiting_on(Cfg, repo, 17) == "a1b2c3d4"
     assert watch._waiting_on(Cfg, repo, 18) == ""      # finished, not waiting
     assert watch._waiting_on(Cfg, repo, 20) == ""      # nothing waiting on it
+
+
+# ── the justfile and the scripts it calls are a contract ────────────────────
+
+JUSTFILE = SKILL_ROOT / "templates" / "justfile"
+
+
+def _recipe_lines(script: str) -> list[list[str]]:
+    """Every `templates/justfile` invocation of one script, as argv.
+
+    The recipe's `{{...}}` placeholders are substituted with values of the shape
+    `just` would pass. `{{ARGS}}` is the operator's own tail and is dropped —
+    it is whatever they typed, not something the template promises.
+    """
+    argv = []
+    for line in JUSTFILE.read_text().splitlines():
+        if f"scripts/{script}.py" not in line or line.lstrip().startswith("#"):
+            continue
+        tail = line.split(f"scripts/{script}.py", 1)[1]
+        tail = (tail.replace("{{config}}", "adws/adw_sssf_config/sssf.config.yaml")
+                    .replace("{{ADW_ID}}", "a6d783e4")
+                    .replace("{{NUMBER}}", "42")
+                    .replace("{{ARGS}}", ""))
+        assert "{{" not in tail, f"unsubstituted placeholder in: {line}"
+        argv.append(tail.split())
+    return argv
+
+
+def test_every_hitl_recipe_in_the_justfile_actually_parses():
+    """The justfile writes `--config` AFTER the subcommand on all five recipes,
+    and argparse binds a parent-level option only BEFORE one — so every verdict
+    exited 2 with `unrecognized arguments` on stderr before reaching
+    `hitl.answer`. `just approve` printed nothing and the run stayed waiting,
+    which is a worse failure than a traceback: a gate that cannot be answered
+    through the documented interface cannot be answered at all.
+
+    The template is generated into every stamped repo and the script is vendored
+    beside it, so the two are a contract with nothing else checking it."""
+    hitl_cli = _load("hitl")
+    recipes = _recipe_lines("hitl")
+    assert len(recipes) == 5, f"expected pending/show/approve/reject/abort, got {recipes}"
+
+    for argv in recipes:
+        parsed = hitl_cli._parser().parse_args(argv)      # SystemExit(2) if it cannot
+        assert parsed.config == "adws/adw_sssf_config/sssf.config.yaml", argv
+
+
+@pytest.mark.parametrize("argv,expected", [
+    (["pending"], "adws/adw_sssf_config/sssf.config.yaml"),        # neither side
+    (["pending", "--config", "after.yaml"], "after.yaml"),         # the justfile's order
+    (["--config", "before.yaml", "pending"], "before.yaml"),       # the documented order
+    (["approve", "a6d783e4", "--config", "after.yaml"], "after.yaml"),
+    (["--config", "before.yaml", "approve", "a6d783e4"], "before.yaml"),
+])
+def test_config_is_accepted_on_both_sides_of_the_subcommand(argv, expected):
+    """Both orders, because both are written: the justfile puts the flag after
+    the subcommand and the module docstring and `--help` put it before.
+
+    The `--config BEFORE <verb>` cases are the ones a `parents=[common]` fix
+    silently breaks — argparse copies a subcommand's namespace back over the
+    outer one, so a shared or defaulted copy overwrites what the operator typed
+    with the default. That is a wrong config read without a word said, which is
+    worse than the exit 2 this replaces."""
+    assert _load("hitl")._parser().parse_args(argv).config == expected
+
+
+def test_no_other_script_grew_subcommands_without_the_same_treatment():
+    """A canary, not a style rule. Every other script under `scripts/` takes its
+    options on one flat parser, where argparse accepts them in any position and
+    the justfile's ordering cannot bite. The moment one grows `add_subparsers`
+    it inherits the bug fixed above, and it needs `_config_on` plus a line in
+    `test_every_hitl_recipe_in_the_justfile_actually_parses`."""
+    with_subcommands = sorted(path.stem for path in SCRIPTS.glob("*.py")
+                              if "add_subparsers" in path.read_text())
+    assert with_subcommands == ["hitl"]
