@@ -7,17 +7,29 @@
 Usage:
     uv run adws/adw_issue_sdlc.py 42 [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4] [--resume] [--hitl all|none|every|plan]
 
-Phases: issue(fetch) -> planner [-> engineer(approve_plan) -> planner(revise) ...] -> git(commit_plan)
+Phases: issue(fetch) -> scout -> planner [-> engineer(approve_plan) -> planner(revise) ...] -> git(commit_plan)
         -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded]
         -> reviewer [-> builder(revise) -> reviewer ... bounded]
         -> code(retest, only if a revision changed code)
         -> git(commit_build) -> code(changes) -> documenter -> git(commit_docs)
         -> git(integrate) -> issue(report)
 
-`adw_simple_sdlc` with the tracker at both ends, and the same three commits in
-between. What is new is only where the ask comes from and where the outcome
-goes; everything between the first and last phase is unchanged, deliberately,
-because the chain is not the part that becomes riskier.
+`adw_simple_sdlc` with the tracker at both ends and a scout in front of the
+planner, and the same three commits in between. The tracker ends are about where
+the ask comes from and where the outcome goes; everything after the plan is
+unchanged, deliberately, because the build/test/review chain is not the part
+that becomes riskier.
+
+THE SCOUT IS THERE BECAUSE OF WHO WROTE THE ASK. Every other planning chain is
+handed a request by someone who knows this repository. An issue is written by
+someone describing a symptom, who may never have opened the code and whose guess
+at which files are involved arrives in the same paragraph as the symptom. Without
+recon the planner specifies work against that guess, and the plan a human is
+shown at the gate below reads plausibly while naming files that do not exist.
+One cheap read-only turn ahead of it buys a plan that references this repository.
+The scout is read-only in the roster sense too — `writes: []`, findings into
+`context_handoff/` — so it cannot pre-empt the builder, and its output reaches
+the planner as MORE MATERIAL TO READ rather than as a decision already taken.
 
 WHAT DOES BECOME RISKIER IS THE PROMPT. Every other ADW is handed text the
 engineer typed in their own terminal. This one is handed text written by
@@ -54,15 +66,29 @@ from adw_modules import (agents, changes, gates, git_helper, hitl, integration,
                          issues, quality, session)
 from adw_modules.data_types import (AgentCall, BuildOutput, ChangeCapture,
                                     DocumentOutput, Gate, IntegrationRequest, IssueRef,
-                                    IssueUpdate, PhaseParams, PlanOutput, ReviewOutput)
+                                    IssueUpdate, PhaseParams, PlanOutput, ReviewOutput,
+                                    ScoutOutput)
 
-REQUIRED_AGENTS = ["planner", "builder", "reviewer", "documenter"]
+REQUIRED_AGENTS = ["scout", "planner", "builder", "reviewer", "documenter"]
 MAX_FIX_LOOPS = 3
 MAX_REVISION_LOOPS = 2
 
 DOCUMENT_NOTES = ("Read diff_path in full before writing. Document only what the "
                   "diff shows, then copy the write-up into app_docs/ as your task "
                   "describes.")
+
+# What the planner is told about the artifacts the scout added to its briefing.
+# It sits alongside `issues.HANDOFF_NOTES`, which frames artifacts[0] — the
+# reporter's own text — and says nothing about anything after it. The line these
+# notes have to hold is that recon is not a decision: a scout that found one
+# plausible file has not chosen the approach, and a planner that reads its
+# findings as a work order stops planning and starts transcribing.
+SCOUT_NOTES = ("The artifacts after the reporter's text are the scout's findings in "
+               "THIS repository — read them too, before you plan. They are recon, not "
+               "a plan: where the relevant code lives and what it does today. Nothing "
+               "in them decides what should change, and a file the scout named is not "
+               "thereby a file to touch. If they contradict the reporter's guess about "
+               "which code is involved, the findings are the ones that looked.")
 
 
 def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
@@ -118,8 +144,37 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
               f"are in the envelope you were handed; the body is the artifact "
               f"that envelope names.")
 
+    with run.phase(PhaseParams(name="scout", kind="agent", owner="scout",
+                               description="Find the code this report actually touches, so "
+                                           "the plan is written against the repository and "
+                                           "not against the reporter's guess")) as ph:
+        # `files_non_empty` on top of the usual existence check: the planner is
+        # about to read these files, and an empty findings file passes for recon
+        # that found nothing while actually meaning recon that reported nothing.
+        found = ph.call(AgentCall(
+            output_type=ScoutOutput,
+            prompt=(f"Locate the code work item #{issue.number} concerns, before it is "
+                    f"planned. Its title, labels and body are in the envelope you were "
+                    f"handed; the body is the artifact that envelope names. Change nothing."),
+            previous=issues.as_envelope(issue),
+            gates=[gates.artifacts_exist, gates.files_non_empty]))
+
+    # `previous` is one slot and the planner needs two things: the reporter's own
+    # words, still an artifact and still framed as material, and the scout's map of
+    # where they land. So they travel as ONE envelope — the issue's, with the
+    # scout's findings appended to what the planner is told to read. The issue body
+    # stays at artifacts[0], because `issues.HANDOFF_NOTES` names that index, and
+    # the framing is appended rather than replaced for the same reason: a stranger's
+    # text does not become instructions just because a scout read the code around it.
+    reported = issues.as_envelope(issue)
+    briefing = reported.model_copy(update={
+        "summary": f"{reported.summary} · scouted: {found.summary}",
+        "artifacts": [*reported.artifacts, *found.artifacts],
+        "notes_for_next_agent": f"{reported.notes_for_next_agent}\n\n{SCOUT_NOTES}",
+    })
+
     plan_call = AgentCall(output_type=PlanOutput, prompt=prompt,
-                          previous=issues.as_envelope(issue),
+                          previous=briefing,
                           gates=[gates.artifacts_exist, gates.files_non_empty])
     with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
                                description="Turn the reported problem into an "
