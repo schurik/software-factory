@@ -18,7 +18,7 @@ import json
 import time
 from contextlib import contextmanager
 
-from . import agents, worktree
+from . import agents, artifacts, replay, worktree
 from .console import Console
 from .data_types import (AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams,
                          RunSpec)
@@ -55,7 +55,7 @@ class Run:
         self.phases: list[Phase] = []
         self.tokens = 0
         self.cost = 0.0
-        self._seq = tracer.max_phase_seq(spec.adw_id)  # a joined run continues the sequence
+        self._seq = 0                   # set below, once session_dir is known
         self.workspace = spec.workspace
         self.repo_root = spec.workspace.repo_root      # the tree agents work in
         self.main_root = spec.workspace.main_root      # the checkout that owns data_dir
@@ -81,9 +81,47 @@ class Run:
         data_dir = anchor(spec.workspace.main_root, self.cfg.defaults.data_dir)
         self.session_dir = ensure_dir(data_dir / "sessions" / spec.adw_id)
         self.context_handoff_dir = ensure_dir(self.session_dir / "context_handoff")
+        # A joined or resumed run continues the phase sequence rather than
+        # restarting at 1 — from the session's own event log, so it is right
+        # with the db deleted.
+        self._seq = artifacts.max_phase_seq(self.session_dir, spec.adw_id)
         self._agent_map_path = self.session_dir / "agent_map.json"
         self.agent_map: dict = (json.loads(self._agent_map_path.read_text())
                                 if self._agent_map_path.exists() else {})
+        # Resuming: replay the agent phases this session already recorded rather
+        # than paying for them twice. Inert on a normal run — see replay.py for
+        # what is replayed and what is deliberately re-run.
+        self.resuming = spec.resume
+        self.replay = replay.load(self.session_dir, spec.resume)
+        # Values a run pins once and must not re-derive on the way back in (the
+        # documenter's diff baseline is the one that matters). Written every
+        # run, read only by a resumed one — see `pin`.
+        self._pins_path = self.session_dir / "pins.json"
+        self._pins: dict = (json.loads(self._pins_path.read_text())
+                            if self._pins_path.exists() else {})
+
+    # ── pinned values (what a resumed run must not re-derive) ───────────────
+    def pin(self, key: str, produce) -> str:
+        """Remember a value this process derived, or hand back the resumed one.
+
+        `baseline = run.pin("baseline", lambda: git_helper.rev(run.repo_root, "HEAD"))`.
+
+        The problem it solves is one line long: a chain pins its diff baseline
+        at HEAD before it commits anything, so a resumed run — whose HEAD now
+        carries the commits the FIRST run made — would pin a baseline after its
+        own work and hand the documenter an empty diff.
+
+        Read only when resuming, written always. A joined run (`--adw-id`
+        without `--resume`) is a new increment of the session and derives its
+        own value, which is what makes "plan under one id, then build under it"
+        keep documenting the right thing.
+        """
+        if self.resuming and key in self._pins:
+            return str(self._pins[key])
+        value = produce()
+        self._pins[key] = value
+        self._pins_path.write_text(json.dumps(self._pins, indent=2))
+        return value
 
     # ── agent map (adw_id -> per-agent coding-agent session ids) ────────────
     def save_agent_map(self, agent: str, entry: dict) -> None:
@@ -123,6 +161,7 @@ class Run:
         self.issue_number = context.number
         self.issue_url = context.url
         self.tracer.session_issue(self.adw_id, context.url)
+        artifacts.update_run(self.session_dir, trigger="issue", issue_url=context.url)
         # `request` is otherwise only written by an ENGINEER phase (see
         # PhaseHandle.log), and an issue-triggered chain has none — so without
         # this every such run reads as blank in `just sessions` and on its card
@@ -150,6 +189,7 @@ class Run:
             self.tracer.session_trigger(self.adw_id, self.trigger)
         self.pr_url = context.url or self.pr_url
         self.tracer.session_pr(self.adw_id, context.url)
+        artifacts.update_run(self.session_dir, trigger=self.trigger, pr_url=context.url)
 
     # ── usage (run totals mirror what the tracer accumulates in sqlite) ─────
     def add_usage(self, tokens: int, cost: float) -> None:
@@ -186,6 +226,7 @@ class Run:
                                           payload={"status": "fail"}))
             self.tracer.phase_upsert(phase)
             self.tracer.session_finish(self.adw_id, ok=False)
+            artifacts.finish_run(self.session_dir, "fail")
             self.console.phase_ended(phase, time.monotonic() - clock)
             self.console.session_finished(False, self.tokens, self.cost,
                                           self.cfg.observability.db)
@@ -227,6 +268,9 @@ class Run:
                 type="error", name="not_accepted", payload={"reason": note}))
             self.console.note(f"not accepted: {note}")
         self.tracer.session_finish(self.adw_id, ok=ok)
+        # The session's own record says the same thing, and it is the one a
+        # resume reads: `just resume` must not need the trace db to exist.
+        artifacts.finish_run(self.session_dir, "success" if ok else "fail")
         # An accepted run's worktree is a redundant copy of a branch that is
         # kept, so it goes; a failed or killed one is the evidence, so it stays.
         # `release` also keeps anything with uncommitted work in it, whatever

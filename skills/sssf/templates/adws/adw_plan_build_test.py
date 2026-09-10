@@ -5,7 +5,7 @@
 """ADW Plan Build Test — the full starter chain.
 
 Usage:
-    uv run adws/adw_plan_build_test.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
+    uv run adws/adw_plan_build_test.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4] [--resume]
 
 Phases: engineer(request) -> planner -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded] -> git(commit)
 
@@ -25,10 +25,11 @@ REQUIRED_AGENTS = ["planner", "builder"]
 MAX_FIX_LOOPS = 3
 
 
-def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw_id: str | None = None) -> int:
+def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml",
+         adw_id: str | None = None, resume: bool = False) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
-    run = session.ensure(cfg, adw_id)
+    run = session.ensure(cfg, adw_id, resume)
 
     def record(ph, result) -> None:
         passed = sum(1 for check in result.checks if check.passed)
@@ -72,11 +73,12 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         with run.phase(PhaseParams(name="commit", kind="code", owner="git",
                                    description="Land the code only after the suite came back green")) as ph:
             message = previous.commit_message or f"sssf({run.adw_id}): {previous.summary}"
-            sha = git_helper.commit_all(run.repo_root, message)
+            sha = git_helper.commit_all(run.repo_root, message, allow_clean=run.resuming)
             # A session whose branch is already pushed keeps its pull request
             # current — on a branch nobody published this is a no-op.
             synced = integration.keep_published(run)
-            ph.log(sha=sha, message=message, pushed=synced.pushed,
+            ph.log(sha=sha or "unchanged — this session already committed it",
+                   message=message, pushed=synced.pushed,
                    notes=" · ".join(synced.notes))
 
     return run.finish(accepted=test is not None and test.passed,
@@ -88,5 +90,8 @@ if __name__ == "__main__":
     parser.add_argument("prompt", help="inline text or a path to a prompt file")
     parser.add_argument("--config", default="adws/adw_sssf_config/sssf.config.yaml")
     parser.add_argument("--adw-id", default=None, help="join or pin an existing session")
+    parser.add_argument("--resume", action="store_true",
+                        help="replay this session's recorded agent phases instead "
+                             "of paying for them again; needs --adw-id")
     args = parser.parse_args()
-    sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id))
+    sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id, args.resume))

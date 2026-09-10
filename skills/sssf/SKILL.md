@@ -53,7 +53,7 @@ You run the system, observe the system, and help the user interact with it. **Yo
 
 - Never implement, plan, or test in an agent's place — launch the ADW and watch it.
 - Never edit files inside `adws/adw_data/sessions/` — that is the run record.
-- Observe by querying `adws/adw_data/sssf.db` (WAL — reads never block writers) **when observing is the task**. This is a capability, not a startup step: query it to follow a run you launched or one the engineer asked about, never to volunteer a status report nobody requested.
+- Observe by querying `adws/adw_data/sssf.db` (WAL — reads never block writers) **when observing is the task**. This is a capability, not a startup step: query it to follow a run you launched or one the engineer asked about, never to volunteer a status report nobody requested. It is the visualizer's mirror, and yours to read — but never the FACTORY's: the code answers every question about a session from that session's own directory, so a repo whose db was deleted still runs, resumes, kills and uninstalls. See [references/observability.md](references/observability.md).
 - Report phase status plainly: name, owner, status, error if any.
 
 ## Where a run's work lands
@@ -63,6 +63,7 @@ Every run executes in its own git worktree, `<worktrees_dir>/<adw_id>`, on its o
 - **A chain's commits are on its branch, not on yours.** `just integrate <adw_id>` (or the `integrate` phase at the end of `adw_simple_sdlc`) is what lands them, the way `worktree.integration` in the config says to. A branch that has not landed is not a failed run.
 - **A branch that has been pushed stays pushed.** Once a session's branch is on the remote (`mode: pr`), every later commit phase in that session pushes to it, so an open pull request shows what the session actually contains — and integrating again updates that PR instead of trying to open a second one. Nothing publishes a branch on its own; the first push is still `just integrate <adw_id>`.
 - **A failed or killed run keeps its worktree.** So does any worktree with uncommitted work in it. `just worktrees` lists them with the state of the run that owns each; `just worktrees-prune` reclaims the ones nothing needs.
+- **A run that died part-way is picked up, not restarted.** `just resume <adw_id>` re-launches the same workflow against the same session with `--resume`: the agent phases this session already recorded are answered from its own directory under `data_dir` — never the trace db, which a run only ever writes (`↺ replayed`, no tokens, gates still checked against the tree as it is now), everything code owns runs again for real, and the chain reaches the phase that failed. Re-running a chain from the top pays for the whole thing twice.
 - **An open pull request has a way back in.** Review comments are not the end of the line: `just pr-review <n>` reads `sssf/<adw_id>` off the pull request's head ref, joins THAT session, and pushes its answer onto the branch already under review — the pull request is updated, never replaced. Unresolved threads are the queue, so nothing is worked twice. `just prs` polls for it.
 - **The merge is what ends the session, not the first run.** `just prs` also reaps: a review run still working a branch that has already landed is stopped, and its worktree released. The branch is never deleted — that belongs to whoever merged.
 - **The trace does not move.** `data_dir` and the db are anchored to the main checkout, so one db holds every concurrent run and survives a pruned worktree.
@@ -78,6 +79,7 @@ It is isolation, not a sandbox — an agent with `bash` can leave the worktree, 
 | remove the factory / clean the repo back up | [cookbooks/uninstall.md](cookbooks/uninstall.md) |
 | create a new ADW / workflow | [cookbooks/create_adw.md](cookbooks/create_adw.md) |
 | land a run's branch, clean up worktrees | [references/config.md](references/config.md#worktreeintegration) |
+| pick a failed run back up where it stopped | [cookbooks/run_adw.md](cookbooks/run_adw.md) |
 | start runs from tracked issues, run the watcher | [references/config.md](references/config.md#issues) |
 | start everything / "is the watcher even running?" | [references/config.md](references/config.md#running-the-watchers) |
 | answer review comments on a run's pull request | [references/config.md](references/config.md#pull_requests) |

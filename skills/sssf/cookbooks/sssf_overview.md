@@ -36,6 +36,8 @@ adws/
 │   ├── worktree.py              a git worktree + branch per run  ·  integration.py  lands it again
 │   ├── quality.py               lint/typecheck/build/test blocks → QualityResult → envelope
 │   ├── changes.py               git diff vs a resolved base → ChangeSet → envelope for the documenter
+│   ├── artifacts.py             the session dir IS the record: run.json + envelopes/, read back without the db
+│   ├── replay.py                --resume: recorded agent phases answered from those files, code re-run
 │   ├── issues.py                fetch a work item, hand it on as an envelope, write the outcome back
 │   ├── pull_requests.py         the same, one step later: read review threads, answer them, resolve them
 │   ├── prompts.py, session.py, tracer.py, console.py, git_helper.py, utils.py
@@ -43,10 +45,14 @@ adws/
     ├── prompt_engineering/{agent}/{system.md,user.md}   tracked — stamped for YOUR harness; edit HERE, never in the skill
     │                                planner · builder · scout · reviewer · documenter
     ├── sessions/{adw_id}/                               gitignored runtime
+    │   ├── run.json             the session's own state: workflows, argv, pid, outcome — what `just resume` reads
+    │   ├── envelopes/{phase_id}.json   one per agent PHASE, so a resume can answer each one
+    │   ├── processes.jsonl      what this run spawned and what ended — what `just kill` reads
     │   ├── agent_map.json       agent → harness session_id + model
     │   ├── context_handoff/     the one place agents write files for the agents that follow
     │   └── {agent}/{prompts/, raw_output.jsonl, envelope.json}
-    └── sssf.db                  gitignored SQLite trace db the visualizer polls
+    ├── watchers/{kind}.json     watcher heartbeat — what `just status` reads
+    └── sssf.db                  gitignored SQLite mirror the visualizer polls. THE FACTORY ONLY WRITES IT
 ```
 
 **Every run gets its own worktree and branch.** `.sssf-worktrees/<adw_id>` on `sssf/<adw_id>`, cut from whatever the main checkout had at run start. The engineer's tree is never touched, two runs can execute at once, and a failed run keeps its worktree because that is where you go to see what happened. A chain's commits are therefore **on its branch, not on the engineer's** until the integration phase lands them the way `worktree.integration` says to — a branch that has not landed is not a failed run. `just worktrees`, `just worktrees-prune`, `just integrate <adw_id>`.

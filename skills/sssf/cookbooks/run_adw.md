@@ -143,6 +143,38 @@ just kill <adw_id>       # stop it — children first, then the workflow
 
 A killed run marks itself `fail` and closes its process rows, so the trace never claims work is in flight that is already dead. **Its worktree survives on purpose** — `sessions.repo_root` and `sessions.branch` say where, and that is where you go to see what it had done so far.
 
+## When a run failed part-way
+
+A chain that died in its last phase has already paid for every phase before it,
+and the trace kept all of them. Do not re-launch it from the top — that buys
+none of it back and charges for it again:
+
+```bash
+just resume <adw_id>             # re-run it from where it stopped
+just resume <adw_id> --dry-run   # print the command that would run, run nothing
+```
+
+It re-launches the SAME workflow against the SAME session with `--resume`, read
+back from the `processes` row that recorded the original invocation. The agent
+phases the session recorded are answered from its own directory — the console marks each
+one `↺ replayed`, and it adds nothing to the run's tokens or cost — while
+everything code owns runs for real, so the suite re-runs against the tree the
+first run left and the chain reaches the phase that actually failed.
+
+What that means when you report it:
+
+- **A replayed phase still passes its gates**, measured against the tree as it is
+  now. A record whose artifacts have gone (a pruned worktree re-created from its
+  branch, taking uncommitted work with it) is rejected and that agent runs live —
+  the console says `replay rejected by its gates`.
+- **Only chains resume.** A single-agent ADW has nothing to replay; `just resume`
+  names it and tells you to run it again instead.
+- **It refuses a run that is still alive**, by pid. `just kill <adw_id>` first if
+  it is genuinely stuck.
+- **Fix the cause first.** Resume repeats the invocation; if the phase failed
+  because of a prompt, a gate, or a config, change that before resuming or it
+  fails in the same place — for free up to that point, but in the same place.
+
 ## Where the work went
 
 A run commits to `sssf/<adw_id>` in its own worktree, never to the engineer's branch. So when a chain reports success and `git log` on their branch shows nothing, nothing is wrong — the work is on the run's branch, waiting to be landed:

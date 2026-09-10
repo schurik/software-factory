@@ -15,10 +15,11 @@ from typing import Optional
 
 import yaml
 
-from . import git_helper, harnesses, permissions, prompts
+from . import artifacts, git_helper, harnesses, permissions, prompts
 from .data_types import (AgentCall, AgentConfig, AgentRequest, AgentResult,
                          AgentSession, EnvelopeBase, EventRecord, GateCheck,
-                         GateReport, Phase, SSSFConfig, UsageBreakdown)
+                         GateReport, Phase, RecordedPhase, SSSFConfig,
+                         UsageBreakdown)
 from .utils import anchor
 
 JSON_FIX_ATTEMPTS = 2      # continue-with-correction attempts for malformed JSON
@@ -128,6 +129,10 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
     agent_dir = run.session_dir / agent.name
     agent_dir.mkdir(parents=True, exist_ok=True)
 
+    replayed = _replay(run, phase, call, agent.name)
+    if replayed is not None:
+        return replayed
+
     variables = {
         "prompt": call.prompt,
         "previous_envelope": call.previous.model_dump_json(indent=2) if call.previous else "(none)",
@@ -196,10 +201,8 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
         result = driver.run(
             request,
             on_event=forward,
-            on_spawn=lambda pid: run.tracer.process_start(
-                run.adw_id, "agent", agent.name, pid,
-                f"{agent.harness} {agent.name} {agent.model}"),
-            on_exit=lambda pid: run.tracer.process_end(run.adw_id, pid))
+            on_spawn=lambda pid: _spawned(run, agent, pid),
+            on_exit=lambda pid: _exited(run, pid))
         run.add_usage(result.tokens, result.cost)
         spent.merge(result.usage)
         latest = result
@@ -223,18 +226,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
 
     # claim gates — violations flow back into the SAME session as corrections
     for gate_attempt in range(1, max(1, phase.params.retries + 1) + 1):
-        violations = []
-        for gate in call.gates:
-            report = _as_report(gate(envelope, run))
-            found = report.violations
-            run.tracer.gate_row(phase, gate.__name__, report, gate_attempt)
-            run.tracer.event(EventRecord(
-                adw_id=run.adw_id, phase_id=phase.phase_id,
-                type="gate_fail" if found else "gate_pass", name=gate.__name__,
-                payload={"attempt": gate_attempt, "violations": found,
-                         "checks": [c.model_dump() for c in report.checks]}))
-            run.console.gate_result(gate.__name__, report)
-            violations.extend(found)
+        violations = _check_gates(run, phase, call, envelope, gate_attempt)
         if not violations:
             break
         if gate_attempt > phase.params.retries:
@@ -295,6 +287,86 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
 
 
 # ── internals ────────────────────────────────────────────────────────────────
+
+def _spawned(run, agent: AgentConfig, pid: int) -> None:
+    """A coding agent child, recorded in both places `just kill` might look.
+
+    The file is the one that matters — it is what `kill_run.py` reads, and it is
+    there on a machine with no db — while the row keeps the trace UI's process
+    view complete.
+    """
+    command = f"{agent.harness} {agent.name} {agent.model}"
+    run.tracer.process_start(run.adw_id, "agent", agent.name, pid, command)
+    artifacts.record_process(run.session_dir, "agent", agent.name, pid, command)
+
+
+def _exited(run, pid: int) -> None:
+    run.tracer.process_end(run.adw_id, pid)
+    artifacts.end_process(run.session_dir, pid)
+
+
+def _check_gates(run, phase: Phase, call: AgentCall, envelope: EnvelopeBase,
+                 attempt: int) -> list[str]:
+    """Run this call's gates once against `envelope`. Returns every violation.
+
+    One implementation, two callers: the correction loop above, and the replay
+    check below. A resumed run's recorded envelope has to clear the SAME gates
+    the live one would — measured against the tree as it is now, not as it was
+    — or the resume would be the one path in the factory where a claim is taken
+    on trust.
+    """
+    violations: list[str] = []
+    for gate in call.gates:
+        report = _as_report(gate(envelope, run))
+        found = report.violations
+        run.tracer.gate_row(phase, gate.__name__, report, attempt)
+        run.tracer.event(EventRecord(
+            adw_id=run.adw_id, phase_id=phase.phase_id,
+            type="gate_fail" if found else "gate_pass", name=gate.__name__,
+            payload={"attempt": attempt, "violations": found,
+                     "checks": [c.model_dump() for c in report.checks]}))
+        run.console.gate_result(gate.__name__, report)
+        violations.extend(found)
+    return violations
+
+
+def _replay(run, phase: Phase, call: AgentCall, agent_name: str) -> Optional[EnvelopeBase]:
+    """The recorded answer to this phase, if a resumed run may still use it.
+
+    None means "call the agent" — including the case where a record existed and
+    its gates no longer hold, which is the whole safety story of a resume: the
+    worktree may have been pruned and re-created from the branch, taking the
+    uncommitted half of a build with it, and a replayed envelope claiming files
+    that are no longer there is caught by the same gate that would have caught
+    the agent inventing them.
+
+    A replayed phase is written to the trace like any other — envelope row,
+    envelope.json, handoff event — because everything downstream reads the
+    record, not this function. What it does NOT write is usage: no agent ran, so
+    the phase costs nothing and says so.
+    """
+    envelope = run.replay.envelope_for(phase, call.output_type)
+    if envelope is None:
+        return None
+    record = run.replay.records[phase.params.name]
+    if _check_gates(run, phase, call, envelope, attempt=0):
+        run.console.note(f"replay rejected by its gates — running {agent_name} for real")
+        return None
+    run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
+                                 type="replay", name=agent_name,
+                                 payload={"source_seq": record.seq,
+                                          "source_phase": record.phase,
+                                          "output_type": record.output_type,
+                                          "agent": agent_name}))
+    run.console.replayed(phase.params.name, record.seq)
+    _persist_envelope(run, phase, agent_name, call, envelope, attempt=0, valid=True)
+    run.console.envelope_summary(envelope)
+    run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
+                                 type="handoff", name=agent_name,
+                                 payload={"artifacts": envelope.artifacts,
+                                          "summary": envelope.summary}))
+    return envelope
+
 
 def _as_report(result) -> GateReport:
     """Accept a GateReport, or a legacy gate that returned a violations list."""
@@ -394,11 +466,20 @@ def _persist_envelope(run, phase: Phase, agent_name: str, call: AgentCall,
     payload_json = envelope.model_dump_json(indent=2) if envelope else json.dumps({"raw": raw[-2000:]})
     run.tracer.envelope_row(phase, agent_name, call.output_type.__name__,
                             payload_json, valid, attempt)
-    if envelope:
-        record = {"agent_name": agent_name, "purpose": resolve(run.cfg, agent_name).purpose,
-                  "output_type": call.output_type.__name__, "attempt": attempt,
-                  **envelope.model_dump()}
-        (run.session_dir / agent_name / "envelope.json").write_text(json.dumps(record, indent=2))
+    if not envelope:
+        return
+    record = {"agent_name": agent_name, "purpose": resolve(run.cfg, agent_name).purpose,
+              "output_type": call.output_type.__name__, "attempt": attempt,
+              **envelope.model_dump()}
+    (run.session_dir / agent_name / "envelope.json").write_text(json.dumps(record, indent=2))
+    # And once more keyed by the PHASE. The file above is last-wins per agent —
+    # right for "what did the builder last say", useless for a resume, where a
+    # builder that built, fixed and revised has to answer three phases. This one
+    # is what `adw_modules/replay.py` reads back.
+    artifacts.write_envelope(run.session_dir, RecordedPhase(
+        phase_id=phase.phase_id, seq=phase.seq, phase=phase.params.name,
+        agent=agent_name, output_type=call.output_type.__name__,
+        payload_json=envelope.model_dump_json()))
 
 
 def load_envelope(run, agent_name: str, output_type: type[EnvelopeBase]) -> EnvelopeBase:

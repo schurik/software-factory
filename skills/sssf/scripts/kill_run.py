@@ -8,9 +8,12 @@ Usage:
     uv run <skill>/scripts/kill_run.py <adw_id> [--force] [--config ...]
 
 A hung agent emits nothing — no events, no tokens, no output to read — which is
-exactly when you need its pid. `processes` is the only table that can answer
-"what is this run running, and how do I stop it": one row per live process, the
-adw written before the first phase opens and each agent child as it spawns.
+exactly when you need its pid. `adws/adw_data/sessions/<adw_id>/processes.jsonl` is the only thing that can
+answer "what is this run running, and how do I stop it": one line per process
+as it starts and as it ends, the adw written before the first phase opens and
+each agent child as it spawns. A FILE, not the trace db — a run must be
+stoppable on a machine where the db was deleted, or where the events go to a
+hosted API and there is no db to query.
 
 CHILDREN BEFORE THE PARENT, on purpose. Kill the workflow first and its coding
 agent keeps running, detached, still burning tokens against an API — with
@@ -29,7 +32,6 @@ agents-plus-code work; it is thin over adw_modules for the same reason ADWs are.
 import argparse
 import os
 import signal
-import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -38,23 +40,6 @@ sys.path.insert(0, str(Path.cwd() / "adws"))      # the stamped factory in this 
 
 CONFIG = "adws/adw_sssf_config/sssf.config.yaml"
 GRACE_SECONDS = 5.0
-
-
-def _live_rows(db_path: Path, adw_id: str) -> list[tuple]:
-    """Believed-alive processes for this run: children first, adw last."""
-    if not db_path.exists():
-        return []
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
-    try:
-        return conn.execute(
-            "SELECT kind, name, pid, command FROM processes "
-            " WHERE adw_id = ? AND ended_at IS NULL AND pid IS NOT NULL"
-            # 'agent' sorts before 'adw' only by accident; order explicitly.
-            " ORDER BY CASE kind WHEN 'agent' THEN 0 ELSE 1 END, id",
-            (adw_id,),
-        ).fetchall()
-    finally:
-        conn.close()
 
 
 def _alive(pid: int) -> bool:
@@ -103,19 +88,21 @@ def main() -> int:
                              "command no longer matches (say it out loud, or do not)")
     args = parser.parse_args()
 
-    from adw_modules import agents, git_helper
-    from adw_modules.utils import anchor
+    from adw_modules import agents, artifacts, git_helper
 
     cfg = agents.load_config(args.config)
-    db_path = anchor(git_helper.main_root(), cfg.observability.db)
+    session_dir = artifacts.sessions_root(git_helper.main_root(),
+                                          cfg.defaults.data_dir) / args.adw_id
 
-    rows = _live_rows(db_path, args.adw_id)
+    rows = artifacts.live_processes(session_dir)
     if not rows:
         print(f"{args.adw_id}: nothing believed alive — already finished, or never started")
         return 0
 
     signalled: list[int] = []
-    for kind, name, pid, command in rows:
+    for row in rows:
+        kind, name = row.get("kind", ""), row.get("name", "")
+        pid, command = int(row.get("pid") or 0), row.get("command", "")
         label = f"{kind}{'/' + name if name else ''} pid {pid}"
         if not _alive(pid):
             print(f"  {label}: already gone")
@@ -134,8 +121,8 @@ def main() -> int:
     if not signalled:
         return 0
 
-    # The run's own SIGTERM handler finalizes its trace — the session lands on
-    # `fail` with its process rows closed, instead of reading `running` forever.
+    # The run's own SIGTERM handler finalizes its record — the session lands on
+    # `fail` with its processes closed, instead of reading `running` forever.
     # That is worth waiting for; SIGKILL would skip it.
     deadline = time.monotonic() + GRACE_SECONDS
     while time.monotonic() < deadline:

@@ -4,7 +4,19 @@ The event schema, the seven SQLite tables, and the polling contract — the one 
 
 ## Two stores, one truth
 
-**Files are the raw record** (`raw_output.jsonl` streams, `envelope.json`, `agent_map.json`); **SQLite (`sssf.db`) is the queryable mirror** the UI reads. `tracer.py` writes both. Losing the db loses nothing that can't be rebuilt from files.
+**Files are the raw record** (`events.jsonl`, `run.json`, `envelopes/<phase_id>.json`, `raw_output.jsonl` streams, `envelope.json`, `agent_map.json`); **SQLite (`sssf.db`) is the queryable mirror** the UI reads. `tracer.py` writes both. Losing the db loses nothing that can't be rebuilt from files.
+
+**The factory only ever WRITES to the db — nothing in it reads back.** Not a run, not a watcher, not `just kill`, `just status`, `just worktrees` or the uninstaller. Every question about a session is answered from that session's own directory through `adw_modules/artifacts.py`:
+
+| Question | File |
+|---|---|
+| what did this phase produce (a resume) | `sessions/<adw_id>/envelopes/<phase_id>.json` |
+| which phases passed, how far the numbering got | `sessions/<adw_id>/events.jsonl` |
+| which workflow ran, with what argv, how it ended, where it came from | `sessions/<adw_id>/run.json` |
+| what has this run got alive, and how do I stop it | `sessions/<adw_id>/processes.jsonl` |
+| is a watcher up, and what did it last see | `watchers/<kind>.json` |
+
+That is portability, not tidiness: the db is a local mirror of the event stream, and the day those events go to a hosted API instead there is no file here to query — code that reads it would have to be written twice. Delete `sssf.db` and every command above still works; all you lose is the visualizer's history. The watcher heartbeat is written to BOTH (the file for `just status`, the row for the UI's badges), because a write is free and the badge is the visualizer's.
 
 Location comes from `observability.db` in `sssf.config.yaml`, default `adws/adw_data/sssf.db` — inside the **target** repo, gitignored.
 
@@ -18,6 +30,7 @@ Location comes from `observability.db` in `sssf.config.yaml`, default `adws/adw_
 | `agent_start` | a coding agent is spawned or resumed for `ph.call(...)` |
 | `tool_call` | a tool (`read`, `bash`, `edit`, `write`) returns — **one event per real call**, named `bash: ls -la src`, payload `{tool, tool_call_id, args, result_snippet, ok, duration_ms, agent}` |
 | `handoff` | an envelope crosses from one agent to the next |
+| `replay` | a resumed run answered an agent phase from this session's record instead of calling the agent — payload carries `source_seq`, `source_phase`, `output_type`, `agent`. No `agent_start`/`agent_end` accompanies it, and the phase adds nothing to the session's tokens or cost, because no agent ran |
 | `gate_pass` | a gate found no failed checks — payload carries `attempt`, `checks` (the evidence), and an empty `violations` |
 | `gate_fail` | a gate found at least one failed check — payload carries `attempt`, `checks`, and `violations` |
 | `log` | an explicit `ph.log(...)` from the ADW script |
@@ -102,7 +115,7 @@ events (
   phase_id      TEXT REFERENCES phases,   -- every event logs against adw + phase
   parent_id     TEXT,                     -- span nesting
   type          TEXT,   -- phase_start | phase_end | agent_start | agent_end | tool_call
-                        -- | handoff | gate_pass | gate_fail | log | error
+                        -- | handoff | gate_pass | gate_fail | replay | log | error
   name          TEXT,
   payload_json  TEXT,
   tokens        INTEGER,
