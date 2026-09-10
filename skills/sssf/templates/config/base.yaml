@@ -24,6 +24,25 @@ budget:
   max_cost_usd: 0                  # dollars, whole session; 0 = no ceiling
   max_tokens: 0                    # tokens, whole session; 0 = no ceiling
 
+# Where a human may stop a run. A chain names its gates — `hitl.gated(...)` at
+# a call site: `plan` in every planning chain, `integrate` in simple_sdlc — and
+# this says which of them FIRE. Off by default, so a stamped repository behaves
+# exactly as it did. `--hitl all|none|every|plan,integrate` on any chain, or
+# SSSF_HITL, overrides all of it for one run.
+#
+# A gate that fires stops the run: the process exits 75, `just pending` lists
+# it, `just show <id>` prints what it wants you to read, and `just approve`,
+# `just reject -m "..."` or `just abort` answer it. A reject goes back to the
+# agent that produced the artifact, in the same session, and the run asks
+# again. A gate the policy skips still writes a decision saying so.
+hitl:
+  default: off                     # off | on — for gates not named below
+  gates: {}                        # by gate name: {plan: on, integrate: on}
+  wait_seconds: 900                # attended: prompt this long, then suspend
+  max_rounds: 0                    # 0 = until you approve or abort
+  when_unattended: suspend         # issue/PR-triggered runs: suspend | auto
+  notify_command: []               # run on suspend, subject on stdin; e.g. ["ntfy", "publish", "sssf"]
+
 observability:
   db: adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
   poll_ms: 500                     # visualizer live-poll cadence

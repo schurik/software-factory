@@ -130,6 +130,21 @@ What one **session** may spend, across every process that joins it. Both default
 | `max_cost_usd` | float | Dollar ceiling for the whole session. `0` = none. |
 | `max_tokens` | int | Token ceiling for the whole session. `0` = none. |
 
+### `hitl`
+
+Which of a chain's human gates **fire**. A chain places gates (`hitl.gated(...)` at a call site — `plan` in the four planning chains, `integrate` in `adw_simple_sdlc`); this decides whether a placed gate stops the run. Off by default. See [Human-in-the-loop gates](#human-in-the-loop-gates).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `default` | `off` \| `on` | For every gate not named in `gates`. |
+| `gates` | map | By gate name: `{plan: on, integrate: on}`. Wins over `default`. |
+| `wait_seconds` | int | Attended runs (stdin is a TTY): how long the terminal prompt waits before the run suspends. Default `900`. |
+| `max_rounds` | int | Reject rounds before the run aborts. `0` = until the human approves or aborts. |
+| `when_unattended` | `suspend` \| `auto` | What an issue- or PR-triggered run does at an on-gate: stop and wait, or record a policy approval and continue. |
+| `notify_command` | list | Run when a gate suspends, with the wait record as JSON on stdin and `SSSF_ADW_ID`, `SSSF_GATE`, `SSSF_ROUND` in the environment. `[]` runs nothing. |
+
+Per run, `--hitl all|none|every|<gate,names>` on any chain, or `SSSF_HITL`, overrides the block.
+
 ### `worktree`
 
 Every run executes in its own git worktree, on its own branch, cut from a base ref pinned once at run start. See [Worktree per run](#worktree-per-run) below for what that changes.
@@ -311,6 +326,20 @@ Worktrees are skipped — both roots become the same directory, and everything b
 Both are off-switchable with `0`, and the budget ships off. A ceiling firing halfway through a chain an engineer is watching is worse than no ceiling; set it where nobody is watching — the issue watcher, cron, an overnight loop.
 
 Not to be confused with `harness_options.claude_code.max_budget_usd`, which is one harness's per-**call** ceiling, enforced by that CLI. The `budget:` block is the factory's own: harness-agnostic, cumulative, and it fails the phase rather than trimming the turn.
+
+## Human-in-the-loop gates
+
+A run can stop after a phase, hand its artifact to a person, and continue only on approval. A gate is its own `kind="engineer"` phase — `approve_<gate>` — and on a reject the agent that produced the artifact reworks it **in the same coding-agent session** (`<gate>_revise_<n>`, the original call re-sent with the decision as `previous_envelope`), then the run asks again (`approve_<gate>_<n>`). An abort ends the run as not accepted. `adw_modules/hitl.py` owns all of it; an ADW spends one `hitl.gated(...)` call per gate.
+
+**Which gates fire is policy, resolved most-specific-first:** `--hitl` on the chain, then `SSSF_HITL`, then `hitl.gates` by name, then `hitl.default`. `all` turns every placed gate on, `none` off, `every` adds an approve/abort-only checkpoint after **every** agent phase (a checkpoint cannot revise — the runner does not own the chain's loop — so a reject there ends the run), and a comma-separated list names gates. `when_unattended` applies only when the config, not a flag, turned a gate on: a flag on an issue run's argv was put there by whoever launched the watcher.
+
+**The wait is a suspend.** A gate with no decision records what it waits for in the session's `run.json` (`status: waiting`, `waiting_for: {gate, round, paths, subject_digest}`), exits the process with **75** (`EX_TEMPFAIL`, so cron and CI can tell "waiting" from "failed"), closes its process rows, and keeps its worktree — the uncommitted artifact *is* the subject. `just pending` lists such runs, `just show <adw_id>` prints the artifact, and `just approve <adw_id> [-m remarks]`, `just reject <adw_id> -m "…"` and `just abort <adw_id>` answer it: each writes one decision file and re-launches the workflow with `--resume`, so replay answers every recorded agent phase for free and the chain reaches the gate with its answer in hand. Nothing spends while a run waits, and the watchers do not count it as in flight. While stdin is a TTY the run asks in place first — `[a]pprove / [r]eject / [x] abort / [d]etach` — polling the same file so an answer from another terminal is honoured; `d`, or `wait_seconds` running out, becomes the suspend.
+
+**The decision names what it decided.** `sessions/<adw_id>/decisions/<gate>_<round>.json` carries `verdict`, `notes`, `by`, `channel` and `subject_digest` — a hash of the artifact files at the moment the human was asked. A decision whose digest does not match the subject in front of the run is refused and the run waits again, so a stale `just approve` can never wave a changed plan through. Once a run has acted on a decision it is marked consumed, and a resumed run re-walking that round honours it without the digest, the way replay honours a recorded envelope: the subject has legitimately moved on. A gate the policy skips writes `verdict: approve, by: policy, channel: auto` to the same directory, so the record shows every gate a run passed and who passed it.
+
+**Approve with remarks** (`-m` on an approve) carries the remarks to the next agent through `notes_for_next_agent` without a revise round. Gates after **code** phases — `integrate` in `adw_simple_sdlc`, over the run's whole diff — are approve/abort only.
+
+**A fourth session status, `waiting`.** On `run.json`, in `sessions.status`, and in the trace UI, beside `running | success | fail`; the gate phase closes as `waiting` too. `just resume` refuses a waiting run that has no decision yet (it would stop at the same gate), `just kill` says a waiting run has nothing to kill, `just worktrees-prune` never takes its tree, and the review watcher aborts — as a recorded policy decision — a run left waiting on a branch that has since landed.
 
 ## Defaults merging
 

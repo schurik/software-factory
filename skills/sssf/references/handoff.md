@@ -64,6 +64,21 @@ Three of these are adapters rather than agent reports — code shaped as an enve
 
 The envelope is a **manifest of claims**. Gates verify those claims after the fact — declared artifacts exist and are non-empty, declared changes appear in the diff, declared tests actually pass. See `cookbooks/update_modules.md`.
 
+### Decision — an envelope an agent receives, never emits
+
+```python
+class Decision(EnvelopeBase):
+    gate: str                           # "plan", "integrate"
+    round: int = 1
+    verdict: Literal["approve", "reject", "abort"]
+    notes: str = ""                     # the human's words; also notes_for_next_agent
+    by: str = ""                        # engineer name, or "policy"
+    channel: str = ""                   # terminal | cli | auto
+    subject_digest: str = ""            # what exactly was decided on
+```
+
+A human gate's verdict, shaped as an envelope so a reject reaches the agent that produced the artifact as `previous=decision` with no new plumbing — the same door a reviewer's `ReviewOutput` uses. `status` is always `success` (the decision happened); `verdict` says whether the work passed. See `references/config.md#human-in-the-loop-gates`.
+
 ## The typed-output rule
 
 **Every agent call passes a concrete output type**, and the agent's final JSON is parsed against exactly that type. No untyped handoffs.
@@ -136,6 +151,7 @@ The `## Report` section shows the exact JSON shape of the declared output type �
 adws/adw_data/sessions/{adw_id}/
 ├── agent_map.json          agent name → coding-agent session_id + model
 ├── context_handoff/        the ONE place agents write files for the agents that follow
+├── decisions/              one file per human gate and round: what was decided, by whom, about which digest
 └── {agent_name}/
     ├── prompts/            exact prompts sent (system.md + user.md), saved before execution
     ├── pi_sessions/        pi's own session state for this agent

@@ -1,9 +1,9 @@
 # Phase 9 — Human-in-the-loop gates
 
-> **Status: planned.** The brainstorm below stands as written; the seven open
-> questions at its end are answered in *Decisions*, and the implementation plan
-> is [`superpowers/plans/2026-09-10-hitl-gates.md`](superpowers/plans/2026-09-10-hitl-gates.md).
-> Nothing is built yet.
+> **Status: built.** The brainstorm below stands as written; the seven open
+> questions at its end are answered in *Decisions*, the implementation plan is
+> [`superpowers/plans/2026-09-10-hitl-gates.md`](superpowers/plans/2026-09-10-hitl-gates.md),
+> and *As built* at the end says what came out differently.
 
 ## Goal
 
@@ -383,3 +383,35 @@ The recommendation on every question, taken as decided on 2026-09-10.
 | 7 | The **CLI** is the only writer in v1. The trace UI shows `waiting`; its write path is a follow-up. |
 
 The plan turns these into nine tasks, each test-first on the fake harness.
+
+## As built
+
+Built as planned, nine tasks, every one test-first on the fake harness. Three
+things came out differently, all found by walking the slice by hand on a
+stamped scratch repository rather than by reading:
+
+- **A decision records when it was consumed, and a resumed run honours a
+  consumed decision without the digest.** The plan's digest rule was too
+  strict by one case: after a reject round the revise rewrites `plan.md` in
+  place, so when the *approve* resume re-walks round 1 the reject's digest
+  cannot match the file — and round 1 was already acted on. `consumed_at` on
+  the `Decision` marks that, and `decide()` under `--resume` replays a consumed
+  decision the way replay honours a recorded envelope. The digest still guards
+  every decision nobody has acted on yet, which is the stale `just approve` it
+  was built for. `test_adw_plan_build_stops_at_the_plan_gate_and_finishes_once_approved`
+  walks all three processes.
+- **A checkpoint under `--hitl every` cannot revise, and a placed gate reuses
+  its approval.** The plan hoped a reject at the checkpoint after `plan` would
+  reach the plan gate's revise loop; it cannot — the checkpoint runs before the
+  ADW's `gated()` call, inside the runner, which does not own the loop. So a
+  reject there ends the run with a message saying where a reject belongs, and
+  `gated()` finds the checkpoint's *approval* (same gate name, same digest) and
+  does not open a second `approve_plan` phase.
+- **The keyboard lives on the policy.** `HitlPolicy.ask` is the attended
+  answerer — the real one reads a TTY, a test injects a scripted one — because
+  "is anyone at the keyboard" is a policy input, and it is the one run-scoped
+  object a test already reaches.
+
+Still open, as the decisions said: the trace UI shows `waiting` but has no
+write path; nothing posts the subject to an issue or pull request; there is no
+agent-level policy shorthand.

@@ -31,6 +31,7 @@ Location comes from `observability.db` in `sssf.config.yaml`, default `adws/adw_
 | `tool_call` | a tool (`read`, `bash`, `edit`, `write`) returns — **one event per real call**, named `bash: ls -la src`, payload `{tool, tool_call_id, args, result_snippet, ok, duration_ms, agent}` |
 | `handoff` | an envelope crosses from one agent to the next |
 | `replay` | a resumed run answered an agent phase from this session's record instead of calling the agent — payload carries `source_seq`, `source_phase`, `output_type`, `agent`. No `agent_start`/`agent_end` accompanies it, and the phase adds nothing to the session's tokens or cost, because no agent ran |
+| `decision` | a human gate was answered — payload is the `Decision`: `gate`, `round`, `verdict` (`approve` \| `reject` \| `abort`), `notes`, `by`, `channel` (`terminal` \| `cli` \| `auto`), `subject_digest`. Attached to the `approve_<gate>` phase; a gate passed by policy attaches to the phase before it |
 | `gate_pass` | a gate found no failed checks — payload carries `attempt`, `checks` (the evidence), and an empty `violations` |
 | `gate_fail` | a gate found at least one failed check — payload carries `attempt`, `checks`, and `violations` |
 | `log` | an explicit `ph.log(...)` from the ADW script |
@@ -80,7 +81,7 @@ The gate event payload carries `attempt` too, so the `gate_results` table and th
 sessions (
   adw_id        TEXT PRIMARY KEY,
   request       TEXT,              -- the ask: what the engineer typed, or "#<n> <issue title>"
-  status        TEXT,              -- running | success | fail
+  status        TEXT,              -- running | success | fail | waiting
   engineer      TEXT,
   started_at    TEXT, ended_at TEXT,
   total_tokens  INTEGER, total_cost REAL,
@@ -115,7 +116,7 @@ events (
   phase_id      TEXT REFERENCES phases,   -- every event logs against adw + phase
   parent_id     TEXT,                     -- span nesting
   type          TEXT,   -- phase_start | phase_end | agent_start | agent_end | tool_call
-                        -- | handoff | gate_pass | gate_fail | replay | log | error
+                        -- | handoff | gate_pass | gate_fail | replay | decision | log | error
   name          TEXT,
   payload_json  TEXT,
   tokens        INTEGER,
@@ -184,7 +185,7 @@ agent_sessions (                   -- the queryable mirror of agent_map.json
 
 **Derived, never stored:** phase durations (`ended_at − started_at`), session phase-progress (query `phases` by `adw_id`), lane layout (`kind` + `owner`).
 
-Phase status invariants: `queued` only for manifest-declared phases not yet entered (dashed in the UI); `running` on enter; only a clean exit writes `success` — agent phases additionally need the envelope parsed and gates green; everything else resolves to `fail`.
+Phase status invariants: `queued` only for manifest-declared phases not yet entered (dashed in the UI); `running` on enter; only a clean exit writes `success` — agent phases additionally need the envelope parsed and gates green; everything else resolves to `fail` — except a human gate the run suspended at, which closes as `waiting`: the process is gone on purpose, and the session reads `waiting` with it until `just approve` brings the next process back to that phase.
 
 ## WAL pragmas
 
