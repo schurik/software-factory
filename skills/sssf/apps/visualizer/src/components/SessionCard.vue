@@ -415,6 +415,11 @@ const hiddenRowCount = computed(() =>
   border-color: rgba(255, 111, 103, 0.6);
 }
 
+.card.waiting {
+  border-color: rgba(232, 182, 74, 0.6);
+  box-shadow: 0 0 22px rgba(232, 182, 74, 0.14);
+}
+
 /* Text rows must never absorb flex shrink — the fixed-height card squeezes
    overflow into .tl (which clips), not into the text. */
 /* The card's own link, stretched over the whole card by its ::after. It stays

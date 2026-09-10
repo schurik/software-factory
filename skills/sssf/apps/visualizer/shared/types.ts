@@ -6,11 +6,12 @@
  * session progress and lane layout are computed in the UI, never stored.
  */
 
-/** sessions.status — a run is running until it earns success. */
-export type SessionStatus = "running" | "success" | "fail";
+/** sessions.status — a run is running until it earns success; `waiting` means it
+ *  stopped at a human gate and no process is alive until someone answers. */
+export type SessionStatus = "running" | "success" | "fail" | "waiting";
 
 /** phases.status — queued only for manifest-declared phases not yet entered. */
-export type PhaseStatus = "queued" | "running" | "success" | "fail";
+export type PhaseStatus = "queued" | "running" | "success" | "fail" | "waiting";
 
 /** phases.kind — decides which lane a block renders in. */
 export type PhaseKind = "engineer" | "code" | "agent";
@@ -27,6 +28,8 @@ export type EventType =
   | "gate_fail"
   /** a resumed run answering an agent phase from this session's record */
   | "replay"
+  /** a human gate was answered — payload is the Decision: gate, round, verdict, by, channel */
+  | "decision"
   | "log"
   | "error";
 
