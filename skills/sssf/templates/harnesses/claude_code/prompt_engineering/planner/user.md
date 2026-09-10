@@ -10,6 +10,12 @@
 
 {{previous_envelope}}
 
+If `previous_envelope` is a `Decision` with `"verdict": "reject"`, an engineer has
+read your plan and asked for changes: its `notes_for_next_agent` is what to change.
+Revise `plan.md` in place and refresh the copy under `specs/` you already wrote —
+same path, because this is the same plan corrected, not a new one — then report
+both paths again.
+
 ### context_handoff_dir
 
 {{context_handoff_dir}}

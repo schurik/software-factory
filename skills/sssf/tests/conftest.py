@@ -80,7 +80,8 @@ def write_prompts(root: Path, *names: str) -> None:
         directory = root / "adws" / "adw_data" / "prompt_engineering" / name
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "system.md").write_text(f"You are {name}.\n")
-        (directory / "user.md").write_text("{{prompt}}\n\nHandoff: {{context_handoff_dir}}\n")
+        (directory / "user.md").write_text(
+            "{{prompt}}\n\nPrevious: {{previous_envelope}}\n\nHandoff: {{context_handoff_dir}}\n")
 
 
 def config(*agents: AgentConfig, **overrides) -> SSSFConfig:

@@ -41,8 +41,8 @@ from pathlib import Path
 from typing import Optional
 
 from . import artifacts
-from .data_types import (Decision, EventRecord, HitlConfig, Phase, Subject,
-                         WaitingFor)
+from .data_types import (Decision, EnvelopeBase, EventRecord, Gate, HitlConfig,
+                         Phase, PhaseParams, Subject, WaitingFor)
 from .utils import now_iso
 
 EXIT_WAITING = 75          # EX_TEMPFAIL: "try again later", which is exactly it
@@ -300,3 +300,88 @@ def _notify(run, waiting: WaitingFor) -> None:
                        env=env, timeout=30, capture_output=True)
     except (OSError, subprocess.SubprocessError) as error:
         run.console.note(f"notify_command failed: {error}")
+
+
+# ── the loop ─────────────────────────────────────────────────────────────────
+
+REVISE_PROMPT = (
+    "{prompt}\n\n"
+    "The engineer reviewed what you produced and asked for changes — their notes are "
+    "`notes_for_next_agent` in previous_envelope, a Decision with verdict \"reject\". "
+    "Revise your existing work along those notes in this same session: update the "
+    "artifacts you already wrote rather than starting over, keep the same paths, and "
+    "report the same Report JSON shape as before."
+)
+
+
+class Aborted(SystemExit):
+    """The human ended the run at a gate. Exit 1, with the reason as the message.
+
+    Raised INSIDE the approve phase on purpose: `Run.phase` then closes that
+    phase as `fail` with the reason, finalizes the session as `fail`, keeps the
+    worktree and prints the banner — exactly what a `GateFailure` gets. Raised
+    after the phase closed, the session would read `running` with no process
+    behind it, which is the bug `_finalize_when_killed` exists to prevent.
+    """
+
+
+def gated(run, gate: Gate, envelope: EnvelopeBase) -> EnvelopeBase:
+    """Stop at a gate, or pass it by policy; loop on reject; return what was approved.
+
+    Phases: `approve_<gate>` (round 1), `approve_<gate>_<n>` (later rounds),
+    `<gate>_revise_<n>` between them. Every one replays on `--resume` by its
+    name, so a suspended run re-enters the exact round it left.
+    """
+    if run.hitl.mode(gate.name, run.trigger) == "auto":
+        return _pass_by_policy(run, gate, envelope)
+
+    round = 1
+    while True:
+        paths = gate.paths or envelope.artifacts
+        name = f"approve_{gate.name}" if round == 1 else f"approve_{gate.name}_{round}"
+        description = gate.description or (
+            f"Hand the {gate.name} to the engineer and wait for a verdict")
+        with run.phase(PhaseParams(name=name, kind="engineer", owner=run.engineer,
+                                   description=description)) as ph:
+            decision = ph.decide(Subject(gate=gate.name, round=round,
+                                         summary=envelope.summary, paths=paths,
+                                         notes=envelope.notes_for_next_agent))
+            if decision.verdict == "abort":
+                raise Aborted(f"aborted by {decision.by} at gate {gate.name}"
+                              + (f": {decision.notes}" if decision.notes else ""))
+            if decision.verdict == "reject" and gate.call is None:
+                raise Aborted(f"gate {gate.name} is approve/abort only — nothing can "
+                              f"revise it; rejected by {decision.by}: {decision.notes}")
+            limit = run.cfg.hitl.max_rounds
+            if decision.verdict == "reject" and limit and round >= limit:
+                raise Aborted(f"gate {gate.name} rejected {round} time(s) — "
+                              f"hitl.max_rounds reached")
+        if decision.approved:
+            if decision.notes:
+                envelope.notes_for_next_agent = (
+                    f"{envelope.notes_for_next_agent}\n\n"
+                    f"Engineer's remarks at the {gate.name} gate: {decision.notes}").strip()
+            return envelope
+
+        with run.phase(PhaseParams(name=f"{gate.name}_revise_{round}", kind="agent",
+                                   owner=gate.owner, retries=gate.retries,
+                                   description=f"Rework the {gate.name} along the "
+                                               f"engineer's notes, in the same session")) as ph:
+            envelope = ph.call(gate.call.model_copy(update={
+                "previous": decision,
+                "prompt": REVISE_PROMPT.format(prompt=gate.call.prompt)}))
+        round += 1
+
+
+def _pass_by_policy(run, gate: Gate, envelope: EnvelopeBase) -> EnvelopeBase:
+    """Trust, written down: the gate was passed, and the record says by whom."""
+    paths = resolve_paths(run, gate.paths or envelope.artifacts)
+    decision = Decision(gate=gate.name, round=1, verdict="approve", by="policy",
+                        channel="auto", subject_digest=digest(paths), decided_at=now_iso())
+    record(run.session_dir, decision)
+    run.tracer.event(EventRecord(adw_id=run.adw_id,
+                                 phase_id=run.phases[-1].phase_id if run.phases else "",
+                                 type="decision", name=gate.name,
+                                 payload=decision.model_dump()))
+    run.console.note(f"gate {gate.name}: passed by policy (hitl is off for it)")
+    return envelope
