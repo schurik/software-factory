@@ -1,0 +1,32 @@
+# Tool configuration for THIS repository — the skill's own development.
+#
+# Not a package: nothing here is installed, and `skills/sssf/templates/adws/` is
+# stamped into other repositories rather than imported from a distribution. The
+# file exists so `pytest` and `ruff check` mean the same thing on a laptop and
+# in CI, with no arguments to remember.
+
+[tool.pytest.ini_options]
+testpaths = ["skills/sssf/tests"]
+# Failures print the assertion and stop at the tenth — a suite that scrolls off
+# the top of a CI log is one nobody reads.
+addopts = "-q --maxfail=10"
+# A deprecation is how the factory finds out it is about to break in someone
+# else's repository — pydantic 2.11 deprecating `self.model_fields` was already
+# one, and it would have become a hard error on their machine, not ours. So it
+# fails the build here instead. A dependency release can therefore turn CI red
+# without anything in a pull request changing; that is the warning arriving,
+# and the fix belongs in the module the traceback names.
+filterwarnings = ["error::DeprecationWarning"]
+
+[tool.ruff]
+# The factory's modules carry long explanatory comments and wide call sites;
+# 100 is what the existing code was written to.
+line-length = 100
+extend-exclude = ["skills/sssf/apps"]      # the visualizer is TypeScript
+
+[tool.ruff.lint]
+# Pyflakes plus the pycodestyle errors that are real bugs (E4 imports,
+# E7 statements, E9 syntax) — ruff's default set. Deliberately not widened in
+# the same change that introduces CI: a lint storm on day one is a lint that
+# gets turned off on day two.
+select = ["E4", "E7", "E9", "F"]

@@ -46,8 +46,8 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml",
 
     with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
                                description="Implement the request")) as ph:
-        previous = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
-                                     gates=[gates.diff_matches_claims]))
+        ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
+                          gates=[gates.diff_matches_claims]))
 
     test = None
     for i in range(1, MAX_FIX_LOOPS + 1):
@@ -63,9 +63,9 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml",
         with run.phase(PhaseParams(name=f"fix_{i}", kind="agent", owner="builder", retries=1,
                                    description="Repair what the suite reported, from its "
                                                "verbatim output")) as ph:
-            previous = ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
-                                         previous=quality.as_envelope(test, "tests"),
-                                         gates=[gates.diff_matches_claims]))
+            ph.call(AgentCall(output_type=BuildOutput, prompt=prompt,
+                              previous=quality.as_envelope(test, "tests"),
+                              gates=[gates.diff_matches_claims]))
 
     return run.finish(accepted=test is not None and test.passed,
                       reason=f"the suite still failed after {MAX_FIX_LOOPS} fix attempt(s)")

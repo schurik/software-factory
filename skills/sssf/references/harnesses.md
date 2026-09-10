@@ -5,7 +5,9 @@ pattern is written, which tool names exist, what `thinking` maps to, how a sessi
 created versus continued, which options block it reads — and, because the answers differ,
 what its agents are *told* in their prompts.
 
-The factory ships two, and a repository picks one at install time:
+The factory ships two a repository can pick at install time, plus one that answers
+from a script and never calls a model — see [The `fake` harness](#the-fake-harness-a-scripted-stand-in)
+at the bottom.
 
 | | `harness: pi` | `harness: claude_code` |
 |---|---|---|
@@ -71,6 +73,47 @@ stamped file the whole truth: what you read in
 
 The cost is duplication in the skill. When you edit a shared instruction, edit it in
 every harness's set — `grep -rl "<the sentence>" templates/harnesses/*/prompt_engineering`.
+
+## The `fake` harness: a scripted stand-in
+
+`adw_modules/harnesses/fake.py` is registered like any other harness and is **not a
+production harness**: it answers from a script written into its `harness_options` and
+never calls a model. It exists because the expensive half of a run is the agent, and
+everything around the agent is deterministic machinery that used to be testable only by
+paying for a real chain.
+
+Two uses, both real:
+
+- **The factory's own test suite** (`skills/sssf/tests/`) walks whole chains with it —
+  phases, gates, gate corrections, JSON re-prompts, envelopes, permissions, budgets,
+  the trace — in seconds, with no network and no token.
+- **Developing a new ADW.** The SHAPE of a chain (which phases, in which order, with
+  which gates and output types) is settled long before the prompts are any good. Put the
+  roster on `harness: fake` until the shape holds, then move it back. The iteration is
+  free.
+
+```yaml
+  - name: planner
+    harness: fake
+    model: fake
+    harness_options:
+      replies:                       # one reply per SEND, not per phase
+        - writes: {"specs/plan.md": "# Plan\n"}
+          envelope: {status: success, summary: planned, artifacts: [specs/plan.md]}
+```
+
+`writes`/`deletes` change the run's worktree before the reply is reported, which is what
+lets a scripted turn drive gates that measure the TREE. A phase sends more than once when
+a gate fails or the JSON does not parse, so a first reply that claims an artifact it never
+wrote followed by one that writes it is a real exercise of the correction loop.
+`strict: true` makes running out of script a loud failure instead of repeating the last
+reply; `script: <file.json>` keeps a long one out of the roster. `sleep:` past the agent's
+`timeout_seconds` raises `AgentTimeout`, the same exception a real harness raises.
+
+**It is deliberately absent from `templates/harnesses/`**, so the installer never offers
+it as the harness a repository runs on — a factory whose whole roster is fake produces
+nothing. Its `credentials()` says what it is in every `just doctor` report, and the trace
+records `harness: fake` on every phase it touched.
 
 ## Adding a harness (Codex, or whatever is next)
 

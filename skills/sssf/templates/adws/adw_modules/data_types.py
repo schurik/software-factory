@@ -9,6 +9,7 @@ that its final JSON response is parsed against. No untyped handoffs.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Type
 
@@ -23,6 +24,18 @@ PhaseStatus = Literal["queued", "running", "success", "fail"]
 # it catches is the other shape: a turn that emits nothing at all, forever.
 # `0` anywhere this is used means no limit. See adw_modules/limits.py.
 DEFAULT_AGENT_TIMEOUT_SECONDS = 1800
+
+# Words that carry no intent, so a description made only of the phase name plus
+# some of these is still only the phase name. `commit_plan: "Commit the plan"`
+# is the example rule 7 has always cited — and it passed a check that compared
+# the two strings verbatim, because "commit the plan" is not "commit plan".
+DESCRIPTION_FILLER = {"a", "an", "the", "this", "its", "it", "of", "to", "for"}
+
+
+def _significant_words(text: str) -> list[str]:
+    """The words a description would still say something with. Order kept."""
+    return [word for word in re.findall(r"[a-z0-9]+", text.casefold())
+            if word not in DESCRIPTION_FILLER]
 
 
 # ── Phases ────────────────────────────────────────────────────────────────────
@@ -54,7 +67,7 @@ class PhaseParams(BaseModel):
             raise ValueError(
                 f"phase {name!r}: description is required — one sentence on what this "
                 f"phase does and why. It is what the trace and the UI show.")
-        if text.rstrip(".").casefold() == name.replace("_", " ").casefold():
+        if _significant_words(text) == _significant_words(name.replace("_", " ")):
             raise ValueError(
                 f"phase {name!r}: description {text!r} only restates the phase name — "
                 f"say what it does and why instead.")
@@ -1066,7 +1079,7 @@ class UsageBreakdown(BaseModel):
 
     def merge(self, other: "UsageBreakdown") -> None:
         """Add another call's usage — a phase that retries spends more than once."""
-        for field in self.model_fields:
+        for field in type(self).model_fields:
             setattr(self, field, getattr(self, field) + getattr(other, field))
 
 
