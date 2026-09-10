@@ -96,3 +96,53 @@ def test_a_new_process_inherits_what_the_session_waits_for(session_dir):
     state = artifacts.read_run(session_dir)
     assert state.status == "running" and state.pid == 42
     assert state.waiting_for.subject_digest == "abc"
+
+
+# ── the policy ───────────────────────────────────────────────────────────────
+
+from adw_modules.data_types import HitlConfig                            # noqa: E402
+from adw_modules.hitl import HitlPolicy                                  # noqa: E402
+
+
+def test_policy_default_off_means_every_gate_is_auto():
+    policy = HitlPolicy(HitlConfig())
+    assert policy.mode("plan", "engineer") == "auto"
+    assert policy.every is False
+
+
+def test_policy_gate_entries_win_over_default():
+    policy = HitlPolicy(HitlConfig(default="off", gates={"plan": "on"}))
+    assert policy.mode("plan", "engineer") == "on"
+    assert policy.mode("build", "engineer") == "auto"
+    policy = HitlPolicy(HitlConfig(default="on", gates={"build": "off"}))
+    assert policy.mode("plan", "engineer") == "on"
+    assert policy.mode("build", "engineer") == "auto"
+
+
+@pytest.mark.parametrize("override,plan,build,every", [
+    ("all", "on", "on", False),
+    ("none", "auto", "auto", False),
+    ("plan", "on", "auto", False),
+    ("plan,build", "on", "on", False),
+    ("every", "on", "on", True),
+    ("", "on", "auto", False),           # no override: the config decides
+])
+def test_policy_override_forms(override, plan, build, every):
+    policy = HitlPolicy(HitlConfig(gates={"plan": "on"}), override)
+    assert policy.mode("plan", "engineer") == plan
+    assert policy.mode("build", "engineer") == build
+    assert policy.every is every
+
+
+def test_policy_override_rejects_nonsense():
+    with pytest.raises(ValueError, match="--hitl"):
+        HitlPolicy(HitlConfig(), "some times")
+
+
+def test_policy_unattended_runs_read_when_unattended():
+    on = HitlConfig(default="on")
+    assert HitlPolicy(on).mode("plan", "issue") == "on"          # suspend and wait
+    auto = HitlConfig(default="on", when_unattended="auto")
+    assert HitlPolicy(auto).mode("plan", "issue") == "auto"
+    # A flag is a person at a keyboard saying so, and it wins even for an issue run.
+    assert HitlPolicy(auto, "all").mode("plan", "issue") == "on"

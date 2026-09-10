@@ -890,6 +890,7 @@ class RunSpec(BaseModel):
     # Only ever true for a run that pinned an --adw-id: there is nothing to
     # resume without the session that recorded it.
     resume: bool = False
+    hitl: str = ""                  # the --hitl flag, or "" for the config's say
 
 
 # ── Integration (landing a run's branch) ─────────────────────────────────────

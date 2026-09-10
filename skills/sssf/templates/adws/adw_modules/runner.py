@@ -15,10 +15,11 @@ is accepted.
 from __future__ import annotations
 
 import json
+import os
 import time
 from contextlib import contextmanager
 
-from . import agents, artifacts, limits, replay, worktree
+from . import agents, artifacts, hitl, limits, replay, worktree
 from .console import Console
 from .data_types import (AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams,
                          RunSpec)
@@ -103,6 +104,11 @@ class Run:
         # what is replayed and what is deliberately re-run.
         self.resuming = spec.resume
         self.replay = replay.load(self.session_dir, spec.resume)
+        # Which gates stop for a human this run. Built once, asked at every
+        # gate with the trigger the run knows THEN — an issue chain learns it is
+        # issue-triggered in its first phase, after this constructor ran.
+        self.hitl = hitl.HitlPolicy(self.cfg.hitl,
+                                    spec.hitl or os.environ.get("SSSF_HITL", ""))
         # Values a run pins once and must not re-derive on the way back in (the
         # documenter's diff baseline is the one that matters). Written every
         # run, read only by a resumed one — see `pin`.

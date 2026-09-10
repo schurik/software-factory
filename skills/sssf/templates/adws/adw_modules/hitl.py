@@ -32,13 +32,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import select
+import sys
 from pathlib import Path
 from typing import Optional
 
 from . import artifacts
-from .data_types import Decision
+from .data_types import Decision, HitlConfig, WaitingFor
 
 EXIT_WAITING = 75          # EX_TEMPFAIL: "try again later", which is exactly it
+POLL_SECONDS = 2.0         # attended: how long one look at the keyboard waits
 
 
 # ── the record ───────────────────────────────────────────────────────────────
@@ -81,3 +84,98 @@ def read_decision(session_dir: Path, gate: str, round: int) -> Optional[Decision
         return Decision(**json.loads(path.read_text()))
     except (ValueError, OSError):
         return None            # a half-written file is a missing answer, not a crash
+
+
+# ── the keyboard ─────────────────────────────────────────────────────────────
+
+def attended() -> bool:
+    """Whether anyone can answer at this terminal. False under cron, a watcher, a test."""
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def read_keypress(waiting: WaitingFor) -> tuple[str, str]:
+    """The real `ask`: one line from a TTY, or ("", "") after POLL_SECONDS so the
+    caller can look at the decision record again. Notes are required on a reject
+    — they are what the agent revises from."""
+    ready, _, _ = select.select([sys.stdin], [], [], POLL_SECONDS)
+    if not ready:
+        return "", ""
+    key = sys.stdin.readline().strip().lower()[:1]
+    if key == "a":
+        return "approve", input("notes for the next agent (optional): ").strip()
+    if key == "r":
+        notes = ""
+        while not notes:
+            notes = input("what should change: ").strip()
+        return "reject", notes
+    if key == "x":
+        return "abort", input("reason (optional): ").strip()
+    if key == "d":
+        return "detach", ""
+    return "", ""
+
+
+# ── the policy ───────────────────────────────────────────────────────────────
+
+OVERRIDES = ("all", "none", "every")
+
+
+class HitlPolicy:
+    """Whether a named gate fires, resolved most-specific-first.
+
+    `override` is the `--hitl` flag (or `SSSF_HITL`): `all`, `none`, `every`,
+    or a comma-separated list of gate names. It is a person saying so at the
+    keyboard, and it wins over everything in the config — including
+    `when_unattended`, because a flag on an issue run's argv was put there by
+    the operator who launched the watcher.
+
+    `ask` is how an attended run asks in place: a callable taking the
+    `WaitingFor` and returning `(verdict | "detach" | "", notes)`. None means
+    nobody is at the keyboard and the gate suspends at once. It lives here
+    because "is anyone attending" is a policy input, and because this is the
+    run-scoped object a test can hand a scripted answerer to.
+    """
+
+    def __init__(self, config: HitlConfig, override: str = ""):
+        self.config = config
+        self.override = (override or "").strip().lower()
+        self.every = self.override == "every"
+        self._named: set[str] = set()
+        if self.override and self.override not in OVERRIDES:
+            names = {part.strip() for part in self.override.split(",") if part.strip()}
+            if not names or any(not part.replace("_", "").isalnum() for part in names):
+                raise ValueError(f"--hitl {override!r}: expected all | none | every | "
+                                 f"a comma-separated list of gate names")
+            self._named = names
+        self.ask = read_keypress if attended() else None
+
+    def mode(self, gate: str, trigger: str) -> str:
+        """`on` — stop and ask. `auto` — record a policy approval and go on."""
+        if self.override in ("all", "every"):
+            return "on"
+        if self.override == "none":
+            return "auto"
+        if self._named:
+            return "on" if gate in self._named else "auto"
+        wanted = self.config.gates.get(gate, self.config.default) == "on"
+        if not wanted:
+            return "auto"
+        if trigger != "engineer" and self.config.when_unattended == "auto":
+            return "auto"
+        return "on"
+
+    def summary(self) -> str:
+        """The one line the console prints when any gate may fire."""
+        source = f"--hitl {self.override}" if self.override else "config"
+        on = sorted(gate for gate, value in self.config.gates.items() if value == "on")
+        line = f"hitl: {source}"
+        if self.every:
+            line += " · a checkpoint after every agent phase"
+        elif not self.override:
+            line += f" · default {self.config.default}"
+            if on:
+                line += f" · on: {', '.join(on)}"
+        return line + (" · attended" if self.ask else " · unattended, gates suspend")

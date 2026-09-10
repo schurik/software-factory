@@ -35,6 +35,7 @@ from pathlib import Path
 
 from . import artifacts, git_helper, preflight, worktree
 from .data_types import RunSpec, RunState, SSSFConfig, WorktreeRequest
+from .hitl import HitlPolicy
 from .runner import Run
 from .tracer import Tracer
 from .utils import anchor, engineer_name, new_id, now_iso
@@ -62,7 +63,8 @@ def _finalize_when_killed(run: Run) -> None:
         signal.signal(sig, handler)
 
 
-def ensure(cfg: SSSFConfig, adw_id: str | None = None, resume: bool = False) -> Run:
+def ensure(cfg: SSSFConfig, adw_id: str | None = None, resume: bool = False,
+           hitl: str = "") -> Run:
     if resume and not adw_id:
         raise SystemExit("--resume needs --adw-id: there is nothing to resume without "
                          "the session that recorded it. `just sessions` lists them.")
@@ -73,13 +75,19 @@ def ensure(cfg: SSSFConfig, adw_id: str | None = None, resume: bool = False) -> 
     # resolve, dies a few seconds later having already cut a branch and claimed
     # an id — so it is refused here, while the repo is still untouched. Warnings
     # survive to be said on the console below, where they are read.
+    # ...and a `--hitl` nobody can parse is refused in the same breath, for the
+    # same reason: it would otherwise die inside Run() with a branch already cut.
+    try:
+        HitlPolicy(cfg.hitl, hitl or os.environ.get("SSSF_HITL", ""))
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
     warnings = preflight.before_run(cfg, main_root)
     workspace = worktree.ensure(WorktreeRequest(main_root=main_root, adw_id=adw_id,
                                                 config=cfg.worktree))
     tracer = Tracer(anchor(main_root, cfg.observability.db),
                     anchor(main_root, f"{cfg.defaults.data_dir}/sessions/{adw_id}/events.jsonl"))
     run = Run(RunSpec(cfg=cfg, adw_id=adw_id, engineer=engineer_name(),
-                      workspace=workspace, resume=resume), tracer)
+                      workspace=workspace, resume=resume, hitl=hitl), tracer)
     tracer.session_start(adw_id, run.engineer, adw_name=Path(sys.argv[0]).stem)
     # What the session already knows about itself, from its own directory. An
     # issue-triggered session that a later ADW re-enters must still know it was
@@ -118,6 +126,8 @@ def ensure(cfg: SSSFConfig, adw_id: str | None = None, resume: bool = False) -> 
             run.console.note(f"fix: {finding.fix}")
     if resume:
         run.console.note(run.replay.summary())
+    if run.hitl.override or cfg.hitl.default == "on" or cfg.hitl.gates:
+        run.console.note(run.hitl.summary())
     return run
 
 
