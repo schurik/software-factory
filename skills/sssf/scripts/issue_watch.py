@@ -147,14 +147,44 @@ def _beat(cfg, main_root, status: str, *, project: str = "",
                  pid=os.getpid(), project=project, interval_s=interval, note=note)
 
 
-def _route(cfg, labels: list[str]) -> str:
-    """Which ADW this issue's labels ask for. Empty when none of them do."""
-    names = [entry.get("name", "") if isinstance(entry, dict) else str(entry)
-             for entry in labels]
+def _names(labels: list) -> list[str]:
+    """The label names on one issue, however the forge spelled them."""
+    return [entry.get("name", "") if isinstance(entry, dict) else str(entry)
+            for entry in labels]
+
+
+def _route(cfg, labels: list) -> str:
+    """Which ADW this issue's labels ask for. Empty when none of them do.
+
+    The ROUTING label is not part of the state machine below and is never
+    removed: it is the authorization a human applied, and the record of which
+    chain was asked for. It is expected to sit alongside whatever state label
+    the issue currently carries.
+    """
+    names = _names(labels)
     for label, script in cfg.issues.route.items():
         if label in names:
             return script
     return ""
+
+
+def _stale_states(cfg, labels: list, keep: str) -> list[str]:
+    """State labels this issue still carries from an EARLIER run.
+
+    The four states are meant to be mutually exclusive, and nothing enforced
+    that: each flip removed exactly the one label it had just put on, so a
+    `failed` left by one run survived the next one and an issue re-queued by
+    hand — the documented recovery — ended up carrying `done` AND `failed`,
+    with no way to tell which run either belonged to.
+
+    Only labels the issue ACTUALLY CARRIES are named, and that is not
+    tidiness: `gh issue edit --remove-label` on a name the repository never
+    defined is an error, and a speculative clean-up would fail the claim it is
+    attached to. A label the listing shows is a label the forge has.
+    """
+    states = cfg.issues.states
+    known = {states.queued, states.running, states.done, states.failed}
+    return sorted({name for name in _names(labels) if name in known and name != keep})
 
 
 @contextmanager
@@ -186,18 +216,22 @@ def _claim(cfg, main_root, project: str, number: int):
 
 
 def _flip(cfg, main_root, project: str, number: int,
-          add: str, remove: str) -> bool:
+          add: str, remove: str | list[str]) -> bool:
     """Move an issue's labels. NOT exclusion — see _claim and the module docstring.
 
     Thin over `adw_modules.issues.set_state`, which is where the argv shape and
     the forge's quirks already live. Reimplementing it here is what the first
     version did, and the two copies would have drifted the moment either grew a
     flag.
+
+    `remove` takes several because the CLAIM clears every state an earlier run
+    left behind, in the one edit that takes the issue — see `_stale_states`.
     """
     from adw_modules.data_types import IssueUpdate
     from adw_modules.issues import set_state
     result = set_state(main_root, cfg.issues, IssueUpdate(
-        number=number, project=project, add_labels=[add], remove_labels=[remove]))
+        number=number, project=project, add_labels=[add],
+        remove_labels=[remove] if isinstance(remove, str) else list(remove)))
     if not result.ok:
         print(f"  #{number}: {' · '.join(result.notes)}")
     return result.ok
@@ -259,8 +293,14 @@ def once(config_path: str, interval: int = 0) -> int:
         with _claim(cfg, main_root, project, number) as mine:
             if not mine:
                 continue
-            if not _flip(cfg, main_root, project, number,
-                         cfg.issues.states.running, cfg.issues.states.queued):
+            # The claim, and the same edit clears whatever an earlier run left
+            # on this issue — `queued` always, plus a stale `done` or `failed`
+            # from before a human re-queued it. Doing it here rather than at
+            # the outcome is what keeps the flip below removing only a label it
+            # put on itself, which is the one kind of removal that cannot fail.
+            if not _flip(cfg, main_root, project, number, cfg.issues.states.running,
+                         _stale_states(cfg, entry.get("labels") or [],
+                                       keep=cfg.issues.states.running)):
                 continue
 
             # A run blocks this watcher for as long as it takes, so the row

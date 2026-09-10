@@ -357,3 +357,62 @@ def test_no_other_script_grew_subcommands_without_the_same_treatment():
     with_subcommands = sorted(path.stem for path in SCRIPTS.glob("*.py")
                               if "add_subparsers" in path.read_text())
     assert with_subcommands == ["hitl"]
+
+
+# ── the four states are mutually exclusive ──────────────────────────────────
+
+def test_a_requeued_issue_does_not_keep_the_previous_run_s_verdict(forge, monkeypatch):
+    """`queued` is put back BY HAND — it is the documented recovery for a failed
+    or crashed run. Each flip used to remove exactly the one label it had just
+    put on, so the `failed` from the first run survived the second and the issue
+    ended up carrying `done` and `failed` at once, with nothing saying which run
+    either belonged to. Seen in the wild on a real tracker."""
+    calls, queued = forge
+    watch = _load("issue_watch")
+
+    queued(68)
+    monkeypatch.setattr(watch, "_launch", lambda *a: 1)          # red
+    watch.once(CONFIG_PATH)
+    assert _labels(calls, 68)[0] == ["sssf:running", "sssf:failed"]
+
+    # A human re-queues it; the forge now lists it carrying the stale verdict.
+    Path("queued.json").write_text(json.dumps(
+        [{"number": 68, "title": "#68", "author": {"login": "someone"},
+          "labels": [{"name": "sssf:queued"}, {"name": "sssf:build"},
+                     {"name": "sssf:failed"}]}]))
+    monkeypatch.setattr(watch, "_launch", lambda *a: 0)          # green
+    watch.once(CONFIG_PATH)
+
+    added, removed = _labels(calls, 68)
+    assert added == ["sssf:running", "sssf:failed", "sssf:running", "sssf:done"]
+    # The claim cleared the stale verdict in the same edit that took the issue.
+    assert removed == ["sssf:queued", "sssf:running",
+                       "sssf:failed", "sssf:queued", "sssf:running"]
+    net = {label for label in added if added.count(label) > removed.count(label)}
+    assert net == {"sssf:done"}, f"the issue is left carrying {sorted(net)}"
+
+
+def test_the_routing_label_is_never_removed(forge, monkeypatch):
+    """It is the authorization a human applied and the record of which chain was
+    asked for — not a state, and deliberately co-resident with one."""
+    calls, queued = forge
+    queued(42)
+    watch = _load("issue_watch")
+    monkeypatch.setattr(watch, "_launch", lambda *a: 0)
+    watch.once(CONFIG_PATH)
+    assert "sssf:build" not in _labels(calls, 42)[1]
+
+
+def test_the_claim_only_removes_labels_the_issue_actually_carries(forge, monkeypatch):
+    """A speculative `--remove-label` is not free: `gh issue edit` errors on a
+    name the repository never defined, and the claim would fail with it. Only
+    what the listing showed may be removed."""
+    calls, queued = forge
+    queued(42)                       # carries queued + build, no terminal state
+    watch = _load("issue_watch")
+    monkeypatch.setattr(watch, "_launch", lambda *a: 0)
+    watch.once(CONFIG_PATH)
+
+    claim = [call for call in calls() if call[0] == "edit"][0]
+    assert claim.count("--remove-label") == 1        # `queued`, and nothing invented
+    assert "sssf:done" not in claim and "sssf:failed" not in claim
