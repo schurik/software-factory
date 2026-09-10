@@ -258,6 +258,8 @@ This is the other end of a branch's life. `adw_pr_review.py` reads `sssf/<adw_id
 
 `states.failed` exists for the one case the forge's state cannot express: a run that ends red leaves its threads open, which is exactly the condition that launched it. Without a mark the next poll relaunches the same failing run forever. A human removing the label is the restart.
 
+**A label that did not stick is not a mark.** `set_state` reports a rejected edit rather than raising — a label is not the work — but this is the one path where that is the only brake, so `pr_watch` checks it: if `states.failed` cannot be applied, the watcher holds that pull request **in memory for its own lifetime** and says so. That fallback is deliberately weaker than the label (it does not survive a restart, and a second watcher cannot see it); it buys the poll interval it takes to read the line. The usual cause is a forge CLI that cannot edit at all — `just doctor` names it, since `gh` before 2.98 fails every `pr edit` and `issue edit` on the deprecated Projects (classic) field.
+
 **Merged is the end of the session.** A merged pull request vanishes from the watcher's queue on its own, but three things would otherwise hang. `pr_watch`'s reap pass — over the worktrees on disk plus the sessions that believe they are running, never over the repository's history, so the work shrinks as the factory tidies up — handles each:
 
 1. **A REVIEW run still working that branch is stopped**, with `SIGTERM`, which `session.py` turns into a clean finish. Letting it continue is not merely pointless: it is answering threads on a pull request that is already decided, and `keep_published` would push onto a branch that has landed and may already be deleted.

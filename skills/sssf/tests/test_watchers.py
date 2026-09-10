@@ -39,11 +39,19 @@ def _load(name: str):
 
 # ── the fake forge ───────────────────────────────────────────────────────────
 
+# `refuse.json`, when a test writes one, names the verbs this forge answers the
+# way a real one does when it cannot do the edit: exit 1, with a reason. That is
+# not a hypothetical — `gh pr edit` on a release old enough to still ask for
+# Projects (classic) fails on every repository, whatever the edit is.
 FORGE = '''\
 import json, sys
 from pathlib import Path
 log = Path(sys.argv[1])
 verb, argv = sys.argv[2], sys.argv[3:]
+refuse = log.with_name("refuse.json")
+if refuse.exists() and verb in json.loads(refuse.read_text()):
+    print(f"GraphQL: {verb} is not something this forge will do", file=sys.stderr)
+    sys.exit(1)
 if verb == "list":
     print(json.dumps(json.loads(Path(sys.argv[1]).with_name("queued.json").read_text())))
 else:
@@ -247,6 +255,141 @@ def test_a_chain_places_every_gate_it_advertises(chain, expected):
     assert "--hitl" in docstring
     for gate in expected:
         assert f"approve_{gate}" in docstring or f"`{gate}` gate" in docstring, gate
+
+
+# ── pr_watch: the failed label is the only brake, so it has to stick ─────────
+
+@pytest.fixture
+def reviews(repo: Path, monkeypatch):
+    """A repo whose review path points at the scriptable forge.
+
+    Returns `(calls, open_prs, refuse)` — the same shape as `forge`, plus a way
+    to make one verb fail the way a forge that will not do the edit fails.
+    """
+    monkeypatch.chdir(repo)
+    (repo / "adws" / "adw_sssf_config").mkdir(parents=True)
+    (repo / "adws" / "adw_modules").mkdir(parents=True, exist_ok=True)
+
+    forge_py = repo / "forge.py"
+    forge_py.write_text(FORGE)
+    log = repo / "edits.json"
+    base = [sys.executable, str(forge_py), str(log)]
+
+    (repo / "adws" / "adw_sssf_config" / "sssf.config.yaml").write_text(yaml.safe_dump({
+        "defaults": {"harness": "fake", "model": "fake", "data_dir": "adws/adw_data"},
+        "worktree": {"enabled": False},
+        "observability": {"db": "adws/adw_data/sssf.db"},
+        "agents": [],
+        "pull_requests": {
+            "enabled": True, "project": "acme/widgets", "reap_merged": False,
+            "list_command": [*base, "list"],
+            "state_command": [*base, "edit"],
+            "comment_command": [*base, "comment"],
+        },
+    }))
+
+    def open_prs(*numbers: int) -> None:
+        (repo / "queued.json").write_text(json.dumps(
+            [{"number": n, "headRefName": f"sssf/{n:08x}", "labels": [], "isDraft": False}
+             for n in numbers]))
+
+    def refuse(*verbs: str) -> None:
+        (repo / "refuse.json").write_text(json.dumps(list(verbs)))
+
+    def calls() -> list[list[str]]:
+        return json.loads(log.read_text()) if log.exists() else []
+
+    open_prs()
+    return calls, open_prs, refuse
+
+
+def _reviewing(watch, monkeypatch, code: int) -> list[int]:
+    """Point the watcher at a pull request that has work, and count its launches."""
+    launched: list[int] = []
+    monkeypatch.setattr(watch, "_has_work", lambda *a, **k: True)
+
+    def launch(config_path, number, main_root):
+        launched.append(number)
+        return code
+    monkeypatch.setattr(watch, "_launch", launch)
+    return launched
+
+
+def test_a_failed_review_is_marked_and_this_process_keeps_no_opinion(reviews, monkeypatch):
+    """The ordinary path, unchanged: the label sticks, the pull request carries
+    the mark, and the watcher holds nothing of its own — so a person removing the
+    label is enough to try again, from any process."""
+    calls, open_prs, _ = reviews
+    open_prs(72)
+    watch = _load("pr_watch")
+    _reviewing(watch, monkeypatch, code=1)
+
+    assert watch.once(CONFIG_PATH) == 0
+    added, _ = _labels(calls, 72)
+    assert added == ["sssf:pr-failed"]
+    assert watch._HELD == set()
+
+
+def test_a_failed_review_whose_label_will_not_stick_is_not_bought_a_second_time(
+        reviews, monkeypatch, capsys):
+    """`set_state` is right not to raise over a label — but a caller that then
+    treats it as applied has lost the only thing standing between a failing run
+    and the next poll. It cost three runs of a real chain before it was written
+    down: `gh pr edit` could not label anything, so nothing marked the pull
+    request, and every poll bought the same failure again."""
+    calls, open_prs, refuse = reviews
+    open_prs(72)
+    refuse("edit")
+    watch = _load("pr_watch")
+    launched = _reviewing(watch, monkeypatch, code=1)
+
+    watch.once(CONFIG_PATH)
+    watch.once(CONFIG_PATH)
+
+    assert launched == [72]
+    said = capsys.readouterr().out
+    assert "did not stick" in said and "by hand" in said
+
+
+def test_only_the_pull_request_that_failed_is_held(reviews, monkeypatch):
+    """A forge that refuses one edit refuses them all, so the hold has to name
+    what it is holding — a watcher that stopped answering every pull request
+    because one of them failed would be a worse outage than the loop."""
+    calls, open_prs, refuse = reviews
+    open_prs(72)
+    refuse("edit")
+    watch = _load("pr_watch")
+    _reviewing(watch, monkeypatch, code=1)
+    watch.once(CONFIG_PATH)
+
+    assert watch._HELD == {("acme/widgets", 72)}
+
+
+def test_a_green_review_is_never_held(reviews, monkeypatch):
+    """Exit 0 means the threads were answered. There is nothing to mark, and
+    nothing a failed label could have said."""
+    calls, open_prs, refuse = reviews
+    open_prs(72)
+    refuse("edit")
+    watch = _load("pr_watch")
+    launched = _reviewing(watch, monkeypatch, code=0)
+
+    watch.once(CONFIG_PATH)
+    assert watch._HELD == set() and launched == [72]
+
+
+def test_a_review_stopped_at_a_gate_is_not_held_either(reviews, monkeypatch):
+    """Exit 75 is a person not having answered yet, and `_waiting_on` is what
+    keeps the next poll off it. Holding it here would make clearing this
+    watcher's memory the price of approving a plan."""
+    calls, open_prs, refuse = reviews
+    open_prs(72)
+    refuse("edit")
+    watch = _load("pr_watch")
+    _reviewing(watch, monkeypatch, code=watch.EXIT_WAITING)
+
+    watch.once(CONFIG_PATH)
+    assert watch._HELD == set()
 
 
 # ── pr_watch: a suspended review is skipped, not re-bought ───────────────────
