@@ -109,11 +109,71 @@ def test_a_second_install_skips_what_is_already_there(repo: Path):
     assert "# edited by the engineer" in (repo / CONFIG).read_text()
 
 
-def test_force_overwrites(repo: Path):
+def test_force_replaces_skill_code(repo: Path):
+    """What --force is FOR: an upgrade. Every stamped path is a copy of skill
+    code, and replacing it is how a repo receives a fix to `adws/**` or the
+    justfile."""
     install(repo, "--harness", "claude_code", "--no-detect-quality")
-    (repo / CONFIG).write_text("# clobbered\n")
+    module = repo / "adws" / "adw_modules" / "hitl.py"
+    module.write_text("# a stale copy\n")
     install(repo, "--harness", "claude_code", "--no-detect-quality", "--force")
-    assert "# clobbered" not in (repo / CONFIG).read_text()
+    assert "# a stale copy" not in module.read_text()
+
+
+def test_force_does_not_replace_the_one_file_the_operator_owns(repo: Path):
+    """The config is the opposite of skill code: it holds the answers only this
+    repository has — `issues.project`, the route map, which gates are on — and
+    its own header says it is the operator's the moment it is stamped.
+
+    Re-rendering it made the SOLE upgrade path also the one that destroyed the
+    file the installer told them to own, silently, in the same breath as the fix
+    they came for. So --force replaces everything else and leaves this."""
+    install(repo, "--harness", "claude_code", "--no-detect-quality")
+    mine = (repo / CONFIG).read_text().replace('project: ""', 'project: "acme/widgets"')
+    (repo / CONFIG).write_text(mine + "\n# and a note I wrote\n")
+
+    result = install(repo, "--harness", "claude_code", "--no-detect-quality", "--force")
+
+    assert result.returncode == 0
+    kept = (repo / CONFIG).read_text()
+    assert 'project: "acme/widgets"' in kept
+    assert "# and a note I wrote" in kept
+
+
+def test_a_changed_config_arrives_beside_the_operator_s_own(repo: Path):
+    """An upgrade still has to DELIVER a config that learned a new block, or the
+    operator would never find out it exists. It lands as `.new`, and the notice
+    names both paths — merging is theirs, with a diff in front of them."""
+    install(repo, "--harness", "claude_code", "--no-detect-quality")
+    (repo / CONFIG).write_text("# nothing like the real one\n")
+
+    result = install(repo, "--harness", "claude_code", "--no-detect-quality", "--force")
+
+    proposed = repo / (CONFIG + ".new")
+    assert proposed.is_file()
+    assert "hitl:" in proposed.read_text()          # a real render, not a stub
+    assert (repo / CONFIG).read_text() == "# nothing like the real one\n"
+    assert "YOUR CONFIG WAS NOT TOUCHED" in result.stdout
+    assert str(proposed) in result.stdout
+    assert "make_config.py --force" in result.stdout   # how to ask for a clean one
+
+
+def test_an_unchanged_config_leaves_no_litter(repo: Path):
+    """A repo already current gets no `.new` to wonder about — the file is only
+    written when the render actually differs from what is there."""
+    install(repo, "--harness", "claude_code", "--no-detect-quality")
+    result = install(repo, "--harness", "claude_code", "--no-detect-quality", "--force")
+    assert not (repo / (CONFIG + ".new")).exists()
+    assert "YOUR CONFIG WAS NOT TOUCHED" not in result.stdout
+
+
+def test_deleting_the_config_is_how_you_ask_for_a_clean_one(repo: Path):
+    """The escape hatch the notice promises, and the reason --force does not
+    need to be one: a config that is not there is stamped fresh, as on day one."""
+    install(repo, "--harness", "claude_code", "--no-detect-quality")
+    (repo / CONFIG).unlink()
+    install(repo, "--harness", "claude_code", "--no-detect-quality")
+    assert "hitl:" in (repo / CONFIG).read_text()
 
 
 def test_an_unknown_harness_is_refused_by_name(repo: Path):
