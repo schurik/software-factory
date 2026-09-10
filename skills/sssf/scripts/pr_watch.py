@@ -26,6 +26,10 @@ Two things that state cannot do on its own, and this file exists for both:
     and "attempted and failed", so without a mark the next poll relaunches the
     same failing run, forever. `states.failed` is that mark, and a human
     removing it is the restart. It is the ONLY label this path uses.
+    A LABEL THAT DID NOT STICK IS NOT A MARK, and the forge refusing that one
+    edit is enough to put the loop back — an out-of-date `gh` did exactly that,
+    three times, for the price of three failed runs. `_HELD` is what this
+    process does about it; see `_hold`.
   * A MERGED PULL REQUEST ENDS ITS SESSION, and nothing inside the factory can
     notice. `_reap()` does: it stops the REVIEW run still working a branch that
     has already landed, and releases the worktree that run was keeping alive.
@@ -64,6 +68,12 @@ ADW = "adws/adw_pr_review.py"
 # gives: this is read off another process's exit status, and that process runs
 # whatever version of the factory is stamped into the repo being watched.
 EXIT_WAITING = 75
+
+# (project, number) this process will not launch again, because a run failed on
+# it and the label that would have said so could not be applied. Process-local
+# and lost on restart, which is the honest scope of a fallback for a mark that
+# was supposed to live on the pull request. See `_hold`.
+_HELD: set[tuple[str, int]] = set()
 
 
 def _load(config_path: str):
@@ -177,7 +187,8 @@ def _claim(cfg, main_root, project: str, number: int):
         handle.close()          # releases the flock
 
 
-def _mark(cfg, main_root, project: str, number: int, add: str = "", remove: str = "") -> None:
+def _mark(cfg, main_root, project: str, number: int, add: str = "",
+          remove: str = "") -> bool:
     """Add or remove the one label this path uses. Thin over pull_requests.set_state."""
     from adw_modules.data_types import PullRequestUpdate
     from adw_modules.pull_requests import set_state
@@ -186,6 +197,35 @@ def _mark(cfg, main_root, project: str, number: int, add: str = "", remove: str 
         add_labels=[add] if add else [], remove_labels=[remove] if remove else []))
     if not result.ok:
         print(f"  #{number}: {' · '.join(result.notes)}")
+    return result.ok
+
+
+def _hold(cfg, main_root, project: str, number: int, failed_label: str) -> None:
+    """Mark a failed pull request, and keep this process off it if that failed.
+
+    THE LABEL IS THE ONLY BRAKE THIS PATH HAS. Every other guard here is a
+    question about state the forge maintains — is it a draft, is it resolved, is
+    a run waiting — and a failed run changes none of them: its threads are still
+    open, so `_has_work` says yes again in `interval` seconds and the same run is
+    bought again. `set_state` is right not to raise (a label is not the work),
+    but the caller cannot then treat the label as applied.
+
+    It happened: `gh pr edit` on a release old enough to still ask for Projects
+    (classic) fails on every repository, whatever the edit is, so the label could
+    never land and one failing review ran on a loop until someone read the log.
+
+    `_HELD` is the fallback, and deliberately the WEAKER one — in memory, this
+    process only, gone on restart. It is not a substitute for the label: it
+    cannot survive the watcher, and a second watcher would not see it. It buys
+    the operator the interval it takes to read the line below.
+    """
+    if _mark(cfg, main_root, project, number, add=failed_label):
+        return
+    _HELD.add((project, number))
+    print(f"  #{number}: {failed_label} did not stick, so this watcher is holding the "
+          f"pull request itself — otherwise the next poll would find the same open "
+          f"threads and buy the same failed run again. Add {failed_label} by hand, or "
+          f"fix the forge CLI (`just doctor`) and restart the watcher")
 
 
 def _waiting_on(cfg, main_root, number: int) -> str:
@@ -449,6 +489,11 @@ def once(config_path: str, only: int = 0, interval: int = 0) -> int:
             print(f"  #{number}: carries {failed_label} — a run already failed on "
                   f"it; remove the label to try again")
             continue
+        if (project, number) in _HELD:
+            print(f"  #{number}: a run failed on it and {failed_label} could not be "
+                  f"applied, so this watcher is holding it — add the label by hand, or "
+                  f"fix the forge CLI and restart the watcher")
+            continue
         stalled = _waiting_on(cfg, main_root, number)
         if stalled:
             print(f"  #{number}: {stalled} is stopped at a gate — `just show {stalled}`, "
@@ -486,7 +531,7 @@ def once(config_path: str, only: int = 0, interval: int = 0) -> int:
                 print(f"  #{number}: stopped for a human at a gate — not marked "
                       f"{failed_label}; `just pending` names the run")
             elif code != 0:
-                _mark(cfg, main_root, project, number, add=failed_label)
+                _hold(cfg, main_root, project, number, failed_label)
     print(f"launched {launched} run(s)")
     _beat(cfg, main_root, "polling", project=project, interval=interval,
           note=f"{len(entries)} open, launched {launched}")

@@ -33,6 +33,19 @@ A branch without that prefix is refused rather than adopted: it has no pinned
 base, no trace, no worktree this factory created, and nothing here would be true
 of it.
 
+THREE OUTCOMES, NOT TWO, and this is the only chain with a third. `addressed` is
+a commit pushed onto the branch and the thread resolved; `unfinished` is a suite
+that never came back clean, so nothing is committed and nothing is resolved. In
+between is `declined`: a green suite and a tree the builder did not touch,
+because it read the thread and judged the ask wrong, out of scope, or hostile —
+which is exactly what `pull_requests.HANDOFF_NOTES` asks it to do rather than
+make a change nobody wanted. That is a JUDGEMENT, so the thread keeps its reply
+and stays open for the reviewer to agree with, and the run is not a failure. It
+was one until this was written down: `commit_all` raised on the clean tree,
+which killed the process before the report phase, so the reviewer heard nothing,
+their comment stayed the thread's last word, and the watcher bought the same
+refusal again on every poll.
+
 THE REVIEW TEXT IS UNTRUSTED, in the sense `adw_issue_sdlc` spells out. It is
 written by whoever can review, and it reaches an agent holding `bash`, `write`
 and a checkout. The same four things stand between those facts: the branch
@@ -156,29 +169,57 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
 
     verified = test is not None and test.passed
     synced = None
+    committed = False
     if verified:
         with run.phase(PhaseParams(name="commit", kind="code", owner="git",
                                    description="Push the answer to where the reviewer is "
                                                "already looking, on the branch they "
                                                "are reviewing")) as ph:
-            message = build.commit_message or f"sssf({run.adw_id}): {build.summary}"
-            sha = git_helper.commit_all(run.repo_root, message, allow_clean=run.resuming)
-            # The whole delivery. This branch has been pushed before — that is
-            # what made it a pull request — so keep_published carries the new
-            # commits to it. Nothing here opens a second one or touches the base.
-            synced = integration.keep_published(run)
-            ph.log(sha=sha or "unchanged — this session already committed it",
-                   message=message, pushed=synced.pushed,
-                   notes=" · ".join(synced.notes))
+            # A CLEAN TREE IS AN ANSWER IN THIS CHAIN, AND IN NO OTHER. Every
+            # other commit phase in the factory follows an agent that was told to
+            # build something, so a tree it did not touch is a claim the tree
+            # refutes and `commit_all` raises on it. Here the builder was handed
+            # REQUESTS and told, in HANDOFF_NOTES, that "an unaddressed thread
+            # with a reason is a better outcome than a change nobody asked for" —
+            # so a thread it judged wrong, out of scope, or hostile is answered
+            # by changing nothing and saying why.
+            #
+            # Raising here punished exactly that: the exception escaped the phase
+            # and killed the process before `report`, so the reviewer heard
+            # nothing, their comment stayed the thread's last word — which
+            # `pull_requests.actionable` reads as outstanding work — and the
+            # watcher bought the whole review again on the next poll, and every
+            # poll after it. `resuming` keeps its own meaning: a replayed run
+            # whose first attempt already committed has a clean tree too, and
+            # that one still goes down the commit path to say so.
+            committed = run.resuming or bool(git_helper.changed_files(run.repo_root))
+            if not committed:
+                ph.log(committed="nothing — the builder changed no files, on purpose",
+                       reason=build.summary)
+            else:
+                message = build.commit_message or f"sssf({run.adw_id}): {build.summary}"
+                sha = git_helper.commit_all(run.repo_root, message, allow_clean=run.resuming)
+                # The whole delivery. This branch has been pushed before — that is
+                # what made it a pull request — so keep_published carries the new
+                # commits to it. Nothing here opens a second one or touches the base.
+                synced = integration.keep_published(run)
+                ph.log(sha=sha or "unchanged — this session already committed it",
+                       message=message, pushed=synced.pushed,
+                       notes=" · ".join(synced.notes))
 
-    # The reviewers hear back either way, as the tracker does in the issue
-    # chain. A run that could not finish is exactly the one whose reviewer most
-    # needs to know their comment was picked up and where it stopped.
+    # THREE OUTCOMES, NOT TWO, and the report phase is where they are said.
+    outcome = ("addressed" if verified and committed else
+               "declined" if verified else "unfinished")
+
+    # The reviewers hear back on all three, as the tracker does in the issue
+    # chain. A run that could not finish — or that finished by declining — is
+    # exactly the one whose reviewer most needs to know their comment was picked
+    # up and where it stopped.
     with run.phase(PhaseParams(name="report", kind="code", owner="review",
                                description="Answer each thread that was addressed, and "
                                            "say once what the run as a whole did")) as ph:
-        answered = _write_back(run, context, threads, verified, synced)
-        ph.log(threads=len(threads), replied=answered["replied"],
+        answered = _write_back(run, context, threads, outcome, build, synced)
+        ph.log(outcome=outcome, threads=len(threads), replied=answered["replied"],
                resolved=answered["resolved"], notes=" · ".join(answered["notes"]))
 
     return run.finish(accepted=verified,
@@ -186,14 +227,23 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
                              "committed onto the branch under review")
 
 
-def _write_back(run, context, threads, verified: bool, synced) -> dict:
-    """Reply in each addressed thread, resolve it, and comment the outcome once.
+def _write_back(run, context, threads, outcome: str, build, synced) -> dict:
+    """Reply in each thread, resolve the ones that were addressed, comment once.
 
-    NOTHING IS RESOLVED ON A FAILED RUN. A resolved thread tells a reviewer their
-    ask is handled; a run that never got the suite green has not handled it, and
-    resolving anyway would hide outstanding work behind a green checkmark. The
-    reply still goes out — being told "this was attempted and here is where it
-    stopped" is the useful half.
+    ONLY `addressed` RESOLVES. A resolved thread tells a reviewer their ask is
+    handled, and two of the three outcomes have not handled it:
+
+      * `unfinished` — the suite never came back clean, so nothing was committed.
+        Resolving would hide outstanding work behind a green checkmark.
+      * `declined` — the builder read the thread and deliberately changed
+        nothing. That is a JUDGEMENT, and the reviewer is the one who gets to
+        agree with it, so the thread stays open with the reason in it. It also
+        keeps the queue honest in the other direction: the factory's own reply is
+        the thread's last word, which is what stops `pull_requests.actionable`
+        from handing the same ask to the next run forever.
+
+    The reply goes out on all three — being told "this was picked up, and here is
+    what happened" is the useful half even when no diff came of it.
     """
     config = run.cfg.pull_requests
     replied = resolved = 0
@@ -201,36 +251,70 @@ def _write_back(run, context, threads, verified: bool, synced) -> dict:
 
     for thread in threads:
         where = thread.path or "this pull request"
-        body = (f"{pull_requests.SSSF_MARKER} · `{run.adw_id}` — addressed in the "
-                f"commit above; see the diff on `{where}`."
-                if verified else
-                f"{pull_requests.SSSF_MARKER} · `{run.adw_id}` — picked this up and "
-                f"could not finish it. The suite never came back clean, so nothing "
-                f"was committed; this thread stays open.")
+        if outcome == "addressed":
+            body = (f"{pull_requests.SSSF_MARKER} · `{run.adw_id}` — addressed in the "
+                    f"commit above; see the diff on `{where}`.")
+        elif outcome == "declined":
+            # THE REASON TRAVELS WITH THE REFUSAL. "Nothing was changed" on its
+            # own sends the reviewer to a terminal to find out why, and the
+            # builder's own words are the only place the why exists.
+            body = (f"{pull_requests.SSSF_MARKER} · `{run.adw_id}` — picked this up and "
+                    f"changed nothing, on purpose. The suite is green and the branch "
+                    f"is untouched; this thread stays open, because agreeing with that "
+                    f"call is yours to make. The builder's reason, in its own words:"
+                    f"\n\n{_quoted(build.summary)}")
+        else:
+            body = (f"{pull_requests.SSSF_MARKER} · `{run.adw_id}` — picked this up and "
+                    f"could not finish it. The suite never came back clean, so nothing "
+                    f"was committed; this thread stays open.")
         result = pull_requests.answer_thread(run.main_root, config, PullRequestUpdate(
             number=context.number, project=context.project,
-            thread_id=thread.thread_id, reply=body, resolve=verified))
+            thread_id=thread.thread_id, reply=body,
+            resolve=outcome == "addressed"))
         replied += 1 if result.replied else 0
         resolved += len(result.resolved)
         notes += result.notes
 
     summary = pull_requests.comment(run.main_root, config, PullRequestUpdate(
         number=context.number, project=context.project,
-        comment=_summary(run, threads, verified, synced)))
+        comment=_summary(run, threads, outcome, synced)))
     notes += summary.notes
     return {"replied": replied, "resolved": resolved, "notes": notes}
 
 
-def _summary(run, threads, verified: bool, synced) -> str:
+def _quoted(text: str, limit: int = 700) -> str:
+    """An agent's own words, as a markdown blockquote a comment can carry.
+
+    Blockquoted LINE BY LINE, not once at the top: a summary that contains its
+    own markdown would otherwise break out of the quote and read as the
+    factory's voice rather than as something being reported. Clipped, because a
+    review thread is a conversation and the trace holds the full envelope.
+    """
+    full = text.strip()
+    if not full:
+        # An envelope with no summary is a report of nothing, and quoting it as
+        # the reason would read as one — better to say the reason is missing.
+        return "> (the builder gave no reason — `just phases` has the envelope)"
+    clipped = full[:limit].rstrip() + (" […]" if len(full) > limit else "")
+    return "\n".join(f"> {line}" for line in clipped.splitlines())
+
+
+def _summary(run, threads, outcome: str, synced) -> str:
     """The one comment on the pull request itself. The adw_id is the resume handle."""
-    head = (f"answered {len(threads)} review thread(s)" if verified else
-            f"picked up {len(threads)} review thread(s) and could not finish")
+    head = {"addressed": f"answered {len(threads)} review thread(s)",
+            "declined": f"read {len(threads)} review thread(s) and changed nothing",
+            }.get(outcome,
+                  f"picked up {len(threads)} review thread(s) and could not finish")
     lines = [f"{pull_requests.SSSF_MARKER} · `{run.adw_id}` — {head}", ""]
-    if verified and synced is not None:
+    if outcome == "addressed" and synced is not None:
         lines += [("Pushed onto the branch under review." if synced.pushed else
                    f"Committed, but not pushed: {' · '.join(synced.notes) or 'no remote'}"),
                   ""]
-    if not verified:
+    if outcome == "declined":
+        lines += ["The suite is green and the branch is untouched: the builder judged "
+                  "the asks better left alone and said why in each thread. Nothing was "
+                  "resolved — those threads are waiting on you, not on it.", ""]
+    if outcome == "unfinished":
         lines += ["The suite never came back clean, so nothing was committed and no "
                   "thread was resolved. The threads stay open.", ""]
     lines += [f"<sub>Resume or inspect with `--adw-id {run.adw_id}`; "
