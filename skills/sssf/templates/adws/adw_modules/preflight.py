@@ -36,8 +36,10 @@ whose db has been deleted and on one whose events go somewhere else entirely.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
+import subprocess
 from pathlib import Path
 
 from . import git_helper, harnesses
@@ -213,12 +215,42 @@ def quality(main_root: Path) -> list[Finding]:
 
 # ── the forge CLI: what the watchers and integration shell out to ────────────
 
+# `gh pr edit` and `gh issue edit` asked for `projectCards` on every edit until
+# this release, and GitHub now answers that field with a hard error — so on
+# anything older EVERY label edit fails, whatever the edit was for. That is not
+# cosmetic: the label is how both watchers mark a run's outcome, and a `failed`
+# that cannot be applied means the next poll finds the same work and buys the
+# same failing run again. cli/cli#13282, released in gh 2.98.0.
+GH_LABELS_FIXED = (2, 98)
+
+
+def _gh_version(binary: str) -> tuple[int, ...]:
+    """(major, minor) of the CLI's own `--version`, or () when it cannot be read.
+
+    A QUESTION, not a command — an unreadable answer is not a finding. `gh
+    version 2.70.0 (2025-04-11)` is the shape; distribution and enterprise
+    builds append to it and are read by the same expression.
+    """
+    try:
+        completed = subprocess.run([binary, "--version"], capture_output=True,
+                                   text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    found = re.search(r"(\d+)\.(\d+)\.\d+", completed.stdout or "")
+    return (int(found.group(1)), int(found.group(2))) if found else ()
+
+
 def forge(cfg: SSSFConfig) -> list[Finding]:
-    """Whether the CLI each enabled forge path needs is on PATH.
+    """Whether the CLI each enabled forge path needs is on PATH, and can label.
 
     Only asked about the paths this repository actually turned on. A repo that
     integrates with `mode: merge` and has both watchers off needs no forge CLI
     at all, and telling it about `gh` would be noise.
+
+    THE VERSION IS ASKED BECAUSE PRESENCE IS NOT ENOUGH. An authenticated `gh`
+    on PATH that cannot move a label passes every check this used to make, and
+    fails the one thing the watchers need it for. `before_run` says a CLI version
+    probe belongs here rather than in front of every run, which is where it is.
     """
     wanted: dict[str, list[str]] = {}
     integration = cfg.worktree.integration
@@ -229,11 +261,25 @@ def forge(cfg: SSSFConfig) -> list[Finding]:
     if cfg.pull_requests.enabled and cfg.pull_requests.list_command:
         wanted.setdefault(cfg.pull_requests.list_command[0], []).append("pull_requests.enabled")
 
+    labels_wanted = (cfg.issues.enabled and cfg.issues.state_command) or \
+                    (cfg.pull_requests.enabled and cfg.pull_requests.state_command)
+
     findings: list[Finding] = []
     for binary, wanted_by in sorted(wanted.items()):
         if shutil.which(binary):
             findings.append(Finding(check=f"forge: {binary}",
                                     detail=f"on PATH, needed by {', '.join(wanted_by)}"))
+            version = _gh_version(binary) if binary == "gh" and labels_wanted else ()
+            if version and version < GH_LABELS_FIXED:
+                findings.append(Finding(
+                    check=f"forge: {binary}", level="warn",
+                    detail=f"gh {version[0]}.{version[1]} cannot move a label: "
+                           f"`gh pr edit` and `gh issue edit` still ask for Projects "
+                           f"(classic), which GitHub answers with an error, so every "
+                           f"edit fails. The watchers mark a run's outcome with a label "
+                           f"— unmarked, a failed run is relaunched on the next poll",
+                    fix=f"upgrade gh to {GH_LABELS_FIXED[0]}.{GH_LABELS_FIXED[1]} or "
+                        f"newer (`brew upgrade gh`, or your package manager)"))
         else:
             findings.append(Finding(
                 check=f"forge: {binary}", level="warn",
