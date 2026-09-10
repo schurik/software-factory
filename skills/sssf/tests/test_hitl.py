@@ -146,3 +146,32 @@ def test_policy_unattended_runs_read_when_unattended():
     assert HitlPolicy(auto).mode("plan", "issue") == "auto"
     # A flag is a person at a keyboard saying so, and it wins even for an issue run.
     assert HitlPolicy(auto, "all").mode("plan", "issue") == "on"
+
+
+# ── answering from outside the run (the CLI) ─────────────────────────────────
+
+def test_answer_copies_the_digest_the_run_asked_about(session_dir):
+    artifacts.suspend_run(session_dir, WaitingFor(gate="plan", round=2, subject_digest="abc"))
+    decision = hitl.answer(session_dir, "reject", "split it", by="alice")
+    assert decision.subject_digest == "abc" and decision.round == 2
+    assert decision.channel == "cli" and decision.decided_at
+    assert hitl.read_decision(session_dir, "plan", 2) == decision
+
+
+def test_answer_refuses_a_session_that_is_not_waiting(session_dir):
+    with pytest.raises(RuntimeError, match="not waiting"):
+        hitl.answer(session_dir, "approve", "", by="alice")
+
+
+def test_answer_requires_notes_on_a_reject(session_dir):
+    artifacts.suspend_run(session_dir, WaitingFor(gate="plan", round=1, subject_digest="abc"))
+    with pytest.raises(RuntimeError, match="notes"):
+        hitl.answer(session_dir, "reject", "   ", by="alice")
+
+
+def test_answer_reaches_a_blocked_run_that_is_still_polling(session_dir):
+    """An attended run records `waiting_for` while it polls; the CLI answers it
+    the same way, and the running process picks the file up."""
+    artifacts.update_run(session_dir, waiting_for=WaitingFor(gate="plan", subject_digest="x"))
+    assert artifacts.read_run(session_dir).status == "running"
+    assert hitl.answer(session_dir, "approve", "", by="alice").approved

@@ -103,6 +103,34 @@ simple-sdlc *ARGS:
 resume ADW_ID *ARGS:
     uv run {{skill}}/scripts/resume.py {{ADW_ID}} --config {{config}} {{ARGS}}
 
+# ── answer a gate ───────────────────────────────────────────────────────────
+# A run can stop for you. A gate the config's `hitl:` block or `--hitl` turns on
+# ends the process with exit 75 and the session reading `waiting`; nothing spends
+# while it waits. These answer it: a reject goes back to the agent that made the
+# artifact, in the same session, and the run asks again. `SSSF_HITL=all just
+# plan-build "..."` turns every gate on for one run, the way SSSF_CONFIG swaps
+# the roster; `--hitl every` stops after every agent phase.
+
+# runs stopped at a gate, waiting for you: just pending
+pending:
+    @uv run {{skill}}/scripts/hitl.py pending --config {{config}}
+
+# what a waiting run wants you to read: just show <adw_id>
+show ADW_ID:
+    @uv run {{skill}}/scripts/hitl.py show {{ADW_ID}} --config {{config}}
+
+# approve the artifact and continue the run: just approve <adw_id> [-m "remarks"]
+approve ADW_ID *ARGS:
+    uv run {{skill}}/scripts/hitl.py approve {{ADW_ID}} --config {{config}} {{ARGS}}
+
+# send it back with notes; the agent revises, then asks again: just reject <adw_id> -m "..."
+reject ADW_ID *ARGS:
+    uv run {{skill}}/scripts/hitl.py reject {{ADW_ID}} --config {{config}} {{ARGS}}
+
+# end the run at the gate, not accepted: just abort <adw_id> [-m "why"]
+abort ADW_ID *ARGS:
+    uv run {{skill}}/scripts/hitl.py abort {{ADW_ID}} --config {{config}} {{ARGS}}
+
 # ── from an issue ───────────────────────────────────────────────────────────
 # The label is the authorization: a human applies it, the watcher only ever
 # looks at issues carrying it, and the flip off it is the lock. Off until

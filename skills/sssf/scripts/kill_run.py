@@ -96,6 +96,11 @@ def main() -> int:
 
     rows = artifacts.live_processes(session_dir)
     if not rows:
+        state = artifacts.read_run(session_dir)
+        if state is not None and state.status == "waiting":
+            print(f"{args.adw_id}: waiting at a gate, not running — nothing to kill. "
+                  f"`just abort {args.adw_id}` ends it")
+            return 0
         print(f"{args.adw_id}: nothing believed alive — already finished, or never started")
         return 0
 

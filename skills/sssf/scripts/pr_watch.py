@@ -272,12 +272,33 @@ def _reap(cfg, main_root, project: str) -> int:
                 print(f"    {names.get(adw_id) or 'a run'} is still working it "
                       f"(pid {live[adw_id]}) — left running; its commits would now "
                       f"push onto a landed branch. `just kill {adw_id}` to stop it")
+        _abort_if_waiting(adw_id, sessions, number, context.state.lower())
         _release(cfg, main_root, adw_id, sessions)
         _mark(cfg, main_root, project, number,
               remove=cfg.pull_requests.states.failed)
         _drop_lock(cfg, main_root, project, number)
         reaped += 1
     return reaped
+
+
+def _abort_if_waiting(adw_id: str, sessions: str, number: int, state: str) -> None:
+    """A run stopped at a gate on a branch that has since landed has nobody left
+    to answer it. Record the abort as a policy decision — the reason is in the
+    notes — and close the session, so `just pending` stops listing it and
+    `_release` may take its worktree by the ordinary rule."""
+    from adw_modules import artifacts, hitl
+    from adw_modules.data_types import Decision
+    session_dir = Path(sessions) / adw_id
+    run = artifacts.read_run(session_dir)
+    if run is None or run.status != "waiting" or run.waiting_for is None:
+        return
+    waiting = run.waiting_for
+    hitl.record(session_dir, Decision(
+        gate=waiting.gate, round=waiting.round, verdict="abort", by="policy",
+        channel="auto", subject_digest=waiting.subject_digest,
+        notes=f"#{number} {state} while the run was waiting at this gate"))
+    artifacts.finish_run(session_dir, "fail")
+    print(f"    was waiting at gate {waiting.gate} — aborted and recorded")
 
 
 def _is_review_run(adw_name: str) -> bool:

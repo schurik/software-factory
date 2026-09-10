@@ -82,6 +82,70 @@ def _rebuild(command: list[str], adw_id: str, config: str) -> list[str]:
     return ["uv", "run", f"adws/{script}", *rest, "--adw-id", adw_id, "--resume"]
 
 
+def relaunch(adw_id: str, config: str, dry_run: bool = False,
+             passthrough: tuple[str, ...] = ()) -> int:
+    """Re-launch the workflow that recorded `adw_id`, with `--resume`.
+
+    Everything `main()` does after parsing, so `hitl.py` can answer a gate and
+    bring the run back in one step. Returns the exit code to hand on — the
+    relaunched run's own, or 1 with a printed reason when nothing was launched.
+    """
+    from adw_modules import agents, artifacts, git_helper, hitl
+    from adw_modules.utils import anchor
+
+    cfg = agents.load_config(config)
+    sessions = anchor(git_helper.main_root(), f"{cfg.defaults.data_dir}/sessions")
+    session_dir = sessions / adw_id
+
+    state = artifacts.read_run(session_dir)
+    if state is None:
+        print(f"{adw_id}: no session recorded at {session_dir} — "
+              f"`just sessions` lists what this repo has run")
+        return 1
+
+    # Two processes working one session would fight over its worktree, its
+    # branch and its agent sessions. The pid is what tells a run that is still
+    # alive from one whose record was never closed (a SIGKILL, an OOM, a reboot).
+    if state.status == "running" and state.pid and _alive(state.pid):
+        print(f"{adw_id}: still running as pid {state.pid} — nothing to resume. "
+              f"`just kill {adw_id}` first if it is stuck")
+        return 1
+
+    # A run stopped at a gate resumes INTO that gate. Without a decision it would
+    # stop there again — cheaply, but pointlessly — so say what it needs instead.
+    if state.status == "waiting" and state.waiting_for is not None:
+        waiting = state.waiting_for
+        if hitl.read_decision(session_dir, waiting.gate, waiting.round) is None:
+            print(f"{adw_id}: waiting at gate {waiting.gate} (round {waiting.round}) with "
+                  f"no decision recorded — `just approve {adw_id}`, `just reject {adw_id} "
+                  f"-m \"...\"` or `just abort {adw_id}` first; resuming now would stop "
+                  f"at the same gate")
+            return 1
+
+    if not state.command:
+        print(f"{adw_id}: the session recorded no invocation, so there is nothing "
+              f"to repeat. Re-run the workflow by hand with --adw-id {adw_id} --resume")
+        return 1
+
+    argv = _rebuild(state.command, adw_id, config)
+    script = Path(argv[2]).stem if len(argv) > 2 else ""
+    if script in NO_RESUME:
+        print(f"{adw_id}: {script} is a single-agent workflow — there is nothing "
+              f"to resume, only to run again. `just {script.removeprefix('adw_')}` does that")
+        return 1
+    if passthrough:
+        argv += list(passthrough)
+
+    if state.status == "success":
+        print(f"note: {adw_id} ended in success — resuming replays it and re-runs "
+              f"what code owns")
+    print(f"{adw_id}: {state.adw_name or script} · {state.status}")
+    print(f"  {' '.join(shlex.quote(part) for part in argv)}")
+    if dry_run:
+        return 0
+    return subprocess.run(argv).returncode
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -90,50 +154,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="print the command this would run, and run nothing")
     args, passthrough = parser.parse_known_args()
-
-    from adw_modules import agents, artifacts, git_helper
-    from adw_modules.utils import anchor
-
-    cfg = agents.load_config(args.config)
-    sessions = anchor(git_helper.main_root(), f"{cfg.defaults.data_dir}/sessions")
-    session_dir = sessions / args.adw_id
-
-    state = artifacts.read_run(session_dir)
-    if state is None:
-        print(f"{args.adw_id}: no session recorded at {session_dir} — "
-              f"`just sessions` lists what this repo has run")
-        return 1
-
-    # Two processes working one session would fight over its worktree, its
-    # branch and its agent sessions. The pid is what tells a run that is still
-    # alive from one whose record was never closed (a SIGKILL, an OOM, a reboot).
-    if state.status == "running" and state.pid and _alive(state.pid):
-        print(f"{args.adw_id}: still running as pid {state.pid} — nothing to resume. "
-              f"`just kill {args.adw_id}` first if it is stuck")
-        return 1
-
-    if not state.command:
-        print(f"{args.adw_id}: the session recorded no invocation, so there is nothing "
-              f"to repeat. Re-run the workflow by hand with --adw-id {args.adw_id} --resume")
-        return 1
-
-    argv = _rebuild(state.command, args.adw_id, args.config)
-    script = Path(argv[2]).stem if len(argv) > 2 else ""
-    if script in NO_RESUME:
-        print(f"{args.adw_id}: {script} is a single-agent workflow — there is nothing "
-              f"to resume, only to run again. `just {script.removeprefix('adw_')}` does that")
-        return 1
-    if passthrough:
-        argv += passthrough
-
-    if state.status == "success":
-        print(f"note: {args.adw_id} ended in success — resuming replays it and re-runs "
-              f"what code owns")
-    print(f"{args.adw_id}: {state.adw_name or script} · {state.status}")
-    print(f"  {' '.join(shlex.quote(part) for part in argv)}")
-    if args.dry_run:
-        return 0
-    return subprocess.run(argv).returncode
+    return relaunch(args.adw_id, args.config, args.dry_run, tuple(passthrough))
 
 
 if __name__ == "__main__":
