@@ -139,6 +139,54 @@ def test_policy_override_rejects_nonsense():
         HitlPolicy(HitlConfig(), "some times")
 
 
+# ── who may be asked in place ────────────────────────────────────────────────
+
+def test_a_launcher_can_say_its_terminal_is_not_the_runs(monkeypatch):
+    """A TTY can be INHERITED. `issue_watch` and `pr_watch` run a chain with a
+    blocking `subprocess.run` that passes their own stdin through, so a watcher
+    someone started from a window hands every run it launches a keyboard that
+    looks exactly like the engineer's — and a gate would then prompt whoever is
+    watching the queue, holding a deliberately serial loop for `wait_seconds`.
+    Only the launcher knows the difference, so the launcher says so."""
+    class TTY:
+        def isatty(self): return True
+    monkeypatch.setattr(hitl.sys, "stdin", TTY())
+    monkeypatch.setattr(hitl.sys, "stdout", TTY())
+    monkeypatch.delenv(hitl.UNATTENDED_ENV, raising=False)
+    assert hitl.attended() is True
+
+    monkeypatch.setenv(hitl.UNATTENDED_ENV, "1")
+    assert hitl.attended() is False
+    # ...and a policy built under it has nobody to ask, so gates suspend at once.
+    assert HitlPolicy(HitlConfig(default="on")).ask is None
+
+
+def test_an_empty_unattended_flag_is_not_a_declaration(monkeypatch):
+    """An env var set to "" is what an unset var looks like to a shell that
+    exported it anyway; it must not silently mute an engineer's own terminal."""
+    class TTY:
+        def isatty(self): return True
+    monkeypatch.setattr(hitl.sys, "stdin", TTY())
+    monkeypatch.setattr(hitl.sys, "stdout", TTY())
+    monkeypatch.setenv(hitl.UNATTENDED_ENV, "  ")
+    assert hitl.attended() is True
+
+
+def test_the_trigger_does_not_decide_who_may_be_asked(monkeypatch):
+    """An engineer who types `uv run adws/adw_issue_sdlc.py 42` at their own
+    keyboard is on the `issue` trigger too, and is still there to answer. The
+    trigger decides whether a gate FIRES (`when_unattended`); it does not decide
+    whether there is a terminal to fire into."""
+    class TTY:
+        def isatty(self): return True
+    monkeypatch.setattr(hitl.sys, "stdin", TTY())
+    monkeypatch.setattr(hitl.sys, "stdout", TTY())
+    monkeypatch.delenv(hitl.UNATTENDED_ENV, raising=False)
+    policy = HitlPolicy(HitlConfig(default="on"))
+    assert policy.ask is not None
+    assert policy.mode("plan", "issue") == "on"
+
+
 def test_policy_unattended_runs_read_when_unattended():
     on = HitlConfig(default="on")
     assert HitlPolicy(on).mode("plan", "issue") == "on"          # suspend and wait

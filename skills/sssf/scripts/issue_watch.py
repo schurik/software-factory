@@ -30,6 +30,11 @@ What the labels still give you is STATE a human can read and reset, in the place
 they already look. A crashed watcher leaves an issue on `running`, and moving it
 back to `queued` by hand is the whole recovery.
 
+A RUN HAS THREE OUTCOMES, NOT TWO. It can succeed, it can fail, and it can stop
+for a person at a HITL gate — exit 75, worktree intact, `just pending` naming
+it. The third is neither of the first two, and reading it as failure tells the
+reporter the opposite of what happened. See `_flip`'s call site in `once()`.
+
 `project` is resolved ONCE at startup and this refuses to run without it. A
 watcher that polls nothing looks exactly like a watcher with nothing to do —
 which is what makes cron the place this silently breaks, and why it is checked
@@ -53,6 +58,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path.cwd() / "adws"))      # the stamped factory in this repo
 
 CONFIG = "adws/adw_sssf_config/sssf.config.yaml"
+# `adw_modules.hitl.EXIT_WAITING`, deliberately restated rather than imported:
+# this is a value read off ANOTHER process's exit status, and that process is
+# whatever version of the factory is stamped into the repo being watched. A
+# constant shared across a process boundary is a protocol, not a dependency —
+# and 75 is EX_TEMPFAIL, which is where both halves get it from anyway.
+EXIT_WAITING = 75
 
 
 def _load(config_path: str):
@@ -136,14 +147,44 @@ def _beat(cfg, main_root, status: str, *, project: str = "",
                  pid=os.getpid(), project=project, interval_s=interval, note=note)
 
 
-def _route(cfg, labels: list[str]) -> str:
-    """Which ADW this issue's labels ask for. Empty when none of them do."""
-    names = [entry.get("name", "") if isinstance(entry, dict) else str(entry)
-             for entry in labels]
+def _names(labels: list) -> list[str]:
+    """The label names on one issue, however the forge spelled them."""
+    return [entry.get("name", "") if isinstance(entry, dict) else str(entry)
+            for entry in labels]
+
+
+def _route(cfg, labels: list) -> str:
+    """Which ADW this issue's labels ask for. Empty when none of them do.
+
+    The ROUTING label is not part of the state machine below and is never
+    removed: it is the authorization a human applied, and the record of which
+    chain was asked for. It is expected to sit alongside whatever state label
+    the issue currently carries.
+    """
+    names = _names(labels)
     for label, script in cfg.issues.route.items():
         if label in names:
             return script
     return ""
+
+
+def _stale_states(cfg, labels: list, keep: str) -> list[str]:
+    """State labels this issue still carries from an EARLIER run.
+
+    The four states are meant to be mutually exclusive, and nothing enforced
+    that: each flip removed exactly the one label it had just put on, so a
+    `failed` left by one run survived the next one and an issue re-queued by
+    hand — the documented recovery — ended up carrying `done` AND `failed`,
+    with no way to tell which run either belonged to.
+
+    Only labels the issue ACTUALLY CARRIES are named, and that is not
+    tidiness: `gh issue edit --remove-label` on a name the repository never
+    defined is an error, and a speculative clean-up would fail the claim it is
+    attached to. A label the listing shows is a label the forge has.
+    """
+    states = cfg.issues.states
+    known = {states.queued, states.running, states.done, states.failed}
+    return sorted({name for name in _names(labels) if name in known and name != keep})
 
 
 @contextmanager
@@ -175,18 +216,22 @@ def _claim(cfg, main_root, project: str, number: int):
 
 
 def _flip(cfg, main_root, project: str, number: int,
-          add: str, remove: str) -> bool:
+          add: str, remove: str | list[str]) -> bool:
     """Move an issue's labels. NOT exclusion — see _claim and the module docstring.
 
     Thin over `adw_modules.issues.set_state`, which is where the argv shape and
     the forge's quirks already live. Reimplementing it here is what the first
     version did, and the two copies would have drifted the moment either grew a
     flag.
+
+    `remove` takes several because the CLAIM clears every state an earlier run
+    left behind, in the one edit that takes the issue — see `_stale_states`.
     """
     from adw_modules.data_types import IssueUpdate
     from adw_modules.issues import set_state
     result = set_state(main_root, cfg.issues, IssueUpdate(
-        number=number, project=project, add_labels=[add], remove_labels=[remove]))
+        number=number, project=project, add_labels=[add],
+        remove_labels=[remove] if isinstance(remove, str) else list(remove)))
     if not result.ok:
         print(f"  #{number}: {' · '.join(result.notes)}")
     return result.ok
@@ -202,7 +247,15 @@ def _launch(script: str, config_path: str, number: int, main_root) -> int:
     """
     argv = ["uv", "run", script, str(number), "--config", config_path]
     print(f"  #{number}: {' '.join(argv)}")
-    return subprocess.run(argv, cwd=str(main_root)).returncode
+    # THIS WATCHER'S TERMINAL IS NOT THE RUN'S. `subprocess.run` hands the child
+    # our stdin, so a watcher someone started by hand from a window gives every
+    # run it launches a TTY indistinguishable from the engineer's — and a gate
+    # would then prompt whoever is watching the queue, about a plan they never
+    # asked to read, holding this deliberately serial loop for
+    # `hitl.wait_seconds` before suspending anyway. Only the launcher knows the
+    # difference, so the launcher says so. See adw_modules/hitl.py `attended`.
+    env = {**os.environ, "SSSF_UNATTENDED": "1"}
+    return subprocess.run(argv, cwd=str(main_root), env=env).returncode
 
 
 def once(config_path: str, interval: int = 0) -> int:
@@ -223,7 +276,7 @@ def once(config_path: str, interval: int = 0) -> int:
     print(f"{project}: {len(queued)} issue(s) labelled {cfg.issues.states.queued}")
     _beat(cfg, main_root, "polling", project=project, interval=interval,
           note=f"{len(queued)} queued")
-    launched = 0
+    launched = waiting = 0
     for entry in queued:
         number = entry.get("number")
         script = _route(cfg, entry.get("labels") or [])
@@ -240,8 +293,14 @@ def once(config_path: str, interval: int = 0) -> int:
         with _claim(cfg, main_root, project, number) as mine:
             if not mine:
                 continue
-            if not _flip(cfg, main_root, project, number,
-                         cfg.issues.states.running, cfg.issues.states.queued):
+            # The claim, and the same edit clears whatever an earlier run left
+            # on this issue — `queued` always, plus a stale `done` or `failed`
+            # from before a human re-queued it. Doing it here rather than at
+            # the outcome is what keeps the flip below removing only a label it
+            # put on itself, which is the one kind of removal that cannot fail.
+            if not _flip(cfg, main_root, project, number, cfg.issues.states.running,
+                         _stale_states(cfg, entry.get("labels") or [],
+                                       keep=cfg.issues.states.running)):
                 continue
 
             # A run blocks this watcher for as long as it takes, so the row
@@ -251,15 +310,38 @@ def once(config_path: str, interval: int = 0) -> int:
                   note=f"#{number} {Path(script).stem}")
             code = _launch(script, config_path, number, main_root)
             launched += 1
+            # A run that stopped at a gate is the THIRD outcome, and the label
+            # it must not get is `failed` — the reporter would read that the
+            # run was rejected when a person has simply not answered yet, and
+            # `just pending` would say the opposite at the same moment.
+            #
+            # It is left on `running`, which is true and is also the safe
+            # thing: only `queued` is dequeued, so the issue cannot be claimed
+            # a second time while a person is still deciding.
+            #
+            # THE LABEL DOES NOT COME BACK ON ITS OWN. `just approve` re-launches
+            # the run with --resume in a process this watcher never sees, so
+            # `running` is the last word said here and it outlives the run that
+            # earned it. `just pending` is where the truth lives meanwhile. A
+            # terminal label for an answered run wants the answering path to own
+            # the flip, which is a wider change than this one.
+            if code == EXIT_WAITING:
+                waiting += 1
+                print(f"  #{number}: stopped for a human at a gate — left on "
+                      f"{cfg.issues.states.running}, NOT {cfg.issues.states.failed}. "
+                      f"`just pending` names the run; `just approve` / "
+                      f"`just reject -m \"...\"` / `just abort` answer it")
+                continue
             # The run's own report phase said WHAT happened on the issue; this
             # says whether it may be picked up again. Only the exit code knows
             # that, and only this process ever sees it.
             _flip(cfg, main_root, project, number,
                   cfg.issues.states.done if code == 0 else cfg.issues.states.failed,
                   cfg.issues.states.running)
-    print(f"launched {launched} run(s)")
+    stalled = f", {waiting} waiting for a human" if waiting else ""
+    print(f"launched {launched} run(s){stalled}")
     _beat(cfg, main_root, "polling", project=project, interval=interval,
-          note=f"{len(queued)} queued, launched {launched}")
+          note=f"{len(queued)} queued, launched {launched}{stalled}")
     return 0
 
 
