@@ -32,13 +32,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import select
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
 from . import artifacts
-from .data_types import Decision, HitlConfig, WaitingFor
+from .data_types import (Decision, EventRecord, HitlConfig, Phase, Subject,
+                         WaitingFor)
+from .utils import now_iso
 
 EXIT_WAITING = 75          # EX_TEMPFAIL: "try again later", which is exactly it
 POLL_SECONDS = 2.0         # attended: how long one look at the keyboard waits
@@ -179,3 +184,119 @@ class HitlPolicy:
             if on:
                 line += f" · on: {', '.join(on)}"
         return line + (" · attended" if self.ask else " · unattended, gates suspend")
+
+
+# ── the wait ─────────────────────────────────────────────────────────────────
+
+class Suspended(SystemExit):
+    """The run stopped for a human. Exit 75; the record says what it waits for.
+
+    A SystemExit so an ADW's uncaught path is a clean exit with no traceback —
+    a run that stopped on purpose must not look like one that crashed — and so
+    `Run.phase` can tell it from every other exception and close the phase as
+    `waiting` rather than `fail`.
+    """
+
+    def __init__(self, waiting: WaitingFor):
+        super().__init__(EXIT_WAITING)
+        self.waiting = waiting
+
+
+def resolve_paths(run, paths: list[str]) -> list[Path]:
+    """Subject paths as absolute files: absolute stay, relative are the worktree's."""
+    return [Path(p) if Path(p).is_absolute() else Path(run.repo_root) / p for p in paths]
+
+
+def how_to_answer(run, gate: str) -> str:
+    return (f"just show {run.adw_id} · just approve {run.adw_id} [-m notes] · "
+            f"just reject {run.adw_id} -m \"what to change\" · just abort {run.adw_id}")
+
+
+def decide(run, phase: Phase, subject: Subject) -> Decision:
+    """The decision for this gate and round — from the record, the terminal, or not yet.
+
+    Order: a recorded decision whose digest matches wins, whoever wrote it. An
+    attended run then asks in place, polling the record meanwhile so a
+    `just approve` from another terminal is honoured too. Everything else
+    suspends. The digest is taken ONCE, here, and every later comparison is
+    against it — the human is answering about what they were shown.
+    """
+    paths = resolve_paths(run, subject.paths)
+    fingerprint = digest(paths)
+    waiting = WaitingFor(gate=subject.gate, round=subject.round, phase_id=phase.phase_id,
+                         phase_name=phase.params.name, since=now_iso(),
+                         subject_digest=fingerprint, paths=[str(p) for p in paths],
+                         summary=subject.summary, notes=subject.notes)
+    run.console.note(f"gate {subject.gate} round {subject.round}: {subject.summary}")
+    for path in waiting.paths:
+        run.console.note(f"subject: {path}")
+
+    recorded = read_decision(run.session_dir, subject.gate, subject.round)
+    if recorded is not None:
+        if recorded.subject_digest == fingerprint:
+            return _consume(run, phase, recorded)
+        run.console.note(f"decision {subject.gate}_{subject.round} is stale — it decided "
+                         f"on a different {subject.gate}; asking again")
+
+    # The blocked-and-polling path. `run.hitl.ask` is None without a TTY; a
+    # test injects a scripted answerer the same way a keypress would answer.
+    if run.hitl.ask is not None:
+        artifacts.update_run(run.session_dir, waiting_for=waiting)   # `just pending` sees it
+        answer = _attended(run, waiting)
+        if answer is not None:
+            return _consume(run, phase, answer)
+
+    _notify(run, waiting)
+    raise Suspended(waiting)
+
+
+def _consume(run, phase: Phase, decision: Decision) -> Decision:
+    """Record that a decision was taken, in the trace and by clearing the wait."""
+    if not decision.decided_at:
+        decision.decided_at = now_iso()
+    record(run.session_dir, decision)
+    artifacts.clear_waiting(run.session_dir)
+    run.tracer.event(EventRecord(adw_id=run.adw_id, phase_id=phase.phase_id,
+                                 type="decision", name=decision.gate,
+                                 payload=decision.model_dump()))
+    run.console.decided(decision)
+    return decision
+
+
+def _attended(run, waiting: WaitingFor) -> Optional[Decision]:
+    """Ask at the terminal, up to `wait_seconds`, polling the record between keypresses.
+
+    None means suspend — the human detached, or the clock ran out, which is
+    the same thing with nobody at the keyboard.
+    """
+    deadline = time.monotonic() + max(0, run.cfg.hitl.wait_seconds)
+    run.console.note("waiting for you — [a]pprove / [r]eject / [x] abort / [d]etach; "
+                     "or from another terminal: " + how_to_answer(run, waiting.gate))
+    while True:
+        recorded = read_decision(run.session_dir, waiting.gate, waiting.round)
+        if recorded is not None and recorded.subject_digest == waiting.subject_digest:
+            return recorded
+        verdict, notes = run.hitl.ask(waiting)
+        if verdict == "detach":
+            return None
+        if verdict in ("approve", "reject", "abort"):
+            return Decision(gate=waiting.gate, round=waiting.round, verdict=verdict,
+                            notes=notes, by=run.engineer, channel="terminal",
+                            subject_digest=waiting.subject_digest)
+        if time.monotonic() > deadline:
+            run.console.note("no answer within hitl.wait_seconds — suspending")
+            return None
+
+
+def _notify(run, waiting: WaitingFor) -> None:
+    """Run `notify_command` with the subject on stdin. Never raises."""
+    argv = run.cfg.hitl.notify_command
+    if not argv:
+        return
+    env = {**os.environ, "SSSF_ADW_ID": run.adw_id, "SSSF_GATE": waiting.gate,
+           "SSSF_ROUND": str(waiting.round)}
+    try:
+        subprocess.run(argv, input=waiting.model_dump_json(indent=2), text=True,
+                       env=env, timeout=30, capture_output=True)
+    except (OSError, subprocess.SubprocessError) as error:
+        run.console.note(f"notify_command failed: {error}")

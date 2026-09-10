@@ -21,8 +21,8 @@ from contextlib import contextmanager
 
 from . import agents, artifacts, hitl, limits, replay, worktree
 from .console import Console
-from .data_types import (AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams,
-                         RunSpec)
+from .data_types import (AgentCall, Decision, EnvelopeBase, EventRecord, Phase,
+                         PhaseParams, RunSpec, Subject)
 from .utils import anchor, ensure_dir, now_iso
 
 
@@ -44,6 +44,12 @@ class PhaseHandle:
         if self.phase.params.kind != "agent":
             raise RuntimeError("ph.call() is only valid inside an agent phase")
         return agents.execute(self.run, self.phase, call)
+
+    def decide(self, subject: Subject) -> Decision:
+        """Ask a human about `subject`, in the engineer lane. See adw_modules/hitl.py."""
+        if self.phase.params.kind != "engineer":
+            raise RuntimeError("ph.decide() is only valid inside an engineer phase")
+        return hitl.decide(self.run, self.phase, subject)
 
 
 class Run:
@@ -248,6 +254,23 @@ class Run:
         clock = time.monotonic()
         try:
             yield PhaseHandle(self, phase)
+        except hitl.Suspended as stop:
+            # Not a failure. The process ends here on purpose, the session says
+            # what it waits for, and `just approve` brings it back to THIS phase
+            # by name. The worktree is kept — its uncommitted work is the subject.
+            phase.status = "waiting"
+            phase.ended_at = now_iso()
+            self.tracer.event(EventRecord(adw_id=self.adw_id, phase_id=phase.phase_id,
+                                          type="phase_end", name=params.name,
+                                          payload={"status": "waiting",
+                                                   "gate": stop.waiting.gate,
+                                                   "round": stop.waiting.round}))
+            self.tracer.phase_upsert(phase)
+            self.tracer.session_waiting(self.adw_id, stop.waiting.gate)
+            artifacts.suspend_run(self.session_dir, stop.waiting)
+            self.console.phase_ended(phase, time.monotonic() - clock)
+            self.console.waiting(stop.waiting, hitl.how_to_answer(self, stop.waiting.gate))
+            raise
         except BaseException as error:
             phase.status = "fail"                      # success must be earned
             phase.error = str(error)[:1000]
