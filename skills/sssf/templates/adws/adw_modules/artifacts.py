@@ -90,6 +90,8 @@ def start_run(session_dir: Path, state: RunState) -> RunState:
         # session that a later ADW re-enters is still issue-triggered.
         state.trigger = state.trigger or previous.trigger
         state.issue_url = state.issue_url or previous.issue_url
+        state.issue_number = state.issue_number or previous.issue_number
+        state.issue_project = state.issue_project or previous.issue_project
         state.pr_url = state.pr_url or previous.pr_url
         # A session stopped at a gate is picked up by the process that answers
         # it, and that process has to reach the gate knowing what was asked.

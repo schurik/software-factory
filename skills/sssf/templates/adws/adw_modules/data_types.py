@@ -894,6 +894,16 @@ class RunState(BaseModel):
     trigger: str = "engineer"       # engineer | issue | pr_review
     issue_url: str = ""
     pr_url: str = ""
+    # The issue this run answers, as the TRACKER addresses it. `issue_url` is
+    # for humans and for the PR body; these two are what a label move needs,
+    # and deriving them by parsing the url would be a guess about a forge whose
+    # url shape is not this factory's to know — a tracker that is not the forge
+    # (Jira, Linear) has neither the shape nor the number in the same place.
+    # Written once by `Run.record_issue`, carried across every later process by
+    # `artifacts.start_run`, and read by `resume.py` when a run that suspended
+    # at a gate finally ends. 0 means "not an issue run", which is the default.
+    issue_number: int = 0
+    issue_project: str = ""
     # Set while a gate waits on a human; cleared when the decision is consumed.
     # `status == "waiting"` says the PROCESS is gone; this says why, and what
     # `just approve` would be approving.
