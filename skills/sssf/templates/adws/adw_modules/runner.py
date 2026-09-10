@@ -21,7 +21,7 @@ from contextlib import contextmanager
 
 from . import agents, artifacts, hitl, limits, replay, worktree
 from .console import Console
-from .data_types import (AgentCall, Decision, EnvelopeBase, EventRecord, Phase,
+from .data_types import (AgentCall, Decision, EnvelopeBase, EventRecord, Gate, Phase,
                          PhaseParams, RunSpec, Subject)
 from .utils import anchor, ensure_dir, now_iso
 
@@ -30,6 +30,7 @@ class PhaseHandle:
     def __init__(self, run: "Run", phase: Phase):
         self.run = run
         self.phase = phase
+        self.envelope: EnvelopeBase | None = None   # what ph.call() produced, for a checkpoint
 
     def log(self, **payload) -> None:
         self.run.tracer.event(EventRecord(adw_id=self.run.adw_id,
@@ -43,7 +44,8 @@ class PhaseHandle:
     def call(self, call: AgentCall) -> EnvelopeBase:
         if self.phase.params.kind != "agent":
             raise RuntimeError("ph.call() is only valid inside an agent phase")
-        return agents.execute(self.run, self.phase, call)
+        self.envelope = agents.execute(self.run, self.phase, call)
+        return self.envelope
 
     def decide(self, subject: Subject) -> Decision:
         """Ask a human about `subject`, in the engineer lane. See adw_modules/hitl.py."""
@@ -252,8 +254,9 @@ class Run:
                                                "description": params.description}))
         self.console.phase_started(phase)
         clock = time.monotonic()
+        handle = PhaseHandle(self, phase)
         try:
-            yield PhaseHandle(self, phase)
+            yield handle
         except hitl.Suspended as stop:
             # Not a failure. The process ends here on purpose, the session says
             # what it waits for, and `just approve` brings it back to THIS phase
@@ -296,6 +299,27 @@ class Run:
                                           payload={"status": "success"}))
             self.tracer.phase_upsert(phase)
             self.console.phase_ended(phase, time.monotonic() - clock)
+            # `--hitl every`: a checkpoint after each agent phase, once THIS one
+            # has closed — a phase inside a phase would put a wait in an agent's
+            # lane. A revise phase is skipped: the gate that follows it is the
+            # one `hitl.gated()` opens itself.
+            if (self.hitl.every and params.kind == "agent"
+                    and "_revise_" not in params.name and handle.envelope is not None):
+                self._checkpoint(phase, handle.envelope)
+
+    def _checkpoint(self, phase: Phase, envelope: EnvelopeBase) -> None:
+        """An approve/abort gate named for the phase it follows.
+
+        Named for the PHASE, not `checkpoint_<phase>`, so a gate an ADW placed
+        on the same work (`plan` after `plan`) finds the approval this
+        checkpoint recorded and does not ask twice. A checkpoint cannot revise
+        — the runner does not own the ADW's loop — so a reject here ends the
+        run; `just reject` belongs at the gate the ADW placed.
+        """
+        hitl.gated(self, Gate(name=phase.params.name,
+                              description=f"Checkpoint after {phase.params.name}: the "
+                                          f"engineer asked to see every agent's work"),
+                   envelope)
 
     # ── run outcome ─────────────────────────────────────────────────────────
     def finish(self, accepted: bool = True, reason: str = "") -> int:

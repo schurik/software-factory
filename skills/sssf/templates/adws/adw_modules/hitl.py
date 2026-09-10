@@ -334,6 +334,12 @@ def gated(run, gate: Gate, envelope: EnvelopeBase) -> EnvelopeBase:
     """
     if run.hitl.mode(gate.name, run.trigger) == "auto":
         return _pass_by_policy(run, gate, envelope)
+    if run.hitl.every and _already_approved(run, gate, envelope):
+        # `--hitl every` put a checkpoint of the same name after the phase that
+        # produced this envelope, and the human approved there. Asking again
+        # would open a second `approve_<gate>` phase for the same subject.
+        run.console.note(f"gate {gate.name}: approved at the checkpoint just before")
+        return envelope
 
     round = 1
     while True:
@@ -371,6 +377,13 @@ def gated(run, gate: Gate, envelope: EnvelopeBase) -> EnvelopeBase:
                 "previous": decision,
                 "prompt": REVISE_PROMPT.format(prompt=gate.call.prompt)}))
         round += 1
+
+
+def _already_approved(run, gate: Gate, envelope: EnvelopeBase) -> bool:
+    recorded = read_decision(run.session_dir, gate.name, 1)
+    if recorded is None or not recorded.approved:
+        return False
+    return recorded.subject_digest == digest(resolve_paths(run, gate.paths or envelope.artifacts))
 
 
 def _pass_by_policy(run, gate: Gate, envelope: EnvelopeBase) -> EnvelopeBase:

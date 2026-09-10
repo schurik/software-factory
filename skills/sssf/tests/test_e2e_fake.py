@@ -783,3 +783,55 @@ def test_a_suspended_reject_round_resumes_into_the_revise_phase(factory):
     assert [p.status for p in second.phases] == ["success", "success", "success", "waiting"]
     assert artifacts.read_run(second.session_dir).waiting_for.round == 2
     assert (Path(second.repo_root) / "specs/plan.md").read_text() == "# Plan 2\n"
+
+
+# ── human-in-the-loop: --hitl every ──────────────────────────────────────────
+
+def test_hitl_every_checkpoints_after_each_agent_phase(factory):
+    cfg = factory(planner=one_plan(), builder={"replies": [{"envelope": envelope()}]})
+    run = session.ensure(cfg, hitl="every")
+    asked = []
+    run.hitl.ask = lambda waiting: asked.append(waiting.gate) or ("approve", "")
+
+    plan_phase(run)
+    with run.phase(PhaseParams(name="build", kind="agent", owner="builder",
+                               description="Implement what the plan asked for")) as ph:
+        ph.call(AgentCall(output_type=BuildOutput, prompt="build"))
+
+    assert asked == ["plan", "build"]
+    assert [p.params.name for p in run.phases] == [
+        "plan", "approve_plan", "build", "approve_build"]
+    assert run.finish() == 0
+
+
+def test_hitl_every_cannot_revise_so_a_reject_at_a_checkpoint_aborts(factory):
+    cfg = factory(planner=one_plan())
+    run = session.ensure(cfg, hitl="every")
+    run.hitl.ask = lambda waiting: ("reject", "again")
+    with pytest.raises(SystemExit):
+        plan_phase(run)
+    assert "approve/abort" in run.phases[-1].error
+
+
+def test_hitl_every_shares_its_approval_with_a_gate_the_adw_placed(factory):
+    """The checkpoint after `plan` and the gate `gated()` opens are the SAME gate,
+    so one ask serves both: the placed gate finds the checkpoint's approval."""
+    cfg = factory(planner=one_plan())
+    run = session.ensure(cfg, hitl="every")
+    asked = []
+    run.hitl.ask = lambda waiting: asked.append(waiting.gate) or ("approve", "")
+    plan = hitl.gated(run, plan_gate(), plan_phase(run))
+    assert asked == ["plan"]
+    assert [p.params.name for p in run.phases] == ["plan", "approve_plan"]
+    assert plan.artifacts == ["specs/plan.md"]
+
+
+def test_hitl_every_checkpoint_that_suspends_leaves_the_agent_phase_green(factory):
+    cfg = factory(planner=one_plan())
+    run = session.ensure(cfg, hitl="every")
+    run.hitl.ask = lambda waiting: ("detach", "")
+    with pytest.raises(SystemExit) as stop:
+        plan_phase(run)
+    assert stop.value.code == hitl.EXIT_WAITING
+    assert [(p.params.name, p.status) for p in run.phases] == [
+        ("plan", "success"), ("approve_plan", "waiting")]
