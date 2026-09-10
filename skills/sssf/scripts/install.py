@@ -6,6 +6,7 @@
 
 Usage:
     uv run <skill>/scripts/install.py [--harness pi|claude_code] [--force]
+                                     [--no-detect-quality]
 
 Asks which harness if the flag is not given (see `_harness.choose`), then
 stamps THAT harness's world: adws/ (modules + starter ADWs), its prompt set
@@ -13,6 +14,12 @@ under adws/adw_data/prompt_engineering/, its harness_engineering/ assets, a
 sssf.config.yaml assembled for it, its .env.sample, the justfile, and the
 .gitignore entries (including the per-run worktree directory).
 Existing files are skipped unless --force.
+
+It also reads the repository for its real test/lint/typecheck/build commands
+(`_detect.py`) and writes what it finds into the freshly stamped `quality.py`,
+because "wire up quality.py" was the post-install step everybody skipped — and
+an unwired block now fails a run rather than passing it. `--no-detect-quality`
+leaves every block a placeholder.
 """
 
 import argparse
@@ -21,6 +28,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _detect                                     # noqa: E402  (path set above)
 import _harness                                    # noqa: E402  (path set above)
 
 SKILL_ROOT = _harness.SKILL_ROOT
@@ -134,6 +142,9 @@ def main() -> int:
     parser.add_argument("--harness", help="which coding-agent harness this roster runs "
                                           "on; asked interactively if omitted")
     parser.add_argument("--force", action="store_true", help="overwrite existing files")
+    parser.add_argument("--no-detect-quality", action="store_true",
+                        help="leave every quality.py block a placeholder instead of "
+                             "reading this repo for its real commands")
     args = parser.parse_args()
 
     # Asked BEFORE anything is written: the harness decides which prompts, which
@@ -161,6 +172,12 @@ def main() -> int:
     ensure_gitignore(root, stamped)
     # Last, because it reads the .env.sample this run just stamped.
     ensure_env(root, root / ".env.sample", stamped, notes)
+    # Only ever against a quality.py THIS run wrote. A file that already existed
+    # is somebody's answer already — possibly the very commands being detected —
+    # and rewriting it would be the installer overruling the repository.
+    quality_py = root / "adws" / "adw_modules" / "quality.py"
+    detecting = not args.no_detect_quality and str(quality_py) in stamped
+    detected = _detect.apply(quality_py, _detect.detect(root)) if detecting else []
 
     print(f"sssf installed into {root} on the {harness} harness")
     print(f"  stamped: {len(stamped)} file(s)")
@@ -185,12 +202,34 @@ def main() -> int:
         print(f"\nbefore the first run ({harness}):\n")
         print(steps)
 
+    # Said plainly, because these are commands that will run against this repo
+    # and nothing detected them but a filename. The blocks nobody could answer
+    # for are named too: they are placeholders, and a placeholder FAILS.
+    if detected:
+        print("\nquality commands detected from this repo — check them in "
+              "adws/adw_modules/quality.py:")
+        for note in detected:
+            print(f"    {note}")
+    # Only when this run actually looked. A quality.py that already existed was
+    # skipped like every other stamped file, and calling its blocks unwired
+    # without having read them would be a guess about somebody else's work —
+    # `just doctor` is what answers that question.
+    if detecting:
+        unwired = [block for block in _detect.BLOCKS
+                   if block not in {note.split(":")[0] for note in detected}]
+        if unwired:
+            print(f"\nstill unwired: {', '.join(unwired)} — these FAIL their phase "
+                  f"rather than passing it.\n"
+                  f"    write the real argv into adws/adw_modules/quality.py, or "
+                  f"delete the block from BLOCKS there")
+
     print("\nnext steps:")
     print("  1. open .env             # SSSF_SKILL is filled in; add whatever else it asks for")
-    print("  2. just demo             # two cheap read-only runs, end to end")
-    print("  3. just sessions         # what just happened")
-    print("  4. just up               # trace UI + both watchers, all at once")
-    print("\n  no just? the raw form of step 2 is:")
+    print("  2. just doctor           # keys, git, quality blocks — everything a run needs")
+    print("  3. just demo             # two cheap read-only runs, end to end")
+    print("  4. just sessions         # what just happened")
+    print("  5. just up               # trace UI + both watchers, all at once")
+    print("\n  no just? the raw form of step 3 is:")
     print("     uv run adws/adw_prompt.py \"say hello\" --agent scout")
     return 0
 

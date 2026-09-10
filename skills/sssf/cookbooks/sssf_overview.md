@@ -36,6 +36,7 @@ adws/
 │   ├── limits.py                the other two bounds: wall clock per agent turn, spend per session
 │   ├── worktree.py              a git worktree + branch per run  ·  integration.py  lands it again
 │   ├── quality.py               lint/typecheck/build/test blocks → QualityResult → envelope
+│   ├── preflight.py             what must be true before a run is worth starting → Findings
 │   ├── changes.py               git diff vs a resolved base → ChangeSet → envelope for the documenter
 │   ├── artifacts.py             the session dir IS the record: run.json + envelopes/, read back without the db
 │   ├── replay.py                --resume: recorded agent phases answered from those files, code re-run

@@ -123,7 +123,10 @@ uv run .claude/skills/sssf/scripts/install.py
 pi --version                                     # confirm pi is on PATH, or set PI_PATH in .env
 git init && git commit --allow-empty -m init     # chains that end in a commit phase need a repo
 
-# 3. smoke test: two cheap read-only runs, end to end
+# 3. is it ready? keys, git, quality blocks — no agents, no cost
+just doctor
+
+# 4. smoke test: two cheap read-only runs, end to end
 just demo
 just sessions              # what just happened
 just up                    # the trace UI + both watchers, all at once (needs bun for the UI)
@@ -153,7 +156,7 @@ The starter roster deliberately mixes providers to show the point, so out of the
 
 **Want one key instead of three?** Delete the per-agent `model:` lines and let every agent inherit `defaults.model`. The whole roster then runs on one provider. Cheapest way to get a first green run.
 
-One sharp edge worth knowing: `agents.validate()` checks that a model is *written* as `provider/id`, not that the provider is reachable or that its key is set. A missing key does not fail at startup. It fails when that agent runs, partway into a chain.
+`agents.validate()` checks that a model is *written* as `provider/id` **and** that the key behind it is set — it asks the harness, and pi answers from `~/.pi/agent/models.json`, so the variable's name comes from the same place pi reads it. A key that file names and you have not set fails at startup instead of partway into a chain. It stays a warning where `models.json` does not name the variable, because refusing to start on a guessed name is worse than the failure it was guessing at. Nothing confirms the provider actually answers — `just doctor` prints the whole picture without running anything.
 
 
 ---
@@ -342,7 +345,7 @@ software-factory/
 │   ├── SKILL.md                        # hard rules + request routing table
 │   ├── cookbooks/                      # 10 orchestrator playbooks, loaded lazily
 │   ├── references/                     # config / handoff / observability specs
-│   ├── scripts/                        # install.py, uninstall.py, up.py, resume.py, the watchers, make_config.py
+│   ├── scripts/                        # install.py, uninstall.py, doctor.py, up.py, resume.py, the watchers
 │   ├── apps/visualizer/                # the read-only trace UI (Vue + Vite on Bun)
 │   └── templates/                      # EXACTLY what install.py stamps
 │       ├── sssf.config.yaml            # the starter roster
@@ -433,9 +436,10 @@ Honest edges, because knowing them is cheaper than discovering them.
 
 | Failure | What actually happens | What to do |
 |---|---|---|
-| The test phase reports green on a fresh install | `quality.py` ships placeholder commands that exit 0. Three ADWs run them as their test phase | Wire your real commands into `quality.py` before trusting `adw_build_test`, `adw_plan_build_test`, or `adw_simple_sdlc`. This is the first thing to customize |
+| A quality block nobody wired up | It **fails** with exit 78 and a message naming the file, the block and an example argv — it never spawns anything, and never reports green. `install.py` fills what it can detect from `package.json`, the lockfiles, `pyproject.toml`, `Cargo.toml` or `go.mod` first | `just doctor` lists what is still unwired. Write the real argv into `quality.py`, or delete the block from `BLOCKS` there. Confirm the `# detected at install` lines too — those came from a filename, not from you |
 | A bare model pattern | The same model sits under several providers, so `gemini-3.6-flash` matches three catalog entries and `agents.validate()` refuses to spawn | Always write `provider/model-id` |
 | `just` is not installed | The stamped `justfile` is a convenience wrapper, nothing depends on it | Every recipe is a one-line `uv run` or `sqlite3` command. Open the justfile and run the line yourself |
+| A missing key, an unresolvable `base_ref`, an unwritable `data_dir` | Caught before the run exists: `agents.validate()` asks the harness whether the credential is set, and `session.ensure()` asks `adw_modules/preflight.py` before a session, a branch or a process record is created | Read the fix in the refusal — every finding carries one. `just doctor` asks everything at once, including the checks too slow to run in front of every ADW |
 | A coding agent hangs silently | No events, no tokens, an empty `raw_output.jsonl`. The trace goes quiet rather than red | Query `processes` for what is alive and kill it children-first. A killed run finalizes its own trace to `fail` |
 | The synced triad drifts | Type, `## Report` example, and `output_type=` disagree, so every call burns correction rounds | Grep the type name and fix all three in one edit |
 | Gates pass, output is bad | Gates check what a predicate can check, not plan quality or code taste | Run the `reviewer`, or read it yourself |
@@ -462,7 +466,8 @@ Where to start, roughly in the order that pays off fastest:
 
 | Change | File | Why |
 |---|---|---|
-| Your real commands | `adws/adw_modules/quality.py` | The shipped blocks are placeholders that exit 0. Until you wire this, your test phase is theater |
+| Your real commands | `adws/adw_modules/quality.py` | `install.py` fills in what it can detect; whatever is left fails loudly rather than passing quietly. `just doctor` says which |
+| Your definition of ready | `adws/adw_modules/preflight.py` | What has to be true before a run is worth starting. One function per check, each carrying its own fix |
 | Your prompts | `adws/adw_data/prompt_engineering/{agent}/` | Where your standards live: what a good plan looks like, what a review has to catch |
 | Your roster | `adws/adw_sssf_config/sssf.config.yaml` | Models, thinking levels, tools, and what each agent is allowed to write |
 | Your chains | `adws/adw_*.py` | Copy the closest workflow and edit the phase list. They are 40 to 180 lines on purpose |

@@ -41,6 +41,15 @@ status:
     @uv run {{skill}}/scripts/up.py status --config {{config}}
 
 # ── first run ───────────────────────────────────────────────────────────────
+# Ask before you spend. `doctor` reads the config and answers everything a run
+# needs — the provider key behind every model, a base_ref that resolves, a
+# writable data_dir, which quality blocks are still placeholders, the forge CLI
+# your enabled paths shell out to. Costs nothing, spawns no agent, and exits
+# non-zero on anything fatal, so it works as a first CI step too.
+
+# is this repo ready to run anything? checks + fixes, no agents, no cost
+doctor:
+    @uv run {{skill}}/scripts/doctor.py --config {{config}}
 
 # Proves the whole path works: config validated, session minted, agent ran,
 # envelope parsed, gates checked, trace written. Costs a few cents and changes

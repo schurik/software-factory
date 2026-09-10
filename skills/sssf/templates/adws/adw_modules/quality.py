@@ -8,10 +8,16 @@ deciding.
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║  REPLACE THE PLACEHOLDER COMMANDS BELOW.                                     ║
 ║                                                                              ║
-║  Every block ships as an `echo` that exits 0 and announces it is fake. They   ║
-║  are placeholders on purpose: a stamped repo has no way to guess your test    ║
-║  runner, and a wrong-but-plausible command that silently passes is worse      ║
-║  than one that says so out loud.                                             ║
+║  A block that has not been wired up FAILS. It runs nothing, spawns nothing,   ║
+║  and reports exit 78 with the line you are reading — because the alternative  ║
+║  is a chain that reports a green suite it never ran, and then a pull request  ║
+║  that says "tests pass". An unwired block is a missing answer, and a missing  ║
+║  answer is not a passing one.                                                ║
+║                                                                              ║
+║  A stamped repo has no way to guess your test runner; `install.py` tries      ║
+║  (bun.lock, pyproject.toml, package.json scripts) and writes in what it       ║
+║  finds, so some of the blocks below may already name a real command.          ║
+║  `just doctor` lists whichever are still unwired.                             ║
 ║                                                                              ║
 ║  For each block you want: swap `_placeholder(...)` for the real argv, e.g.    ║
 ║      argv=["bun", "test", "apps/web/server.test.ts"]                         ║
@@ -30,6 +36,7 @@ deciding.
 
 from __future__ import annotations
 
+import inspect
 import shlex
 import subprocess
 import time
@@ -46,10 +53,62 @@ from .utils import now_iso, operator_env
 TAIL_CHARS = 4_000
 
 
+# Not a command — a marker. `_run` recognises it and fails the check without
+# spawning anything, which is the whole point: there is no shell string that
+# both fails loudly and cannot be mistaken for a real invocation in the trace.
+UNWIRED = "__sssf_unwired__"
+EXIT_UNWIRED = 78                  # sysexits.h EX_CONFIG: the configuration is wrong
+
+
 def _placeholder(name: str) -> list[str]:
-    """A command that does nothing and admits it. Replace every call to this."""
-    return ["echo", f"PLACEHOLDER {name}: edit adws/adw_modules/quality.py and "
-                    f"replace this echo with the real {name} command"]
+    """The argv of a block nobody has wired up yet. Replace every call to this.
+
+    It used to be an `echo` that exited 0, and a stamped repo therefore shipped
+    with a test phase that passed without testing anything — the most expensive
+    default the factory had. Now it fails, and says exactly what to edit.
+    """
+    return [UNWIRED, name]
+
+
+# One example per block, so the fix reads like the thing it is asking for. A
+# `lint` block told to look like `bun test` is a fix nobody follows literally.
+EXAMPLES = {
+    "test": '["bun", "test"] or ["uv", "run", "pytest", "-q"]',
+    "lint": '["npm", "run", "lint"] or ["uv", "run", "ruff", "check", "."]',
+    "typecheck": '["bunx", "tsc", "--noEmit"] or ["uv", "run", "mypy", "."]',
+    "build": '["npm", "run", "build"] or ["cargo", "build"]',
+}
+
+
+def _unwired_message(name: str) -> str:
+    """What a block that was never wired up reports. Rides back in the envelope,
+    so the builder reads it too — hence the fix rather than just the complaint."""
+    example = EXAMPLES.get(name, '["your", "command", "here"]')
+    return (f"No {name} command is wired up. adws/adw_modules/quality.py ships this "
+            f"block as a placeholder, and a placeholder FAILS rather than passing: a "
+            f"green suite that never ran is worse than a red one.\n\n"
+            f"Fix: open adws/adw_modules/quality.py and replace "
+            f"`_placeholder(\"{name}\")` with the argv that {name}s this repo — "
+            f"{example} — or delete the block and drop it from BLOCKS there.")
+
+
+def placeholders() -> list[str]:
+    """Which blocks still carry the shipped placeholder instead of a command.
+
+    Read off the source of the blocks themselves rather than a list somebody
+    has to remember to update: a block whose argv you replaced no longer
+    mentions `_placeholder`, and that IS the answer. `preflight.quality()` and
+    `just doctor` are the callers.
+    """
+    unwired = []
+    for name, block in BLOCKS.items():
+        try:
+            source = inspect.getsource(block)
+        except OSError:                      # a block defined outside a file
+            continue
+        if "_placeholder(" in source:
+            unwired.append(name)
+    return unwired
 
 
 def _check_dir(run, name: str) -> Path:
@@ -63,35 +122,45 @@ def _run(spec: QualityCheckSpec, run) -> QualityCheckResult:
     phase = run.phases[-1]
     output_dir = _check_dir(run, spec.name)
     output_artifact = output_dir / "command.log"
-    command = shlex.join(spec.argv)
-    env = operator_env()             # the engineer's own shell environment
+    # An unwired block is a check that cannot be performed, so it is reported as
+    # a failure — never spawned, never passed. Everything after this branch is
+    # identical for both paths on purpose: artifact, trace event, console line
+    # and envelope, so an unwired block reaches the builder through exactly the
+    # same door a red test suite does.
+    unwired = spec.argv[:1] == [UNWIRED]
+    command = (f"<unwired {spec.name} block — adws/adw_modules/quality.py>"
+               if unwired else shlex.join(spec.argv))
 
     run.console.note(f"quality {spec.name}: {command}")
     started_at = now_iso()
     clock = time.monotonic()
     stdout = ""
     stderr = ""
-    try:
-        completed = subprocess.run(
-            spec.argv,
-            cwd=run.repo_root,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=spec.timeout_seconds,
-        )
-        returncode = completed.returncode
-        stdout = completed.stdout
-        stderr = completed.stderr
-    except subprocess.TimeoutExpired as error:
-        returncode = 124
-        stdout = error.stdout or ""
-        stderr = (error.stderr or "") + f"\nTimed out after {spec.timeout_seconds}s."
-    except OSError as error:
-        # A missing binary lands here as exit 127 with the real message — no
-        # pre-flight probe needed, and none wanted.
-        returncode = 127
-        stderr = str(error)
+    if unwired:
+        returncode = EXIT_UNWIRED
+        stderr = _unwired_message(spec.name)
+    else:
+        try:
+            completed = subprocess.run(
+                spec.argv,
+                cwd=run.repo_root,
+                env=operator_env(),   # the engineer's own shell environment
+                capture_output=True,
+                text=True,
+                timeout=spec.timeout_seconds,
+            )
+            returncode = completed.returncode
+            stdout = completed.stdout
+            stderr = completed.stderr
+        except subprocess.TimeoutExpired as error:
+            returncode = 124
+            stdout = error.stdout or ""
+            stderr = (error.stderr or "") + f"\nTimed out after {spec.timeout_seconds}s."
+        except OSError as error:
+            # A missing binary lands here as exit 127 with the real message — no
+            # pre-flight probe needed, and none wanted.
+            returncode = 127
+            stderr = str(error)
 
     duration = time.monotonic() - clock
     output_artifact.write_text(
@@ -174,6 +243,17 @@ def build(run) -> QualityCheckResult:
     ), run)
 
 
+# Every block this file offers, by name. `run_quality` runs them, `placeholders`
+# inspects them, and `just doctor` reports them — one list, so a block added or
+# deleted here cannot be half-registered.
+BLOCKS: dict[str, Callable] = {
+    "test": test,
+    "lint": lint,
+    "typecheck": typecheck,
+    "build": build,
+}
+
+
 def run_tests(run) -> QualityResult:
     """The test suite alone, as a QualityResult — the deterministic test phase.
 
@@ -217,14 +297,11 @@ def run_quality(run) -> QualityResult:
     Ordering contract for the caller: a failing block does NOT fail the phase.
     The runner did its job; the CODE is what failed. Hand this result to the
     builder and let the bounded repair loop decide the run's fate.
+
+    Which blocks run is `BLOCKS` above — delete the ones this repo has no use
+    for there, in the one place `placeholders()` and `just doctor` also read.
     """
-    blocks: list[Callable] = [
-        test,
-        lint,
-        typecheck,
-        build,
-    ]
-    checks = [block(run) for block in blocks]
+    checks = [block(run) for block in BLOCKS.values()]
     # A failure is the command, its exit code, and what it actually printed —
     # everything a builder needs to repair without opening a log or being told
     # what the error "means" by a parser that guessed.

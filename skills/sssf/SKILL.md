@@ -67,6 +67,7 @@ Every run executes in its own git worktree, `<worktrees_dir>/<adw_id>`, on its o
 - **An open pull request has a way back in.** Review comments are not the end of the line: `just pr-review <n>` reads `sssf/<adw_id>` off the pull request's head ref, joins THAT session, and pushes its answer onto the branch already under review — the pull request is updated, never replaced. Unresolved threads are the queue, so nothing is worked twice. `just prs` polls for it.
 - **The merge is what ends the session, not the first run.** `just prs` also reaps: a review run still working a branch that has already landed is stopped, and its worktree released. The branch is never deleted — that belongs to whoever merged.
 - **The trace does not move.** `data_dir` and the db are anchored to the main checkout, so one db holds every concurrent run and survives a pruned worktree.
+- **A run is refused before it costs anything.** `session.ensure()` asks `adw_modules/preflight.py` first, so an unresolvable `base_ref` or an unwritable `data_dir` aborts before a session, a branch or a process record exists — and `agents.validate()` now checks that the key behind each required agent's model is actually set, which used to surface mid-chain. `just doctor` is the same module asked for everything, including the checks too slow to put in front of every run.
 - **Nothing polls unless something is polling.** The trace UI and the two watchers are `just up` — one foreground process that owns all three and stops them together. `just status` says whether they are actually up and when each last polled, and the UI carries the same two badges; a watcher nobody started is the one failure this system produces silently, so never answer "it should pick that up" without one of those two. [references/config.md](references/config.md#running-the-watchers).
 
 It is isolation, not a sandbox — an agent with `bash` can leave the worktree, and `permissions.py` is still the boundary. Details in [references/config.md](references/config.md#worktree-per-run).
@@ -85,6 +86,7 @@ Neither is a sandbox — a run that means to spend $40 says so in the config. [r
 | Request | Cookbook |
 |---|---|
 | install / set up the factory in this repo | [cookbooks/install.md](cookbooks/install.md) |
+| "is this repo ready to run?" / something failed before the first phase | `just doctor` — [cookbooks/install.md](cookbooks/install.md#post-install-checklist) |
 | remove the factory / clean the repo back up | [cookbooks/uninstall.md](cookbooks/uninstall.md) |
 | create a new ADW / workflow | [cookbooks/create_adw.md](cookbooks/create_adw.md) |
 | land a run's branch, clean up worktrees | [references/config.md](references/config.md#worktreeintegration) |
@@ -113,7 +115,7 @@ Deep specs, when needed: [references/config.md](references/config.md) · [refere
 5. **One agent, one prompt, one purpose** — identity lives in `system.md`; task shape (user prompt + output type) lives at the call site.
 6. **ADW scripts stay thin** — all low-level logic lives in `adw_modules/`.
 7. **Every phase earns a description** — one sentence on what it does and why, never a restatement of its name. It is the only intent the trace, the console, and the UI ever show; `commit_plan: "Commit the plan"` is rejected at construction, blank is too.
-8. **A known command is code, not an agent** — if you can write the invocation down (`bun test`, `ruff check`), it belongs in a `kind="code"` phase via `adw_modules/quality.py`. Agents are for the parts that need reading and deciding; failures come back to the builder as an envelope either way.
+8. **A known command is code, not an agent** — if you can write the invocation down (`bun test`, `ruff check`), it belongs in a `kind="code"` phase via `adw_modules/quality.py`. Agents are for the parts that need reading and deciding; failures come back to the builder as an envelope either way. A block nobody wired up is not a passing check: it fails with exit 78 and the fix in its message, and `just doctor` names every one of them before a run starts.
 9. **`tools:` is a capability list, `writes:` is the boundary** — `bash` runs anything (including `git checkout`) and `write` reaches any path, so a tool list can never make "this agent changes nothing" true. `writes:` per agent and `protected_files` in defaults are enforced in `adw_modules/permissions.py` after every agent call: unauthorized changes are rolled back and the phase dies. The session runtime under `data_dir` is always writable — a read-only agent is read-only with respect to the REPO, never mute.
 10. **Every ADW ends in `run.finish()`** — phases passing is not the same as the run being accepted. A test phase that ran a red suite succeeded at its job. Pass `accepted=` so the exit code, the session status, and the banner are decided together and cannot disagree.
 

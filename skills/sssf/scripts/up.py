@@ -48,7 +48,6 @@ import argparse
 import os
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import threading
@@ -143,13 +142,10 @@ def _stop(service: Service, grace: float = 8.0) -> None:
 # ── preflight ────────────────────────────────────────────────────────────────
 
 def _port_free(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            probe.bind(("127.0.0.1", port))
-            return True
-        except OSError:
-            return False
+    """Whether :port can be bound. One implementation, in the stamped checks, so
+    `just up` and `just doctor` cannot disagree about who is holding it."""
+    from adw_modules import preflight
+    return preflight.port_free(port)
 
 
 def _harness_names(cfg) -> list[str]:
@@ -157,11 +153,16 @@ def _harness_names(cfg) -> list[str]:
 
 
 def preflight(cfg, want: set[str]) -> list[str]:
-    """Everything that would fail later, checked now. Returns fatal problems.
+    """Everything that would stop THESE SERVICES, checked now. Fatal problems.
 
     Non-fatal findings are printed and the service they concern is dropped —
     no bun is a reason to run without the UI, not a reason to refuse to watch
     anything. A fatal problem is one that makes the whole command pointless.
+
+    Deliberately narrower than `adws/adw_modules/preflight.py`, which asks
+    whether a RUN would work (credentials, base_ref, data_dir, the quality
+    blocks) and is what `just doctor` prints. This one asks only about the
+    three processes it is about to supervise.
     """
     fatal: list[str] = []
 

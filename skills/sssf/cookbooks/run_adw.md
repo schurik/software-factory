@@ -23,6 +23,8 @@ uv run adws/<recon-chain>.py "where is auth handled" --config path/to/other.conf
 
 The prompt is inline text or a file path. Launch in the background so you can poll while it works; the `adw_id` is printed on startup — capture it, everything else keys off it.
 
+**A run that dies before its first phase was refused, not broken.** `agents.validate()` and `preflight.before_run()` check the config, the credential behind each required agent's model, the `base_ref` and the `data_dir` before anything is created, and every refusal names its own fix. Read it out and apply it rather than re-launching; `just doctor` (or `uv run <skill>/scripts/doctor.py`) prints the same picture in full, including what only warns.
+
 ### Listen for the roster
 
 The chain says *what runs*; the config says *who runs it*. **If the engineer references a roster, a config, or a model tier, pass it — do not fall through to the default.**
