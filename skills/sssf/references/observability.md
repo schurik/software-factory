@@ -4,7 +4,9 @@ The event schema, the seven SQLite tables, and the polling contract — the one 
 
 ## Two stores, one truth
 
-**Files are the raw record** (`raw_output.jsonl` streams, `envelope.json`, `agent_map.json`); **SQLite (`sssf.db`) is the queryable mirror** the UI reads. `tracer.py` writes both. Losing the db loses nothing that can't be rebuilt from files.
+**Files are the raw record** (`events.jsonl`, `run.json`, `envelopes/<phase_id>.json`, `raw_output.jsonl` streams, `envelope.json`, `agent_map.json`); **SQLite (`sssf.db`) is the queryable mirror** the UI reads. `tracer.py` writes both. Losing the db loses nothing that can't be rebuilt from files.
+
+**A run only ever WRITES to the db.** Everything a workflow needs to know about a session it has already run — what a resumed phase produced, how far the phase numbering got, where the run came from — is read from that session's own directory through `adw_modules/artifacts.py`. So a run resumes correctly with `sssf.db` deleted, and the db can be removed to reclaim disk without costing the factory anything but the UI's history. The readers in `tracer.py` belong to the maintenance tools (the watchers, `just worktrees`), which ask *about* sessions rather than running them.
 
 Location comes from `observability.db` in `sssf.config.yaml`, default `adws/adw_data/sssf.db` — inside the **target** repo, gitignored.
 

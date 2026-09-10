@@ -36,7 +36,8 @@ adws/
 │   ├── worktree.py              a git worktree + branch per run  ·  integration.py  lands it again
 │   ├── quality.py               lint/typecheck/build/test blocks → QualityResult → envelope
 │   ├── changes.py               git diff vs a resolved base → ChangeSet → envelope for the documenter
-│   ├── replay.py                --resume: recorded agent phases answered from the trace, code re-run
+│   ├── artifacts.py             the session dir IS the record: run.json + envelopes/, read back without the db
+│   ├── replay.py                --resume: recorded agent phases answered from those files, code re-run
 │   ├── issues.py                fetch a work item, hand it on as an envelope, write the outcome back
 │   ├── pull_requests.py         the same, one step later: read review threads, answer them, resolve them
 │   ├── prompts.py, session.py, tracer.py, console.py, git_helper.py, utils.py
@@ -44,6 +45,8 @@ adws/
     ├── prompt_engineering/{agent}/{system.md,user.md}   tracked — stamped for YOUR harness; edit HERE, never in the skill
     │                                planner · builder · scout · reviewer · documenter
     ├── sessions/{adw_id}/                               gitignored runtime
+    │   ├── run.json             the session's own state: workflows, argv, pid, outcome — what `just resume` reads
+    │   ├── envelopes/{phase_id}.json   one per agent PHASE, so a resume can answer each one
     │   ├── agent_map.json       agent → harness session_id + model
     │   ├── context_handoff/     the one place agents write files for the agents that follow
     │   └── {agent}/{prompts/, raw_output.jsonl, envelope.json}

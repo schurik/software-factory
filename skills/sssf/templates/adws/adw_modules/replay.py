@@ -1,12 +1,12 @@
 """Replay: hand back what an earlier process in this session already produced.
 
 A chain that dies in its last phase has already paid for every phase before it.
-The plan, the build and the review are in the trace, and the run's worktree still
-holds the tree they made — a failed run keeps it on purpose. Restarting from the
-top buys none of that back and charges for all of it a second time, which is
-what `--resume` exists to stop: an agent phase whose envelope this session
-already recorded is answered FROM the record, and everything code owns runs
-again for real.
+The plan, the build and the review are in the session's own directory, and the
+run's worktree still holds the tree they made — a failed run keeps it on
+purpose. Restarting from the top buys none of that back and charges for all of
+it a second time, which is what `--resume` exists to stop: an agent phase whose
+envelope this session already recorded is answered FROM the record, and
+everything code owns runs again for real.
 
 That split is the factory's own line applied to recovery. An agent's output is
 the expensive, non-repeatable half, and it is already written down. A suite, a
@@ -14,6 +14,10 @@ commit, a diff are cheap and deterministic, so re-running them is how a resumed
 run VERIFIES the tree it inherited — and a replayed envelope whose gates no
 longer hold is discarded, with the agent asked again, live. Nothing is trusted
 because it is old; it is trusted because its gates still pass.
+
+The record comes from `adw_modules/artifacts.py` — the session directory, never
+the trace db. A run must work with the db deleted, and the db is the mirror the
+visualizer polls, not a dependency of the factory.
 
 Matching is by phase NAME — which `PhaseParams` already requires to be unique
 within a run — plus the agent that owned it and the output type it produced. Any
@@ -28,6 +32,9 @@ it has already replayed runs it live rather than answering twice from one record
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from . import artifacts
 from .data_types import EnvelopeBase, Phase, RecordedPhase
 
 
@@ -81,15 +88,15 @@ class ReplayLog:
         return envelope
 
 
-def load(tracer, adw_id: str, active: bool) -> ReplayLog:
-    """Build this session's replay log from the trace.
+def load(session_dir: Path, active: bool) -> ReplayLog:
+    """Build this session's replay log from its own directory.
 
     The LAST successful record wins per phase name, because a session that has
-    been resumed before holds two rows for the same phase — the original and its
-    replay — and they say the same thing. Reading is free of side effects: the
-    log is built from the db the run is already writing to, on that connection.
+    been resumed before holds two records for the same phase — the original and
+    its replay — and they say the same thing.
     """
     if not active:
         return ReplayLog({}, active=False)
-    return ReplayLog({record.phase: record for record in tracer.recorded_phases(adw_id)},
+    return ReplayLog({record.phase: record
+                      for record in artifacts.recorded_phases(session_dir)},
                      active=True)

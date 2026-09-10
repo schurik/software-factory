@@ -43,9 +43,10 @@ pinned before the first commit phase and printed in the request phase.
 
 A run that dies late does not have to be paid for twice. `--resume` (with the
 session's `--adw-id`, or `just resume <adw_id>`) hands every agent phase this
-session already recorded back from the trace and re-runs everything code owns —
-so the suite runs again against the tree the first run left, and the chain
-picks up AT the phase that failed. `adw_modules/replay.py` has the rules.
+session already recorded back from the session's own files — not the trace db,
+which a run only writes — and re-runs everything code owns, so the suite runs
+again against the tree the first run left and the chain picks up AT the phase
+that failed. `adw_modules/replay.py` has the rules.
 
 All three commits land on the run's own `sssf/<adw_id>` branch, in its own
 worktree — the engineer's checkout is never touched. The last phase lands that

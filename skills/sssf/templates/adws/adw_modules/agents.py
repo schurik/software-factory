@@ -15,10 +15,11 @@ from typing import Optional
 
 import yaml
 
-from . import git_helper, harnesses, permissions, prompts
+from . import artifacts, git_helper, harnesses, permissions, prompts
 from .data_types import (AgentCall, AgentConfig, AgentRequest, AgentResult,
                          AgentSession, EnvelopeBase, EventRecord, GateCheck,
-                         GateReport, Phase, SSSFConfig, UsageBreakdown)
+                         GateReport, Phase, RecordedPhase, SSSFConfig,
+                         UsageBreakdown)
 from .utils import anchor
 
 JSON_FIX_ATTEMPTS = 2      # continue-with-correction attempts for malformed JSON
@@ -450,11 +451,20 @@ def _persist_envelope(run, phase: Phase, agent_name: str, call: AgentCall,
     payload_json = envelope.model_dump_json(indent=2) if envelope else json.dumps({"raw": raw[-2000:]})
     run.tracer.envelope_row(phase, agent_name, call.output_type.__name__,
                             payload_json, valid, attempt)
-    if envelope:
-        record = {"agent_name": agent_name, "purpose": resolve(run.cfg, agent_name).purpose,
-                  "output_type": call.output_type.__name__, "attempt": attempt,
-                  **envelope.model_dump()}
-        (run.session_dir / agent_name / "envelope.json").write_text(json.dumps(record, indent=2))
+    if not envelope:
+        return
+    record = {"agent_name": agent_name, "purpose": resolve(run.cfg, agent_name).purpose,
+              "output_type": call.output_type.__name__, "attempt": attempt,
+              **envelope.model_dump()}
+    (run.session_dir / agent_name / "envelope.json").write_text(json.dumps(record, indent=2))
+    # And once more keyed by the PHASE. The file above is last-wins per agent —
+    # right for "what did the builder last say", useless for a resume, where a
+    # builder that built, fixed and revised has to answer three phases. This one
+    # is what `adw_modules/replay.py` reads back.
+    artifacts.write_envelope(run.session_dir, RecordedPhase(
+        phase_id=phase.phase_id, seq=phase.seq, phase=phase.params.name,
+        agent=agent_name, output_type=call.output_type.__name__,
+        payload_json=envelope.model_dump_json()))
 
 
 def load_envelope(run, agent_name: str, output_type: type[EnvelopeBase]) -> EnvelopeBase:

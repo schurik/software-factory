@@ -156,7 +156,7 @@ just resume <adw_id> --dry-run   # print the command that would run, run nothing
 
 It re-launches the SAME workflow against the SAME session with `--resume`, read
 back from the `processes` row that recorded the original invocation. The agent
-phases the session recorded are answered from the trace — the console marks each
+phases the session recorded are answered from its own directory — the console marks each
 one `↺ replayed`, and it adds nothing to the run's tokens or cost — while
 everything code owns runs for real, so the suite re-runs against the tree the
 first run left and the chain reaches the phase that actually failed.

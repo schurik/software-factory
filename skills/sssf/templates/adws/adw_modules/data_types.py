@@ -630,19 +630,54 @@ class WorktreeInfo(BaseModel):
 
 
 class RecordedPhase(BaseModel):
-    """One agent phase this session already completed, as the trace kept it.
+    """One agent phase this session already completed, as its own record kept it.
 
-    The unit `adw_modules/replay.py` hands back to a resumed run instead of
-    calling the agent again: the phase's name and owner say WHICH call it
-    answers, `output_type` says the contract it was written against, and the
-    payload is the envelope itself, verbatim from the db.
+    Written to `sessions/<adw_id>/envelopes/<phase_id>.json` when the phase
+    produces its envelope, and handed back by `adw_modules/replay.py` to a
+    resumed run instead of calling the agent again: the phase's name and owner
+    say WHICH call it answers, `output_type` says the contract it was written
+    against, and the payload is the envelope itself, verbatim.
     """
 
+    phase_id: str                   # "<adw_id>_<seq>_<name>" — the file's name
     seq: int
     phase: str                      # the phase NAME, unique within a run
     agent: str
     output_type: str
     payload_json: str
+
+
+class RunState(BaseModel):
+    """What `sessions/<adw_id>/run.json` says about the session itself.
+
+    The one thing the rest of the session directory cannot say: which process
+    took this session, what argv started it, and how it ended. `events.jsonl`
+    describes phases; this describes the run that opened them, which is what
+    `just resume` needs to launch the same workflow a second time.
+
+    `command` is the argv as a LIST, never a joined string — no quoting to undo,
+    and no clipping, so a run started from a long inline prompt resumes as
+    exactly the run it was.
+    """
+
+    adw_id: str
+    workflows: list[str] = Field(default_factory=list)   # every ADW this session ran, in order
+    command: list[str] = Field(default_factory=list)     # argv of the NEWEST process
+    pid: int = 0
+    engineer: str = ""
+    status: str = "running"         # running | success | fail
+    started_at: str = ""
+    ended_at: str = ""
+    repo_root: str = ""             # the worktree the run works in
+    branch: str = ""
+    trigger: str = "engineer"       # engineer | issue | pr_review
+    issue_url: str = ""
+    pr_url: str = ""
+
+    @property
+    def adw_name(self) -> str:
+        """The session's workflows the way the trace and the UI name them."""
+        return " + ".join(self.workflows)
 
 
 class RunSpec(BaseModel):

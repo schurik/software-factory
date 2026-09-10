@@ -5,7 +5,7 @@ exactly that id (pinned ids for repeatable runs); omitted, a fresh id is
 minted and printed so the next ADW can pick it up.
 
 `resume=True` adds one thing to joining: the agent phases this session already
-recorded are handed back from the trace instead of being asked again, so a
+recorded are handed back from its own directory instead of being asked again, so a
 chain that died in its last phase restarts AT that phase rather than at the top.
 It needs a pinned `adw_id` — there is nothing to resume without one — and
 everything code owns still runs for real. See `adw_modules/replay.py`.
@@ -30,11 +30,11 @@ import signal
 import sys
 from pathlib import Path
 
-from . import git_helper, worktree
-from .data_types import RunSpec, SSSFConfig, WorktreeRequest
+from . import artifacts, git_helper, worktree
+from .data_types import RunSpec, RunState, SSSFConfig, WorktreeRequest
 from .runner import Run
 from .tracer import Tracer
-from .utils import anchor, engineer_name, new_id
+from .utils import anchor, engineer_name, new_id, now_iso
 
 
 def _finalize_when_killed(run: Run) -> None:
@@ -52,6 +52,7 @@ def _finalize_when_killed(run: Run) -> None:
     """
     def handler(signum, _frame):
         run.tracer.session_finish(run.adw_id, ok=False)   # also closes process rows
+        artifacts.finish_run(run.session_dir, "fail")     # and the session's own record
         raise SystemExit(128 + signum)
 
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -71,18 +72,31 @@ def ensure(cfg: SSSFConfig, adw_id: str | None = None, resume: bool = False) -> 
     run = Run(RunSpec(cfg=cfg, adw_id=adw_id, engineer=engineer_name(),
                       workspace=workspace, resume=resume), tracer)
     tracer.session_start(adw_id, run.engineer, adw_name=Path(sys.argv[0]).stem)
-    # Read AFTER session_start, so a brand-new session has its row to read from
-    # and a joined one has the first process's answer rather than this one's
-    # default. An issue-triggered session that a later ADW re-enters must still
+    # What the session already knows about itself, from its own directory — the
+    # db answer is the fallback, and only for a session recorded before run.json
+    # existed. An issue-triggered session that a later ADW re-enters must still
     # know it was issue-triggered — integration.py refuses to merge on that —
     # and a session whose branch is already a pull request must know THAT, or it
     # proposes the branch a second time instead of pushing to the PR it has.
-    run.adopt_provenance(*tracer.session_provenance(adw_id))
+    recorded = artifacts.read_run(run.session_dir)
+    run.adopt_provenance(*((recorded.trigger, recorded.issue_url, recorded.pr_url)
+                           if recorded else tracer.session_provenance(adw_id)))
     tracer.session_workspace(adw_id, workspace)
     # This process is the run. Record it before any phase opens, so a run that
     # hangs in its first agent call is still killable by adw_id.
     tracer.process_start(adw_id, "adw", "", os.getpid(),
                          " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]))
+    # The same fact in the session's OWN directory, and the only place it is
+    # written whole: `command` is the argv as a list, so `just resume` can launch
+    # this workflow again without a db, without unquoting, and without the 500
+    # character clip the process row applies. artifacts.py says why files win.
+    artifacts.start_run(run.session_dir, RunState(
+        adw_id=adw_id, workflows=[Path(sys.argv[0]).stem],
+        command=[Path(sys.argv[0]).name, *sys.argv[1:]],
+        pid=os.getpid(), engineer=run.engineer, status="running",
+        started_at=now_iso(), repo_root=str(workspace.repo_root),
+        branch=workspace.branch, trigger=run.trigger,
+        issue_url=run.issue_url, pr_url=run.pr_url))
     _finalize_when_killed(run)
     run.console.session_started(adw_id, run.engineer)
     run.console.note(_workspace_line(workspace))

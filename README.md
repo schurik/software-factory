@@ -394,7 +394,8 @@ uv run adws/adw_build_test.py "implement the plan" --adw-id a1b2c3d4
 
 **A run that died part-way is picked up, not restarted.** Every multi-agent chain
 also takes `--resume`, and `just resume <adw_id>` is the short way to it: the
-agent phases the session already recorded are answered from the trace — no agent
+agent phases the session already recorded are answered from its own session
+directory — no agent
 runs, nothing is spent, and their gates are still checked against the tree as it
 is now — while everything code owns runs again for real. So the suite re-runs
 against the tree the first run left, and the chain reaches the phase that
@@ -408,6 +409,11 @@ just resume a1b2c3d4 --dry-run       # print the command it would run, run nothi
 A record whose artifacts are gone — a pruned worktree re-created from its branch,
 say — fails its gates and that agent runs live instead. Nothing is trusted for
 being old; it is trusted because its gates still pass.
+
+The record is the session's own directory (`run.json`, `envelopes/<phase_id>.json`
+under `adw_data/sessions/<adw_id>/`), never the trace db — **a run only ever
+writes to sqlite.** Delete `sssf.db` to reclaim disk and the resume still works;
+all you lose is the visualizer's history.
 
 Watch a run with the trace db directly:
 
