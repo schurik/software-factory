@@ -293,3 +293,68 @@ def test_a_block_with_no_evidence_stays_unanswered(tmp_path: Path):
     found = _detect_module().detect(tmp_path)
     assert "build" in found
     assert "lint" not in found and "typecheck" not in found
+
+
+def _required_agents(source: str) -> list[str] | None:
+    """The chain's `REQUIRED_AGENTS`, or None if it declares none.
+
+    Read out of the AST rather than imported: these are PEP-723 scripts whose
+    import pulls the dependency set and whose `__main__` parses argv. Both
+    assignment forms count — `adw_integrate` and `adw_quality` write
+    `REQUIRED_AGENTS: list[str] = []`, which is an `AnnAssign` and is exactly
+    what a naive `ast.Assign` walk misses while looking like it checked.
+    """
+    import ast
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "REQUIRED_AGENTS" for t in node.targets):
+            return ast.literal_eval(node.value)
+        if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") \
+                == "REQUIRED_AGENTS" and node.value is not None:
+            return ast.literal_eval(node.value)
+    return None
+
+
+def test_every_stamped_chain_can_field_its_roster(repo: Path, harness: str):
+    """A name a chain requires must be a name the generated roster defines.
+
+    `agents.validate(cfg, REQUIRED_AGENTS)` is the first thing every ADW does,
+    so a mismatch here is not a bad run — it is a chain that cannot start at
+    all, on a fresh install, before a single phase opens. The two halves live in
+    different files and neither imports the other: the chain names what it
+    needs, `templates/harnesses/*/agents.yaml` says who exists, and nothing
+    until now compared them. Adding a name to a REQUIRED_AGENTS list is
+    therefore a change that can break every install while the suite stays green.
+
+    Only roster membership is asserted, via the same `agents.resolve` lookup
+    `validate` performs per name. The rest of `validate` — model patterns,
+    credentials, reachability — belongs to the harness and is checked above,
+    where it can skip on a machine that lacks the CLI. This check has no such
+    excuse: it is pure data on both sides and must hold everywhere.
+    """
+    install(repo, "--harness", harness, "--no-detect-quality")
+    cfg = agents.load_config(str(repo / CONFIG))
+
+    chains = sorted((repo / "adws").glob("adw_*.py"))
+    assert chains, "no chain was stamped — the glob, not the rosters, is wrong"
+
+    declares_none = []
+    for chain in chains:
+        required = _required_agents(chain.read_text())
+        if required is None:
+            declares_none.append(chain.name)
+            continue
+        for name in required:
+            try:
+                agents.resolve(cfg, name)
+            except SystemExit as unresolved:
+                pytest.fail(f"{chain.name} requires agent {name!r}, which the "
+                            f"{harness} roster does not define — {unresolved}")
+
+    # Named, not silently skipped. A chain with no REQUIRED_AGENTS is invisible
+    # to the loop above, so a NEW one added without the constant would be waved
+    # through by a test that reports it checked every chain. `adw_prompt` is the
+    # one legitimate case: it takes `--agent` and validates that name at runtime.
+    assert declares_none == ["adw_prompt.py"], (
+        f"chains with no REQUIRED_AGENTS: {declares_none} — if this is a new "
+        f"chain, give it the constant; the roster check cannot see it otherwise")
