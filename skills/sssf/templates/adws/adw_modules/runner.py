@@ -176,16 +176,19 @@ class Run:
     def record_issue(self, context) -> None:
         """Bind this run to the work item that caused it, in memory and in the db.
 
-        Lives here rather than in the ADW script (rule 6) because three
+        Lives here rather than in the ADW script (rule 6) because four
         different things need it afterwards: the trace column, the PR body
-        template, and integration's refusal to merge an externally triggered
-        run. A script that set them one by one would eventually set only two.
+        template, integration's refusal to merge an externally triggered run,
+        and the label a run that suspended at a gate lands when it finally ends
+        — in a process the watcher that started it never sees. A script that
+        set them one by one would eventually set only three.
         """
         self.trigger = "issue"
         self.issue_number = context.number
         self.issue_url = context.url
         self.tracer.session_issue(self.adw_id, context.url)
-        artifacts.update_run(self.session_dir, trigger="issue", issue_url=context.url)
+        artifacts.update_run(self.session_dir, trigger="issue", issue_url=context.url,
+                             issue_number=context.number, issue_project=context.project)
         # `request` is otherwise only written by an ENGINEER phase (see
         # PhaseHandle.log), and an issue-triggered chain has none — so without
         # this every such run reads as blank in `just sessions` and on its card

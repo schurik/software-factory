@@ -76,13 +76,24 @@ def test_the_newest_process_owns_the_command_and_the_pid(tmp_path):
 
 
 def test_provenance_is_learned_once_and_never_unlearned(tmp_path):
-    """A later ADW re-entering an issue-triggered session is still issue-triggered."""
+    """A later ADW re-entering an issue-triggered session is still issue-triggered.
+
+    `issue_number` and `issue_project` carry the same way and for a sharper
+    reason: the process that ENDS a run moves the issue's label, and for a run
+    that stopped at a gate that process is `resume.py`, several re-entries after
+    the one that fetched the issue. Dropped here, an answered run would have no
+    idea which issue to land.
+    """
     artifacts.start_run(tmp_path, state(trigger="issue",
-                                        issue_url="https://forge/issues/7"))
-    artifacts.start_run(tmp_path, state(trigger="", issue_url=""))
+                                        issue_url="https://forge/issues/7",
+                                        issue_number=7, issue_project="acme/widgets"))
+    artifacts.start_run(tmp_path, state(trigger="", issue_url="",
+                                        issue_number=0, issue_project=""))
     recorded = artifacts.read_run(tmp_path)
     assert recorded.trigger == "issue"
     assert recorded.issue_url == "https://forge/issues/7"
+    assert recorded.issue_number == 7
+    assert recorded.issue_project == "acme/widgets"
 
 
 def test_a_pr_url_survives_a_re_entry(tmp_path):
