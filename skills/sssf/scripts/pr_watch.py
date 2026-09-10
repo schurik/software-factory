@@ -60,6 +60,10 @@ sys.path.insert(0, str(Path.cwd() / "adws"))      # the stamped factory in this 
 
 CONFIG = "adws/adw_sssf_config/sssf.config.yaml"
 ADW = "adws/adw_pr_review.py"
+# `adw_modules.hitl.EXIT_WAITING`, restated for the reason `issue_watch.py`
+# gives: this is read off another process's exit status, and that process runs
+# whatever version of the factory is stamped into the repo being watched.
+EXIT_WAITING = 75
 
 
 def _load(config_path: str):
@@ -184,6 +188,26 @@ def _mark(cfg, main_root, project: str, number: int, add: str = "", remove: str 
         print(f"  #{number}: {' · '.join(result.notes)}")
 
 
+def _waiting_on(cfg, main_root, number: int) -> str:
+    """The session already stopped at a gate on this pull request, or "".
+
+    A suspended run left its threads unresolved — which is the exact condition
+    that launched it — so `_has_work` says yes again on the very next poll and
+    the whole review starts over, and pays again, every interval until a person
+    answers. The `failed` label cannot be the guard the way it is for a run that
+    ended red: a run waiting for a human did not fail, and marking it so would
+    put a badge on the pull request that a person then has to clear by hand
+    before the work they approved may continue.
+    """
+    from adw_modules import artifacts
+    sessions = artifacts.sessions_root(main_root, cfg.defaults.data_dir)
+    urls = artifacts.pr_urls(sessions)
+    for adw_id in artifacts.waiting_sessions(sessions):
+        if _pr_number(urls.get(adw_id, "")) == number:
+            return adw_id
+    return ""
+
+
 def _launch(config_path: str, number: int, main_root) -> int:
     """Run one review ADW to completion and return its exit code.
 
@@ -192,7 +216,11 @@ def _launch(config_path: str, number: int, main_root) -> int:
     """
     argv = ["uv", "run", ADW, str(number), "--config", config_path]
     print(f"  #{number}: {' '.join(argv)}")
-    return subprocess.run(argv, cwd=str(main_root)).returncode
+    # This watcher's terminal is not the run's, for the reason `issue_watch`
+    # spells out at its own `_launch`: an inherited TTY would make a gate prompt
+    # whoever is watching the queue. See adw_modules/hitl.py `attended`.
+    env = {**os.environ, "SSSF_UNATTENDED": "1"}
+    return subprocess.run(argv, cwd=str(main_root), env=env).returncode
 
 
 # ── merged pull requests end their sessions ──────────────────────────────────
@@ -421,6 +449,12 @@ def once(config_path: str, only: int = 0, interval: int = 0) -> int:
             print(f"  #{number}: carries {failed_label} — a run already failed on "
                   f"it; remove the label to try again")
             continue
+        stalled = _waiting_on(cfg, main_root, number)
+        if stalled:
+            print(f"  #{number}: {stalled} is stopped at a gate — `just show {stalled}`, "
+                  f"then `just approve` / `just reject -m \"...\"` / `just abort`. "
+                  f"Relaunching now would re-run the review and stop there again")
+            continue
         if not _has_work(cfg, main_root, project, number):
             continue
         if _running_count(cfg, main_root) >= cfg.pull_requests.max_concurrent:
@@ -441,7 +475,17 @@ def once(config_path: str, only: int = 0, interval: int = 0) -> int:
             # The run's own report phase said WHAT happened in the threads; this
             # says whether it may be picked up again. Only the exit code knows,
             # and only this process ever sees it.
-            if code != 0:
+            #
+            # THREE OUTCOMES, NOT TWO: a run that stopped at a gate exits 75 with
+            # its worktree intact and a person's name on it. Marking that
+            # `failed` would badge the pull request for a run that did exactly
+            # what it was asked to do, and would make clearing a label the price
+            # of approving a plan. `_waiting_on` is what keeps the next poll off
+            # it instead.
+            if code == EXIT_WAITING:
+                print(f"  #{number}: stopped for a human at a gate — not marked "
+                      f"{failed_label}; `just pending` names the run")
+            elif code != 0:
                 _mark(cfg, main_root, project, number, add=failed_label)
     print(f"launched {launched} run(s)")
     _beat(cfg, main_root, "polling", project=project, interval=interval,

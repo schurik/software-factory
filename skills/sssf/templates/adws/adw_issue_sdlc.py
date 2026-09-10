@@ -7,7 +7,7 @@
 Usage:
     uv run adws/adw_issue_sdlc.py 42 [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4] [--resume] [--hitl all|none|every|plan]
 
-Phases: issue(fetch) -> planner -> git(commit_plan)
+Phases: issue(fetch) -> planner [-> engineer(approve_plan) -> planner(revise) ...] -> git(commit_plan)
         -> builder -> code(test) [-> builder(fix) -> code(test) ... bounded]
         -> reviewer [-> builder(revise) -> reviewer ... bounded]
         -> code(retest, only if a revision changed code)
@@ -36,6 +36,13 @@ checkout. Four things stand between those two facts, none sufficient alone:
     merge to a pull request for this run, in `integration.integrate()` rather
     than in config, so the work arrives somewhere a human looks at it.
 
+A fifth is available and off by default, and it is the only one that asks
+whether the work SHOULD happen rather than bounding what it may touch: the
+`plan` gate, turned on with `hitl.gates: {plan: on}` or `--hitl plan`. It hands
+the plan derived from the stranger's words to a person before any code exists.
+An issue run has no terminal, so an on-gate suspends the run at exit 75 rather
+than prompting; `just pending` lists it and `just approve` brings it back.
+
 The issue phase runs FIRST, before the worktree has been touched and before any
 agent is spawned, so an untrusted author or an unreadable issue costs nothing.
 """
@@ -43,10 +50,10 @@ agent is spawned, so an untrusted author or an unreadable issue costs nothing.
 import argparse
 import sys
 
-from adw_modules import (agents, changes, gates, git_helper, integration, issues,
-                         quality, session)
+from adw_modules import (agents, changes, gates, git_helper, hitl, integration,
+                         issues, quality, session)
 from adw_modules.data_types import (AgentCall, BuildOutput, ChangeCapture,
-                                    DocumentOutput, IntegrationRequest, IssueRef,
+                                    DocumentOutput, Gate, IntegrationRequest, IssueRef,
                                     IssueUpdate, PhaseParams, PlanOutput, ReviewOutput)
 
 REQUIRED_AGENTS = ["planner", "builder", "reviewer", "documenter"]
@@ -111,12 +118,24 @@ def main(number: int, config: str = "adws/adw_sssf_config/sssf.config.yaml",
               f"are in the envelope you were handed; the body is the artifact "
               f"that envelope names.")
 
+    plan_call = AgentCall(output_type=PlanOutput, prompt=prompt,
+                          previous=issues.as_envelope(issue),
+                          gates=[gates.artifacts_exist, gates.files_non_empty])
     with run.phase(PhaseParams(name="plan", kind="agent", owner="planner",
                                description="Turn the reported problem into an "
                                            "implementable plan")) as ph:
-        plan = ph.call(AgentCall(output_type=PlanOutput, prompt=prompt,
-                                 previous=issues.as_envelope(issue),
-                                 gates=[gates.artifacts_exist, gates.files_non_empty]))
+        plan = ph.call(plan_call)
+    # A human may stop here, as in every other planning chain — and this is the
+    # chain where that is worth the most, because the plan in front of them is
+    # the first thing anyone reads that was derived from a STRANGER'S words.
+    # The four boundaries above bound what an agent may do; this is the only one
+    # that asks whether it should. Off unless `hitl:` in the config or --hitl
+    # says otherwise. Nobody is at this run's terminal, so an on-gate does what
+    # `hitl.when_unattended` says: `suspend` (the default) stops the run at exit
+    # 75 with its worktree intact and the issue left on `sssf:running` for
+    # `just approve` / `just reject` / `just abort`; `auto` records a policy
+    # approval and goes on. See adw_modules/hitl.py.
+    plan = hitl.gated(run, Gate(name="plan", owner="planner", call=plan_call), plan)
 
     with run.phase(PhaseParams(name="commit_plan", kind="code", owner="git",
                                description="Put the spec on record before any code exists to blur it")) as ph:

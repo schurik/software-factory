@@ -11,9 +11,11 @@ for in `run.json`, exits the process with status 75, and leaves the worktree
 where it is. `just approve <adw_id>` writes the decision and re-launches the
 same workflow with `--resume`: replay answers every recorded agent phase from
 the record, the chain reaches the gate again, and this time the decision is
-there. A terminal prompt is a convenience over that — while stdin is a TTY the
-run asks in place and polls the same file, and `d` or `wait_seconds` turns the
-block into the suspend it would have been anyway.
+there. A terminal prompt is a convenience over that — while a person is at THIS
+RUN's terminal the run asks in place and polls the same file, and `d` or
+`wait_seconds` turns the block into the suspend it would have been anyway. A
+watcher's terminal, inherited by the run it launched, is not that terminal;
+`attended()` says how the two are told apart.
 
 THE DECISION NAMES WHAT IT DECIDED. `subject_digest` hashes the artifact files
 at the moment the human was asked; a decision whose digest does not match the
@@ -93,8 +95,30 @@ def read_decision(session_dir: Path, gate: str, round: int) -> Optional[Decision
 
 # ── the keyboard ─────────────────────────────────────────────────────────────
 
+UNATTENDED_ENV = "SSSF_UNATTENDED"    # a launcher saying "my terminal is not this run's"
+
+
 def attended() -> bool:
-    """Whether anyone can answer at this terminal. False under cron, a watcher, a test."""
+    """Whether anyone can answer at THIS RUN's terminal. False under cron, a watcher, a test.
+
+    A TTY test alone is not enough, because a TTY can be INHERITED. `issue_watch`
+    and `pr_watch` launch a chain with a blocking `subprocess.run` that passes
+    their own stdin straight through, so a watcher started by hand from a
+    terminal — `just up` in a window someone left open — hands every run it
+    starts a keyboard that looks exactly like the engineer's. Asking there
+    prompts whoever is watching the queue, about a plan they never asked to
+    read, interleaved with the poll log; and because the watchers are
+    deliberately serial, it stops the whole queue for `hitl.wait_seconds` (900
+    by default) before suspending anyway. Under cron the same run suspends at
+    once. Two very different behaviours from one line of config is the bug.
+
+    Only the LAUNCHER knows which it is, so the launcher says so: the watchers
+    set `SSSF_UNATTENDED` on the runs they start. `run.trigger` cannot answer
+    this — an engineer who types `uv run adws/adw_issue_sdlc.py 42` at their own
+    keyboard is on the `issue` trigger too, and should still be asked in place.
+    """
+    if os.environ.get(UNATTENDED_ENV, "").strip():
+        return False
     try:
         return sys.stdin.isatty() and sys.stdout.isatty()
     except (AttributeError, ValueError):
@@ -139,9 +163,10 @@ class HitlPolicy:
 
     `ask` is how an attended run asks in place: a callable taking the
     `WaitingFor` and returning `(verdict | "detach" | "", notes)`. None means
-    nobody is at the keyboard and the gate suspends at once. It lives here
-    because "is anyone attending" is a policy input, and because this is the
-    run-scoped object a test can hand a scripted answerer to.
+    nobody is at THIS RUN's keyboard — see `attended()`, which is not merely a
+    TTY test — and the gate suspends at once. It lives here because "is anyone
+    attending" is a policy input, and because this is the run-scoped object a
+    test can hand a scripted answerer to.
     """
 
     def __init__(self, config: HitlConfig, override: str = ""):

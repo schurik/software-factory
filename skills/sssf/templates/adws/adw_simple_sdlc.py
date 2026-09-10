@@ -204,6 +204,24 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml",
                                    description="Ship the write-up in its own commit, beside the code it describes")) as ph:
             commit(ph, document)
 
+        # The last place a person can say no, and the only gate here that cannot
+        # be answered with "revise": nothing owns the run's whole diff the way
+        # the planner owns its plan, so a reject would have no agent to send it
+        # to. `gated` makes that explicit — it aborts the run rather than
+        # pretending. No `owner` and no `call`; "" is Gate's own word for nobody
+        # can revise. Off unless `hitl.gates: {integrate: on}` or --hitl says so.
+        #
+        # THE SUBJECT IS THE CODE DIFF the `changes` phase captured against this
+        # run's pinned baseline — the same bytes the documenter was handed, and
+        # the thing worth a person's eyes before a branch moves. It does NOT
+        # include the write-up committed just above, which is that documenter's
+        # description of this very diff; re-capturing to fold it in would spend
+        # a phase to show the reviewer a paraphrase of what they are reading.
+        hitl.gated(run, Gate(name="integrate", paths=[changeset.diff_path],
+                             description="Hand the engineer this run's diff against "
+                                         "its baseline, before the branch moves"),
+                   document)
+
         with run.phase(PhaseParams(name="integrate", kind="code", owner="git",
                                    description="Land the run's branch on its base branch, "
                                                "the way this repository has said it wants "

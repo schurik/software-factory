@@ -25,16 +25,22 @@ budget:
   max_tokens: 0                    # tokens, whole session; 0 = no ceiling
 
 # Where a human may stop a run. A chain names its gates — `hitl.gated(...)` at
-# a call site: `plan` in every planning chain, `integrate` in simple_sdlc — and
-# this says which of them FIRE. Off by default, so a stamped repository behaves
-# exactly as it did. `--hitl all|none|every|plan,integrate` on any chain, or
-# SSSF_HITL, overrides all of it for one run.
+# a call site: `plan` in every planning chain including adw_issue_sdlc,
+# `integrate` in simple_sdlc — and this says which of them FIRE. Off by
+# default, so a stamped repository behaves exactly as it did.
+# `--hitl all|none|every|plan,integrate` on any chain, or SSSF_HITL, overrides
+# all of it for one run.
 #
 # A gate that fires stops the run: the process exits 75, `just pending` lists
 # it, `just show <id>` prints what it wants you to read, and `just approve`,
 # `just reject -m "..."` or `just abort` answer it. A reject goes back to the
 # agent that produced the artifact, in the same session, and the run asks
 # again. A gate the policy skips still writes a decision saying so.
+#
+# A WATCHER-LAUNCHED RUN NEVER PROMPTS, whether or not the watcher was started
+# from a terminal it could have prompted into: it suspends, and the issue keeps
+# its `sssf:running` label until a person answers. `when_unattended: auto` is
+# how you say such a run should carry on instead.
 hitl:
   default: off                     # off | on — for gates not named below
   gates: {}                        # by gate name: {plan: on, integrate: on}
