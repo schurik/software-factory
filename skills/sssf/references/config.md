@@ -6,6 +6,16 @@ It lives at **`adws/adw_sssf_config/sssf.config.yaml`** — the default path eve
 
 The stamped file is **generated for the harness the install chose**, out of three files in the skill: `templates/harnesses/<harness>/defaults.yaml`, the harness-agnostic `templates/config/base.yaml`, and `templates/harnesses/<harness>/agents.yaml`. Once stamped it is an ordinary file and yours to edit — including adding an agent on the other harness.
 
+### Upgrading a stamped repo
+
+`install.py` skips every file that already exists, so a plain re-run picks up **nothing** — that is what makes it safe to run twice, and also why a repo stamped months ago is still running the ADWs and the justfile it was stamped with. `--force` is the upgrade: it replaces every stamped path with the skill's current copy.
+
+**`--force` does not touch `sssf.config.yaml`.** Everything else under `adws/` and the justfile is a copy of skill code, and replacing it is what an upgrade *is*; the config is the opposite — it holds the answers only your repository has (`issues.project`, the route map, which gates are on, what a run may spend). Re-rendering it would have made the only way to receive a fix also the way to lose them.
+
+So when the skill's config has learned a block since you were stamped, `--force` writes the fresh render *beside* yours as **`sssf.config.yaml.new`** and says so, with both paths. Diff the two and merge what you want. Nothing is written when the render is identical to what you have. For a clean config instead: delete yours and re-run, or `make_config.py --force`, which regenerates that one file and touches nothing else.
+
+One caveat `--force` prints for itself: `adws/adw_modules/quality.py` is skill code with **your** commands written into it, so it is replaced and then re-detected from the repository. A block whose command is still discoverable comes back; one you tuned by hand does not.
+
 ## Shape
 
 ```yaml

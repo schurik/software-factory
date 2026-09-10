@@ -13,7 +13,10 @@ stamps THAT harness's world: adws/ (modules + starter ADWs), its prompt set
 under adws/adw_data/prompt_engineering/, its harness_engineering/ assets, a
 sssf.config.yaml assembled for it, its .env.sample, the justfile, and the
 .gitignore entries (including the per-run worktree directory).
-Existing files are skipped unless --force.
+Existing files are skipped unless --force. ONE FILE IS NEVER OVERWRITTEN, even
+then: `sssf.config.yaml` is the operator's — see `write_config`. Under --force a
+changed render lands beside it as `.new` and is reported, so receiving a fix to
+`adws/**` never costs you the answers only this repository has.
 
 It also reads the repository for its real test/lint/typecheck/build commands
 (`_detect.py`) and writes what it finds into the freshly stamped `quality.py`,
@@ -127,14 +130,44 @@ def ensure_env(root: Path, sample: Path, stamped: list, notes: list) -> None:
 
 
 def write_config(harness: str, dest: Path, force: bool,
-                 stamped: list, skipped: list) -> None:
-    """The one stamped file that is assembled rather than copied."""
-    if dest.exists() and not force:
+                 stamped: list, skipped: list, notes: list) -> None:
+    """The one stamped file that is assembled rather than copied — and the one
+    `--force` may not replace.
+
+    Every other stamped path is a COPY OF SKILL CODE, and replacing it is what
+    an upgrade is. This file is the opposite of that: its own header says `It is
+    yours the moment it is stamped — edit it here, never back inside the skill`,
+    and it holds the answers only this repository has — `issues.project`, the
+    route map, which gates are on, what a run may spend, the quality commands'
+    timeouts. Re-rendering it discards every one of them.
+
+    That put the tool in contradiction with itself. `--force` is the only way to
+    receive a fix to `adws/**` or the justfile, so the sole upgrade path was
+    also the one that destroyed the file the installer had told the operator to
+    own — silently, in the same breath as the fix they came for.
+
+    So an existing config is never rewritten. Under `--force`, when the fresh
+    render DIFFERS — the skill has learned a block since this repo was stamped —
+    it lands beside the real one as `.new` and is named loudly, and merging is
+    the operator's with a diff in front of them. Two ways to ask for a clean one
+    remain and are printed: delete this file and re-run, or `make_config.py
+    --force`, which exists for exactly that and touches nothing else.
+    """
+    if not dest.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(_harness.render_config(harness))
+        stamped.append(str(dest))
+        return
+    if not force:
         skipped.append(str(dest))
         return
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(_harness.render_config(harness))
-    stamped.append(str(dest))
+    fresh = _harness.render_config(harness)
+    if dest.read_text() == fresh:
+        skipped.append(str(dest))
+        return
+    proposed = dest.with_name(dest.name + ".new")
+    proposed.write_text(fresh)
+    notes.append(("config", str(dest), str(proposed)))
 
 
 def main() -> int:
@@ -161,8 +194,9 @@ def main() -> int:
           root / "adws" / "adw_data" / "prompt_engineering", args.force, stamped, skipped)
     stamp(harness_templates / "harness_engineering",
           root / "adws" / "adw_data" / "harness_engineering", args.force, stamped, skipped)
+    config_notes: list = []
     write_config(harness, root / "adws" / "adw_sssf_config" / "sssf.config.yaml",
-                 args.force, stamped, skipped)
+                 args.force, stamped, skipped, config_notes)
     stamp(harness_templates / "env.sample", root / ".env.sample",
           args.force, stamped, skipped)
     # The recipes are part of the operating experience, and several cookbooks
@@ -185,6 +219,30 @@ def main() -> int:
         print(f"    + {s}")
     if skipped:
         print(f"  skipped (already exist, use --force to overwrite): {len(skipped)}")
+    # Said after the file list and before anything else, because an operator who
+    # ran --force to pick up a fix came here for the fix and would scroll past a
+    # footnote. The one thing they must not do is assume their answers survived
+    # into a file they can see has been rewritten — so this says plainly that it
+    # was NOT, and where the new one is.
+    for _kind, mine, proposed in config_notes:
+        print("\n  YOUR CONFIG WAS NOT TOUCHED.")
+        print("  The skill's config has changed since this repo was stamped, and "
+              "--force\n  does not overwrite the one file you own. A fresh render "
+              "is beside yours:\n")
+        print(f"    yours: {mine}")
+        print(f"    new:   {proposed}\n")
+        print(f"  diff the two and merge what you want. For a clean one instead, "
+              f"delete\n  yours and re-run, or `uv run {SKILL_ROOT}/scripts/"
+              f"make_config.py --force`.")
+    # quality.py is skill code with the REPOSITORY's answers written into it, so
+    # --force replaces it and `_detect` re-reads this repo to re-wire it. That
+    # recovers a block whose command is still discoverable and loses one that was
+    # tuned by hand, which is worth saying out loud rather than leaving to be
+    # discovered by a run that suddenly lints nothing.
+    if args.force and detecting:
+        print("\n  adws/adw_modules/quality.py was replaced and re-detected from "
+              "this repo.\n  A block you had tuned by hand is now whatever was "
+              "detected below — check it.")
     # The justfile's operational recipes (up, issues, prs, kill, worktrees) run
     # scripts out of the skill, not out of this repo, and every agent keeps its
     # skills in a different place — so the justfile guesses nothing and this is
