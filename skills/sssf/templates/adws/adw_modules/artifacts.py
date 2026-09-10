@@ -91,6 +91,12 @@ def start_run(session_dir: Path, state: RunState) -> RunState:
         state.trigger = state.trigger or previous.trigger
         state.issue_url = state.issue_url or previous.issue_url
         state.pr_url = state.pr_url or previous.pr_url
+        # Spend is the session's, not the process's, and a new process starts
+        # its record at zero — so carrying it is what keeps `budget:` a ceiling
+        # on the work rather than on whoever happens to be running it. Dropping
+        # these two lines hands every re-entry a fresh wallet.
+        state.total_tokens = previous.total_tokens
+        state.total_cost = previous.total_cost
     write_run(session_dir, state)
     return state
 

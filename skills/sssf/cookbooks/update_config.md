@@ -125,8 +125,10 @@ behaviour, and they are edited by hand like everything else here:
 | Let issues start runs | `issues.enabled: true` + a `route` | Nothing launches without a routing label a human applied. `project` empty infers from the origin remote, which is fine from a terminal and wrong under cron |
 | Widen or narrow what an agent may touch | `writes:` per agent, `defaults.protected_files` | `tools` cannot do this job: `bash` runs `git checkout` and `write` reaches any path. Only `permissions.py` enforces, after every call |
 | Keep a successful run's worktree | `worktree.keep_on_success: true` | Useful while debugging a chain; costs disk per run otherwise |
+| Cap what a session may spend | `budget.max_cost_usd`, `budget.max_tokens` | Per **session**, not per process — a joined run counts from what the trace says was already spent. The ceiling stops the NEXT agent turn, never the one in flight, so nothing already paid for is thrown away. Ships off (`0`) |
+| Stop an agent hanging forever | `defaults.timeout_seconds`, or per agent | Wall clock for ONE turn, and each JSON re-prompt and gate correction gets its own. Raise it for an agent whose honest work is long before you blame the limit; `0` disables it |
 
-Full specs: [worktree](../references/config.md#worktree-per-run) · [integration](../references/config.md#worktreeintegration) · [issues](../references/config.md#issues) · [write permissions](../references/config.md#write-permissions--writes-and-protected_files).
+Full specs: [worktree](../references/config.md#worktree-per-run) · [integration](../references/config.md#worktreeintegration) · [issues](../references/config.md#issues) · [write permissions](../references/config.md#write-permissions--writes-and-protected_files) · [limits](../references/config.md#limits--what-a-run-may-spend-and-how-long-a-turn-may-take).
 
 ## Rules that do not bend
 

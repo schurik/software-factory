@@ -16,7 +16,11 @@ A module qualifies by exposing:
     validate_agent    harness-specific config problems for one agent, as strings
     new_session_id    a fresh id for this agent's context window
     ToolCallTracker   folds the CLI's event stream into tool_calls.py records
-    run               one non-interactive turn: AgentRequest -> AgentResult
+    run               one non-interactive turn: AgentRequest -> AgentResult,
+                      streaming, and armed with `limits.Deadline` over
+                      `request.timeout_seconds` — a harness that can block
+                      forever on a silent child is one the factory cannot
+                      recover from. See references/harnesses.md.
 
 `agents.py` dispatches on those names and knows nothing else about any harness.
 Everything downstream of the result — gates, permissions.py, the trace schema,

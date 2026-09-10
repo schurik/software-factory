@@ -71,6 +71,15 @@ Every run executes in its own git worktree, `<worktrees_dir>/<adw_id>`, on its o
 
 It is isolation, not a sandbox — an agent with `bash` can leave the worktree, and `permissions.py` is still the boundary. Details in [references/config.md](references/config.md#worktree-per-run).
 
+## What a run may spend, and how long a turn may take
+
+Two bounds, and both failures were silent before they existed.
+
+- **`defaults.timeout_seconds`** — 1800s of wall clock per agent turn, `0` disables it, any agent may raise its own. A harness call is a subprocess plus a blocking read of its output, so an agent that stops emitting blocks the run forever and puts nothing in the trace to notice. The child is killed and the phase fails as `agent_timeout`.
+- **`budget.max_cost_usd` / `budget.max_tokens`** — off by default. What one SESSION may spend across every process that joins it, counted from what the trace already recorded, so `--adw-id` re-entry cannot reset it. **A ceiling stops the next turn, never the one in flight**: the turn being paid for finishes and keeps its envelope, and the phase after it fails as `budget_exceeded`. The branch survives the abort like any other failed run, so `just integrate <adw_id>` still lands what was built.
+
+Neither is a sandbox — a run that means to spend $40 says so in the config. [references/config.md](references/config.md#limits--what-a-run-may-spend-and-how-long-a-turn-may-take).
+
 ## Request routing (lazy-load the cookbook, then follow it)
 
 | Request | Cookbook |
@@ -80,6 +89,7 @@ It is isolation, not a sandbox — an agent with `bash` can leave the worktree, 
 | create a new ADW / workflow | [cookbooks/create_adw.md](cookbooks/create_adw.md) |
 | land a run's branch, clean up worktrees | [references/config.md](references/config.md#worktreeintegration) |
 | pick a failed run back up where it stopped | [cookbooks/run_adw.md](cookbooks/run_adw.md) |
+| cap what a run may spend, stop a hung agent | [references/config.md](references/config.md#limits--what-a-run-may-spend-and-how-long-a-turn-may-take) |
 | start runs from tracked issues, run the watcher | [references/config.md](references/config.md#issues) |
 | start everything / "is the watcher even running?" | [references/config.md](references/config.md#running-the-watchers) |
 | answer review comments on a run's pull request | [references/config.md](references/config.md#pull_requests) |

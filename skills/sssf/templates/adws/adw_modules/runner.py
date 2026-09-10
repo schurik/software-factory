@@ -18,7 +18,7 @@ import json
 import time
 from contextlib import contextmanager
 
-from . import agents, artifacts, replay, worktree
+from . import agents, artifacts, limits, replay, worktree
 from .console import Console
 from .data_types import (AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams,
                          RunSpec)
@@ -53,7 +53,7 @@ class Run:
         self.console = Console(tracer, spec.adw_id)
         self.engineer = spec.engineer
         self.phases: list[Phase] = []
-        self.tokens = 0
+        self.tokens = 0                 # THIS process — what the banner reports
         self.cost = 0.0
         self._seq = 0                   # set below, once session_dir is known
         self.workspace = spec.workspace
@@ -85,6 +85,16 @@ class Run:
         # restarting at 1 — from the session's own event log, so it is right
         # with the db deleted.
         self._seq = artifacts.max_phase_seq(self.session_dir, spec.adw_id)
+        # What the SESSION had already spent before this process opened, read
+        # off its own run.json — never the db, which the factory must work
+        # without. A joined run (`--adw-id`, `just integrate`, a pr-review
+        # re-entry) is the same work continuing, so the budget counts from
+        # here, while `tokens`/`cost` above stay THIS process's and keep the
+        # banner reporting the run in front of the engineer. A new session has
+        # no record and answers (0, 0.0).
+        spent = artifacts.read_run(self.session_dir)
+        self._prior_tokens = spent.total_tokens if spent else 0
+        self._prior_cost = spent.total_cost if spent else 0.0
         self._agent_map_path = self.session_dir / "agent_map.json"
         self.agent_map: dict = (json.loads(self._agent_map_path.read_text())
                                 if self._agent_map_path.exists() else {})
@@ -196,6 +206,24 @@ class Run:
         self.tokens += tokens
         self.cost += cost
         self.tracer.session_add_usage(self.adw_id, tokens, cost)
+        # ...and into the session's own record, because the budget has to be
+        # readable by the next process without the db. Absolute totals, not an
+        # increment: this process knows what came before it, so nothing has to
+        # read-modify-write a number two runs could race on.
+        artifacts.update_run(self.session_dir,
+                             total_tokens=self._prior_tokens + self.tokens,
+                             total_cost=self._prior_cost + self.cost)
+
+    def overrun(self) -> str:
+        """Why this session may spend no more, or "" while it still may.
+
+        Deliberately a question and not an enforcement point: adding usage must
+        not raise, or a phase would die between paying for a turn and recording
+        it. `agents.execute` asks this before each send — see limits.py on why
+        a ceiling stops the next turn rather than the one in flight.
+        """
+        return limits.overrun(self._prior_tokens + self.tokens,
+                              self._prior_cost + self.cost, self.cfg.budget)
 
     # ── the phase primitive ─────────────────────────────────────────────────
     @contextmanager

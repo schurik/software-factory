@@ -340,6 +340,9 @@ class Tracer:
         self.processes_end_all(adw_id)   # nothing of this run is alive any more
 
     def session_add_usage(self, adw_id: str, tokens: int, cost: float) -> None:
+        """Spend, for the UI's card. The BUDGET reads `run.json`, not this row:
+        a ceiling that only worked where the db exists would be a ceiling this
+        factory cannot promise. See runner.add_usage, which writes both."""
         self.conn.execute(
             "UPDATE sessions SET total_tokens=total_tokens+?, total_cost=total_cost+? WHERE adw_id=?",
             (tokens, cost, adw_id),

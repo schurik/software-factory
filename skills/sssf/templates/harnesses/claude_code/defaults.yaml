@@ -22,6 +22,14 @@ defaults:
                                    # mapped to --effort, whose ladder starts two rungs
                                    # higher: `off` and `minimal` both collapse to `low`,
                                    # warned once per run and visible in the trace.
+  # Wall clock for ONE agent turn — a send, a JSON re-prompt, a gate correction,
+  # each measured on its own. A harness call is a subprocess plus a blocking read
+  # of its output, so an agent that stops emitting blocks the run forever: no
+  # events, no tokens, nothing to notice, until somebody runs `just kill`. This is
+  # what ends that — SIGTERM, then SIGKILL, then the phase fails with a named
+  # error. Generous on purpose; real work legitimately runs for minutes. Any agent
+  # may set its own, and 0 disables it.
+  timeout_seconds: 1800
   harness_engineering: []          # claude_code: `mcp:<file.json>`, `agents:<json-or-file>`
                                    # or `plugin:<dir-or-zip>`. NOT interchangeable with
                                    # pi's `-e <file.ts>` extensions, and suppressed by
