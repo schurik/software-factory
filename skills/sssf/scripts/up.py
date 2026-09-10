@@ -36,7 +36,8 @@ For an unattended deployment, the cron form is still the one in the justfile
 
 WHAT `status` ANSWERS. The other half of the same problem: is anything running
 right now, and did it poll recently. It reads the watcher heartbeats out of the
-trace db (`tracer.watcher_beat`, written by both watchers on every poll) and
+watcher heartbeat files (`adw_data/watchers/<kind>.json`, written by both
+watchers on every poll) and
 probes each recorded pid, so a watcher killed with SIGKILL reads as gone rather
 than as whatever its last row happened to say.
 """
@@ -394,9 +395,13 @@ def _pid_alive(pid: int) -> bool:
 
 def status(config_path: str) -> int:
     """One screen: what is watching, what is running, what is left behind."""
-    from adw_modules.tracer import running_adw_pids, watcher_states
+    from adw_modules import artifacts
     cfg, main_root, db = _load(config_path)
-    rows = watcher_states(db)
+    # Both from files, never from the db: `just status` has to answer on a
+    # machine where the trace db was deleted, or where the events go to a
+    # hosted API and there is no db at all. See adw_modules/artifacts.py.
+    sessions = artifacts.sessions_root(main_root, cfg.defaults.data_dir)
+    rows = artifacts.watcher_states(artifacts.watchers_dir(main_root, cfg.defaults.data_dir))
 
     print(f"repo:      {main_root}")
     print(f"db:        {db}{'' if db.exists() else '  (no runs yet)'}\n")
@@ -425,7 +430,7 @@ def status(config_path: str) -> int:
               f"last poll {_age(row.get('last_poll_at'))}"
               f"{'  · ' + note if note else ''}")
 
-    live_runs = {adw_id: pid for adw_id, pid in running_adw_pids(db).items()
+    live_runs = {adw_id: pid for adw_id, pid in artifacts.running_pids(sessions).items()
                  if _pid_alive(pid)}
     print(f"\nruns in flight: {len(live_runs)}")
     for adw_id, pid in sorted(live_runs.items()):
@@ -433,7 +438,7 @@ def status(config_path: str) -> int:
 
     try:
         from adw_modules import worktree
-        trees = worktree.inventory(main_root, cfg.worktree, str(db))
+        trees = worktree.inventory(main_root, cfg.worktree, str(sessions))
         if trees:
             print(f"\nworktrees: {len(trees)}   (`just worktrees` for detail)")
     except Exception:

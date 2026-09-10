@@ -312,9 +312,9 @@ The output contract lives in three places and they are one thing: the type in `d
   <img src="images/06_trace_path.svg" alt="Running agents to tracer.py to a WAL SQLite db with seven tables, read by a cursor poll query, with no websocket and no ingest endpoint" width="780">
 </p>
 
-One data path, no exceptions: **agents write to SQLite, readers poll SQLite.** The harness module (`adw_modules/harnesses/pi.py`, `claude_code.py`) tails the coding agent's JSONL stdout line by line and the tracer inserts each event while the agent is still working, so tool calls are visible mid-run instead of batched at the end.
+One data path, no exceptions: **agents write to SQLite, readers poll SQLite.** And only readers: the factory itself never queries it back — every question a run, `just kill`, `just status` or `just resume` asks about a session is answered from that session's own directory (`run.json`, `envelopes/`, `processes.jsonl`, `events.jsonl`). The db is a local mirror, so the day the events go to a hosted API instead, nothing but `tracer.py` changes. The harness module (`adw_modules/harnesses/pi.py`, `claude_code.py`) tails the coding agent's JSONL stdout line by line and the tracer inserts each event while the agent is still working, so tool calls are visible mid-run instead of batched at the end.
 
-Ten event types land across seven tables: `sessions`, `phases`, `events`, `envelopes`, `gate_results`, `agent_sessions`, and `processes` (adw_id to pid, so a stuck run can be found and stopped). Every event logs against both its `adw_id` and its `phase_id`, and `parent_id` nests spans, so an agent phase expands into its own tool calls.
+Eleven event types land across seven tables: `sessions`, `phases`, `events`, `envelopes`, `gate_results`, `agent_sessions`, and `processes` (adw_id to pid, so a stuck run can be found and stopped). Every event logs against both its `adw_id` and its `phase_id`, and `parent_id` nests spans, so an agent phase expands into its own tool calls.
 
 Pi announces a tool call across three raw events, so the interface folds them into exactly **one** `tool_call` row per real call. Each row is named the way you would read it aloud (`bash: ls -la src`) and carries `{tool, tool_call_id, args, result_snippet, ok, duration_ms, agent}`.
 
@@ -322,7 +322,7 @@ Pi announces a tool call across three raw events, so the interface folds them in
 select * from events where adw_id = ? and rowid > ? order by rowid limit 500;
 ```
 
-That one cursor query is the entire transport. Live view and full history are the same query at different cadence, which is why there is no ingest endpoint, no WebSocket, no backfill, and no separate replay path. Every connection opens WAL, so reads never block the running writers.
+That one cursor query is the entire transport. Live view and full history are the same query at different cadence, which is why there is no ingest endpoint, no WebSocket, no backfill, and no separate catch-up path. Every connection opens WAL, so reads never block the running writers.
 
 Files stay the raw record (`raw_output.jsonl`, `envelope.json`, `agent_map.json`). The db is the queryable mirror. Losing it loses nothing you cannot rebuild.
 
@@ -345,7 +345,7 @@ software-factory/
 │   ├── SKILL.md                        # hard rules + request routing table
 │   ├── cookbooks/                      # 10 orchestrator playbooks, loaded lazily
 │   ├── references/                     # config / handoff / observability specs
-│   ├── scripts/                        # install.py, uninstall.py, doctor.py, up.py, the watchers
+│   ├── scripts/                        # install.py, uninstall.py, doctor.py, up.py, resume.py, the watchers
 │   ├── apps/visualizer/                # the read-only trace UI (Vue + Vite on Bun)
 │   └── templates/                      # EXACTLY what install.py stamps
 │       ├── sssf.config.yaml            # the starter roster
@@ -395,6 +395,29 @@ uv run adws/adw_plan.py "add a /health endpoint"              # prints adw_id a1
 uv run adws/adw_build_test.py "implement the plan" --adw-id a1b2c3d4
 ```
 
+**A run that died part-way is picked up, not restarted.** Every multi-agent chain
+also takes `--resume`, and `just resume <adw_id>` is the short way to it: the
+agent phases the session already recorded are answered from its own session
+directory — no agent
+runs, nothing is spent, and their gates are still checked against the tree as it
+is now — while everything code owns runs again for real. So the suite re-runs
+against the tree the first run left, and the chain reaches the phase that
+actually failed instead of the top of the file.
+
+```bash
+just resume a1b2c3d4                 # same workflow, same session, replayed up to the failure
+just resume a1b2c3d4 --dry-run       # print the command it would run, run nothing
+```
+
+A record whose artifacts are gone — a pruned worktree re-created from its branch,
+say — fails its gates and that agent runs live instead. Nothing is trusted for
+being old; it is trusted because its gates still pass.
+
+The record is the session's own directory (`run.json`, `envelopes/<phase_id>.json`
+under `adw_data/sessions/<adw_id>/`), never the trace db — **a run only ever
+writes to sqlite.** Delete `sssf.db` to reclaim disk and the resume still works;
+all you lose is the visualizer's history.
+
 Watch a run with the trace db directly:
 
 ```bash
@@ -421,7 +444,7 @@ Honest edges, because knowing them is cheaper than discovering them.
 | The synced triad drifts | Type, `## Report` example, and `output_type=` disagree, so every call burns correction rounds | Grep the type name and fix all three in one edit |
 | Gates pass, output is bad | Gates check what a predicate can check, not plan quality or code taste | Run the `reviewer`, or read it yourself |
 | An agent edits something it should not | Detected and rolled back after the call, and the phase fails | Expected. Widen that agent's `writes` if the change was legitimate |
-| Commit phase has nothing to commit | `commit_all` raises if the tree is not a git repo or nothing changed | `git init` with one commit first. A no-op build fails the phase rather than committing nothing |
+| Commit phase has nothing to commit | `commit_all` raises if the tree is not a git repo or nothing changed | `git init` with one commit first. A no-op build fails the phase rather than committing nothing. A RESUMED run is the one exception: the commit its first run already made leaves a clean tree, and that is logged, not failed |
 | A green run left your branch unchanged | Runs commit to `sssf/<adw_id>` in their own worktree, not to your branch | Expected. `just integrate <adw_id>` lands it; `just worktrees` shows what is still around |
 | A pull request missing a later commit | A session keeps working after its PR is opened — a chain joined with `--adw-id` commits onto the same branch | Fixed: every commit phase pushes a branch that is already on the remote, and `just integrate <adw_id>` run again updates that PR instead of opening a second one. Read the commit phase's `pushed`/`notes` if it did not go out |
 | `install.py --force` | Overwrites **all** stamped files, config and prompts included | Commit before you force |

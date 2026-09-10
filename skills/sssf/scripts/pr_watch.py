@@ -118,20 +118,28 @@ def _beat(cfg, main_root, status: str, *, project: str = "",
     the heartbeat — an out-of-date repo loses the badge, not the watcher.
     """
     try:
+        from adw_modules import artifacts
         from adw_modules.tracer import watcher_beat
-        from adw_modules.utils import anchor
+        from adw_modules.utils import anchor, now_iso
     except ImportError:
         return
+    # The file is what `just status` reads (no db required); the db row is what
+    # the trace UI's badge renders. Same beat, both destinations.
+    artifacts.watcher_beat(
+        artifacts.watchers_dir(main_root, cfg.defaults.data_dir), "prs",
+        {"status": status, "pid": os.getpid(), "project": project,
+         "interval_s": interval, "note": note,
+         "started_at": now_iso(), "last_poll_at": now_iso()})
     watcher_beat(anchor(main_root, cfg.observability.db), "prs", status,
                  pid=os.getpid(), project=project, interval_s=interval, note=note)
 
 
 def _live(cfg, main_root) -> dict:
     """{adw_id: pid} for sessions whose process still exists."""
-    from adw_modules.tracer import running_adw_pids
-    from adw_modules.utils import anchor
+    from adw_modules import artifacts
     alive = {}
-    for adw_id, pid in running_adw_pids(anchor(main_root, cfg.observability.db)).items():
+    sessions = artifacts.sessions_root(main_root, cfg.defaults.data_dir)
+    for adw_id, pid in artifacts.running_pids(sessions).items():
         try:
             os.kill(pid, 0)
             alive[adw_id] = pid
@@ -230,18 +238,17 @@ def _reap(cfg, main_root, project: str) -> int:
     """
     from adw_modules import pull_requests, worktree
     from adw_modules.data_types import PullRequestRef
-    from adw_modules.tracer import session_adw_names, session_pr_urls
-    from adw_modules.utils import anchor
+    from adw_modules import artifacts
 
-    db = str(anchor(main_root, cfg.observability.db))
+    sessions = str(artifacts.sessions_root(main_root, cfg.defaults.data_dir))
     live = _live(cfg, main_root)
-    names = session_adw_names(db)
-    trees = {info.adw_id for info in worktree.inventory(main_root, cfg.worktree, db)}
+    names = artifacts.adw_names(sessions)
+    trees = {info.adw_id for info in worktree.inventory(main_root, cfg.worktree, sessions)}
     candidates = sorted(trees | set(live))
     if not candidates:
         return 0
 
-    urls = session_pr_urls(db)
+    urls = artifacts.pr_urls(sessions)
     reaped = 0
     for adw_id in candidates:
         number = _pr_number(urls.get(adw_id, ""))
@@ -265,7 +272,7 @@ def _reap(cfg, main_root, project: str) -> int:
                 print(f"    {names.get(adw_id) or 'a run'} is still working it "
                       f"(pid {live[adw_id]}) — left running; its commits would now "
                       f"push onto a landed branch. `just kill {adw_id}` to stop it")
-        _release(cfg, main_root, adw_id, db)
+        _release(cfg, main_root, adw_id, sessions)
         _mark(cfg, main_root, project, number,
               remove=cfg.pull_requests.states.failed)
         _drop_lock(cfg, main_root, project, number)
@@ -310,7 +317,7 @@ def _terminate(adw_id: str, pid: int) -> None:
               f"— not stopping it")
 
 
-def _release(cfg, main_root, adw_id: str, db: str) -> None:
+def _release(cfg, main_root, adw_id: str, sessions: str) -> None:
     """Give up the worktree, if the same rule `just worktrees-prune` uses allows.
 
     Re-read rather than reused from the caller's inventory: the SIGTERM above
@@ -319,7 +326,7 @@ def _release(cfg, main_root, adw_id: str, db: str) -> None:
     freed.
     """
     from adw_modules import worktree
-    for info in worktree.inventory(main_root, cfg.worktree, db):
+    for info in worktree.inventory(main_root, cfg.worktree, sessions):
         if info.adw_id != adw_id:
             continue
         if not worktree.reclaimable(info):

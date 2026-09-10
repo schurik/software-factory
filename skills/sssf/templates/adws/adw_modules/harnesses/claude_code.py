@@ -39,6 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..data_types import (AgentConfig, AgentRequest, AgentResult, Finding,
                           UsageBreakdown)
+from ..limits import AgentTimeout, Deadline
 from ..tool_calls import ToolCallLedger
 from ..utils import operator_env
 
@@ -465,9 +466,14 @@ def _stream(cmd: list[str], request: AgentRequest, result: AgentResult,
     if on_spawn:
         on_spawn(process.pid)
     model_id = ""
+    # Every read below goes through the deadline, and none of them can block
+    # forever: a CLI that stops emitting is the one failure this harness cannot
+    # otherwise recover from — no events, no tokens, nothing in the trace, and
+    # a run that sits there until somebody notices. limits.py has the why.
+    deadline = Deadline(process, request.timeout_seconds)
     with raw_path.open("a") as raw:
         assert process.stdout is not None
-        for line in process.stdout:
+        for line in deadline.lines():
             line = line.strip()
             if not line:
                 continue
@@ -505,10 +511,18 @@ def _stream(cmd: list[str], request: AgentRequest, result: AgentResult,
             if on_event:
                 on_event(event)
 
-    stderr = process.stderr.read() if process.stderr else ""
-    returncode = process.wait()
+    stderr = deadline.drain(process.stderr)
+    returncode = deadline.wait()
     if on_exit:
         on_exit(process.pid)
+    if deadline.fired:
+        # Ahead of the returncode, and it has to be: a terminated child exits
+        # non-zero, so without this the timeout would surface as an ordinary
+        # "claude exited -15" with no hint that the factory itself ended it.
+        # Whatever the agent did emit is already in raw_output.jsonl and in the
+        # trace; what is lost is this turn's usage, which Claude Code only
+        # reports in the final `result` event that never came.
+        raise AgentTimeout(deadline.reason(NAME, request.raw_output_path), result)
     return returncode, stderr
 
 

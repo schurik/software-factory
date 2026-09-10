@@ -7,6 +7,12 @@ minted and printed so the next ADW can pick it up.
 It is also the last moment a run can be refused for free, which is why
 `preflight.before_run` is the first thing it does — see that module.
 
+`resume=True` adds one thing to joining: the agent phases this session already
+recorded are handed back from its own directory instead of being asked again, so a
+chain that died in its last phase restarts AT that phase rather than at the top.
+It needs a pinned `adw_id` — there is nothing to resume without one — and
+everything code owns still runs for real. See `adw_modules/replay.py`.
+
 This is also where a run stops being able to hurt the engineer's checkout. The
 worktree is created here, before anything else exists, because everything
 downstream derives its tree from `run.repo_root`: agents are spawned in it, the
@@ -27,11 +33,11 @@ import signal
 import sys
 from pathlib import Path
 
-from . import git_helper, preflight, worktree
-from .data_types import RunSpec, SSSFConfig, WorktreeRequest
+from . import artifacts, git_helper, preflight, worktree
+from .data_types import RunSpec, RunState, SSSFConfig, WorktreeRequest
 from .runner import Run
 from .tracer import Tracer
-from .utils import anchor, engineer_name, new_id
+from .utils import anchor, engineer_name, new_id, now_iso
 
 
 def _finalize_when_killed(run: Run) -> None:
@@ -49,40 +55,58 @@ def _finalize_when_killed(run: Run) -> None:
     """
     def handler(signum, _frame):
         run.tracer.session_finish(run.adw_id, ok=False)   # also closes process rows
+        artifacts.finish_run(run.session_dir, "fail")     # and the session's own record
         raise SystemExit(128 + signum)
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, handler)
 
 
-def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
+def ensure(cfg: SSSFConfig, adw_id: str | None = None, resume: bool = False) -> Run:
+    if resume and not adw_id:
+        raise SystemExit("--resume needs --adw-id: there is nothing to resume without "
+                         "the session that recorded it. `just sessions` lists them.")
     adw_id = adw_id or new_id(8)
     main_root = git_helper.main_root()          # the engineer's checkout, always
-    # BEFORE the worktree, the session row and the process record exist. A run
-    # that cannot write its own trace, or whose base_ref does not resolve, dies
-    # a few seconds later having already minted a session and cut a branch —
-    # so it is refused here, while the repo is still untouched. Warnings survive
-    # to be said on the console below, where they are read.
+    # BEFORE the worktree, this session's run.json and its process record exist.
+    # A run that cannot write its own directory, or whose base_ref does not
+    # resolve, dies a few seconds later having already cut a branch and claimed
+    # an id — so it is refused here, while the repo is still untouched. Warnings
+    # survive to be said on the console below, where they are read.
     warnings = preflight.before_run(cfg, main_root)
     workspace = worktree.ensure(WorktreeRequest(main_root=main_root, adw_id=adw_id,
                                                 config=cfg.worktree))
     tracer = Tracer(anchor(main_root, cfg.observability.db),
                     anchor(main_root, f"{cfg.defaults.data_dir}/sessions/{adw_id}/events.jsonl"))
     run = Run(RunSpec(cfg=cfg, adw_id=adw_id, engineer=engineer_name(),
-                      workspace=workspace), tracer)
+                      workspace=workspace, resume=resume), tracer)
     tracer.session_start(adw_id, run.engineer, adw_name=Path(sys.argv[0]).stem)
-    # Read AFTER session_start, so a brand-new session has its row to read from
-    # and a joined one has the first process's answer rather than this one's
-    # default. An issue-triggered session that a later ADW re-enters must still
-    # know it was issue-triggered — integration.py refuses to merge on that —
-    # and a session whose branch is already a pull request must know THAT, or it
-    # proposes the branch a second time instead of pushing to the PR it has.
-    run.adopt_provenance(*tracer.session_provenance(adw_id))
+    # What the session already knows about itself, from its own directory. An
+    # issue-triggered session that a later ADW re-enters must still know it was
+    # issue-triggered — integration.py refuses to merge on that — and a session
+    # whose branch is already a pull request must know THAT, or it proposes the
+    # branch a second time instead of pushing to the PR it has.
+    recorded = artifacts.read_run(run.session_dir)
+    if recorded:
+        run.adopt_provenance(recorded.trigger, recorded.issue_url, recorded.pr_url)
     tracer.session_workspace(adw_id, workspace)
     # This process is the run. Record it before any phase opens, so a run that
     # hangs in its first agent call is still killable by adw_id.
     tracer.process_start(adw_id, "adw", "", os.getpid(),
                          " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]))
+    artifacts.record_process(run.session_dir, "adw", "", os.getpid(),
+                             " ".join([Path(sys.argv[0]).name, *sys.argv[1:]]))
+    # The same fact in the session's OWN directory, and the only place it is
+    # written whole: `command` is the argv as a list, so `just resume` can launch
+    # this workflow again without a db, without unquoting, and without the 500
+    # character clip the process row applies. artifacts.py says why files win.
+    artifacts.start_run(run.session_dir, RunState(
+        adw_id=adw_id, workflows=[Path(sys.argv[0]).stem],
+        command=[Path(sys.argv[0]).name, *sys.argv[1:]],
+        pid=os.getpid(), engineer=run.engineer, status="running",
+        started_at=now_iso(), repo_root=str(workspace.repo_root),
+        branch=workspace.branch, trigger=run.trigger,
+        issue_url=run.issue_url, pr_url=run.pr_url))
     _finalize_when_killed(run)
     run.console.session_started(adw_id, run.engineer)
     run.console.note(_workspace_line(workspace))
@@ -92,6 +116,8 @@ def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
         run.console.note(f"preflight — {finding.detail}")
         if finding.fix:
             run.console.note(f"fix: {finding.fix}")
+    if resume:
+        run.console.note(run.replay.summary())
     return run
 
 

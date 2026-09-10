@@ -87,14 +87,26 @@ def branch_exists(cwd: Pathish, name: str) -> bool:
                     f"refs/heads/{name}").returncode == 0
 
 
-def commit_all(cwd: Pathish, message: str) -> str:
-    """Stage the working tree and commit it. Returns the new short sha."""
+def commit_all(cwd: Pathish, message: str, allow_clean: bool = False) -> str:
+    """Stage the working tree and commit it. Returns the new short sha.
+
+    A clean tree is normally a failure: the phase before this one claimed to
+    change files and did not, and committing nothing would hide it.
+
+    `allow_clean` is for the one case where a clean tree is the expected answer
+    — a RESUMED run reaching a commit phase whose commit the first run already
+    made. There is nothing left to stage because the work is already on the
+    branch, so the empty string comes back and the caller says so, rather than
+    the run dying on a success it made itself.
+    """
     if not is_repo(cwd):
         raise RuntimeError(
             "not a git repository — a commit phase needs one. Run `git init` in the "
             "repo root (and make a first commit) before running an ADW that commits.")
     _git(cwd, "add", "-A")
     if not _git(cwd, "status", "--porcelain"):
+        if allow_clean:
+            return ""
         raise RuntimeError("nothing to commit — the preceding phases changed no files")
     _git(cwd, "commit", "-m", message)
     return _git(cwd, "rev-parse", "--short", "HEAD")

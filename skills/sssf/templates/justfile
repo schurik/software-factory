@@ -92,6 +92,17 @@ sdlc *ARGS:
 simple-sdlc *ARGS:
     uv run adws/adw_simple_sdlc.py --config {{config}} "$@"
 
+# ── pick a run back up ──────────────────────────────────────────────────────
+# A chain that died in its last phase has already paid for every phase before
+# it, and the trace kept them. This re-launches the same workflow against the
+# same session with --resume: the agent phases it recorded are answered from the
+# record, everything code owns runs again for real, and the run reaches the
+# phase that failed instead of the top. --dry-run prints the command only.
+
+# re-run a failed run from where it stopped: just resume <adw_id>
+resume ADW_ID *ARGS:
+    uv run {{skill}}/scripts/resume.py {{ADW_ID}} --config {{config}} {{ARGS}}
+
 # ── from an issue ───────────────────────────────────────────────────────────
 # The label is the authorization: a human applies it, the watcher only ever
 # looks at issues carrying it, and the flip off it is the lock. Off until

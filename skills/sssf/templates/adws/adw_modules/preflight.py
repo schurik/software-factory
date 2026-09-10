@@ -26,7 +26,11 @@ Two rules for anything added here:
    command that ends it just moves the search earlier; the point of asking now
    is that the answer is actionable while nothing has been spent.
 
-Nothing here knows what a phase is, and nothing here writes to the trace.
+Nothing here knows what a phase is, nothing here writes to the trace, and
+nothing here READS the trace db — the same rule the rest of the factory follows
+(`tracer.py`). Every answer comes from the config, the filesystem, the
+environment, or the harness itself, so these checks work identically on a repo
+whose db has been deleted and on one whose events go somewhere else entirely.
 """
 
 from __future__ import annotations
@@ -100,20 +104,28 @@ def repo(cfg: SSSFConfig, main_root: Path) -> list[Finding]:
 # ── runtime: where the record is written ─────────────────────────────────────
 
 def runtime(cfg: SSSFConfig, main_root: Path) -> list[Finding]:
-    """Whether `data_dir` and the trace db can actually be written.
+    """Whether the session's own directory, and the trace mirror, can be written.
 
     Anchored to the MAIN checkout, exactly as `session.ensure` anchors them, so
-    this asks the same question about the same directory. A read-only or
-    unwritable `data_dir` takes the session down at its first event, which is
-    after the first agent has already been spawned.
+    this asks the same question about the same directories. `data_dir` is the
+    one that matters: it holds `sessions/<adw_id>/`, and with it `run.json`,
+    `processes.jsonl`, `context_handoff/` and every envelope — the record every
+    other command in the factory reads back (`artifacts.py`). Unwritable, the
+    session dies at its first event, after the first agent has been spawned.
 
-    It creates the directory if it is missing and writes a probe file it then
-    removes — the same two things the run itself would do a moment later, which
-    is the only way to answer honestly. Nothing else is touched.
+    The db's directory is checked for the same reason and no other: `Tracer`
+    opens the file at session start, so it has to exist and be writable for a
+    run to begin. **Nothing here opens the db, and nothing in the factory ever
+    reads it** — it is a write-only mirror (see `tracer.py`), and the day the
+    events go to a hosted API this check is the only line that has to go.
+
+    Both are probed by creating the directory if missing and writing a file that
+    is then removed — the same two things the run itself would do a moment
+    later, which is the only way to answer honestly. Nothing else is touched.
     """
     findings: list[Finding] = []
     for label, target in (("data_dir", anchor(main_root, cfg.defaults.data_dir)),
-                          ("trace db", anchor(main_root, cfg.observability.db).parent)):
+                          ("trace mirror", anchor(main_root, cfg.observability.db).parent)):
         try:
             target.mkdir(parents=True, exist_ok=True)
             probe = target / ".sssf-write-probe"

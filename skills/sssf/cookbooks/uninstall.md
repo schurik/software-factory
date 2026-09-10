@@ -16,7 +16,7 @@ questions:
 
 | What goes | Why it is worth a sentence first |
 |---|---|
-| **The run record** — `adws/adw_data/sssf.db` and every session under `adws/adw_data/sessions/` | Every trace of every run this repo ever did: phases, envelopes, gate results, token spend. Nothing regenerates it. If any of it is wanted, copy the db out first — it is one file. |
+| **The run record** — every session under `adws/adw_data/sessions/` and the `adws/adw_data/sssf.db` mirror | Every trace of every run this repo ever did: phases, envelopes, gate results, token spend. Nothing regenerates it. The session directories are the record and the db is the queryable copy — to keep either, copy `adws/adw_data/` out first. |
 | **Your prompt and config edits** — `adws/adw_data/prompt_engineering/`, `sssf.config.yaml`, the quality commands in `adw_modules/quality.py` | Stamped once, then yours. A re-install brings back the starter versions, not the roster you tuned. Commit them, or copy `adws/` somewhere, if this repo might run the factory again. |
 | **Uncommitted work in a run's worktree** | A failed or killed run keeps its worktree on purpose, and that tree is the only place its uncommitted changes exist. `just worktrees` lists what is out there; look before deleting. |
 | **The branches** — only if asked | `sssf/<adw_id>` branches are the record of runs that never landed, and the script **keeps them by default**. `--branches` deletes them; the plan prints how many there are either way. |

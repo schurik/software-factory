@@ -26,6 +26,11 @@ preflight everything, and prints the answers with their fixes.
 `session.ensure()` asks the same module for the cheap subset before every single
 run — see `preflight.before_run`. Doctor is the full sweep, including the checks
 too slow or too situational to put in front of a scout run.
+
+Like everything else in the factory, it never reads the trace db: the answers
+come from the config, the filesystem, the environment and the harnesses, so
+`just doctor` works on a repo that has never run anything — and on one whose db
+was deleted.
 """
 
 from __future__ import annotations
