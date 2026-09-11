@@ -26,7 +26,7 @@ def test_a_fresh_repo_is_stamped_and_its_workflows_check(repo: Path):
     assert listed.returncode == 0 and "sdlc" in listed.stdout and "quick" in listed.stdout
     checked = asf(repo, "check")
     assert checked.returncode == 0, checked.stdout + checked.stderr
-    assert "✓ sdlc: plan -> build -> verify -> commit" in checked.stdout
+    assert "✓ sdlc: plan -> implement -> verify -> commit" in checked.stdout
 
 
 def test_the_runtime_and_the_worktrees_are_gitignored(repo: Path):

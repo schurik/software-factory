@@ -7,7 +7,7 @@
 
 Everything a workflow.yaml can get wrong is found here, before a session
 exists: a stage that is not in the vocabulary, an option no stage takes, a
-`verify` with no build to verify, an agent the roster does not have, a task
+`verify` with no implement before it, an agent the roster does not have, a task
 whose report block drifted from the envelope type, a binding that tries to
 widen what an agent may write. `asf.py check` is this function and nothing
 else, and `asf.py run` calls it first.

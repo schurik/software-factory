@@ -55,7 +55,7 @@ stage add its own static rule: `commit` requires `of:` to name an earlier
 stage whose output carries `commit_message`.
 
 `ctx.current(stage_name)` returns that stage's work product *as it stands
-now*: after `verify`, the build is the fixed build. `commit: {of: build}` lands
+now*: after `verify`, the build is the fixed build. `commit: {of: implement}` lands
 that one.
 
 A stage that must end the run without failing its phase raises `StageStop`.
@@ -74,9 +74,9 @@ agents:
 stages:
   - plan:   {agent: planner, hitl: true}
   - commit: {of: plan}
-  - build:  {agent: builder}
+  - implement: {agent: builder}
   - verify: {blocks: [test, lint], max_fix_loops: 3, fix: {agent: fixer}}
-  - commit: {of: build}
+  - commit: {of: implement}
 ```
 
 Rules, enforced at load:
@@ -122,7 +122,7 @@ the visualizer needs no port: the db and schema are shared with sssf, and
 
 ## Slices
 
-1. **Done:** plan, build, verify, commit; `sdlc` and `quick`; loader, runner,
+1. **Done:** plan, implement, verify, commit; `sdlc` and `quick`; loader, runner,
    installer; fake-harness e2e and layout tests.
 2. review, document, integrate stages; the gate-answering CLI; `just`
    recipes; `doctor`.

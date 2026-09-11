@@ -113,7 +113,7 @@ class StageContext:
         """The work product stage `stage_name` produced, AS IT STANDS NOW.
 
         A verify stage hands on a BuildOutput too — the build after its fix
-        loop — so `commit: {of: build}` must land that one, not the envelope
+        loop — so `commit: {of: implement}` must land that one, not the envelope
         the build stage wrote before the checks ran. The lookup is therefore
         by the named stage's output TYPE, latest wins; `results` keeps what
         each stage itself said, for anyone who wants the history.

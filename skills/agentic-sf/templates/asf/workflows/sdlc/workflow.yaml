@@ -7,7 +7,7 @@
 # stops for a human. Copy this directory to make a new one; the name is the
 # directory's.
 name: sdlc
-description: plan, build, verify, commit — for work whose shape is clear enough to plan in one pass
+description: plan, implement, verify, commit — for work whose shape is clear enough to plan in one pass
 input: prompt
 
 # Optional. Bind a roster agent under an alias with narrower writes or tools, a
@@ -19,6 +19,6 @@ input: prompt
 
 stages:
   - plan:   {agent: planner}              # hitl: true stops here for a person
-  - build:  {agent: builder}
+  - implement: {agent: builder}
   - verify: {blocks: [test], max_fix_loops: 3, fix: {agent: builder}}
-  - commit: {of: build}                   # only reached if verify held
+  - commit: {of: implement}               # only reached if verify held

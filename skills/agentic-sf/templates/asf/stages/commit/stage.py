@@ -2,7 +2,7 @@
 
 A code stage. `of:` names the stage whose work product this lands, AS IT
 STANDS NOW: `commit: {of: plan}` puts the spec on record before code exists,
-`commit: {of: build}` after a verify lands the build the fix loop amended, in
+`commit: {of: implement}` after a verify lands the build the fix loop amended, in
 the fix's words, not the envelope the build stage wrote before the checks ran.
 Each agent's `commit_message` describes its own work, and no agent's sentence
 is reused for another's diff.

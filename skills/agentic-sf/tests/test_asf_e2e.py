@@ -35,8 +35,8 @@ def test_sdlc_runs_green_end_to_end_and_lands_a_commit(stamped: Path):
     assert result.returncode == 0, result.stdout + result.stderr
     adw_id = adw_id_of(result)
 
-    assert phase_names(stamped, adw_id) == ["request", "plan", "build", "verify_1",
-                                            "commit_build"]
+    assert phase_names(stamped, adw_id) == ["request", "plan", "implement", "verify_1",
+                                            "commit_implement"]
     # The run's branch holds the work, in the builder's own words; the checkout
     # never saw it.
     assert git(stamped, "log", "-1", "--format=%s", f"asf/{adw_id}") == "feat: app"
@@ -62,8 +62,8 @@ def test_a_red_check_goes_back_to_the_builder_and_the_green_retry_lands(stamped:
     assert result.returncode == 0, result.stdout + result.stderr
     adw_id = adw_id_of(result)
 
-    assert phase_names(stamped, adw_id) == ["request", "plan", "build", "verify_1", "fix_1",
-                                            "verify_2", "commit_build"]
+    assert phase_names(stamped, adw_id) == ["request", "plan", "implement", "verify_1", "fix_1",
+                                            "verify_2", "commit_implement"]
     # The commit is the build as it stands after the fix, in the fix's words.
     assert git(stamped, "log", "-1", "--format=%s", f"asf/{adw_id}") == "feat: app, division fixed"
     # The fix was asked with the fix task, not the build task.
@@ -82,8 +82,8 @@ def test_an_exhausted_fix_loop_stops_the_run_before_anything_lands(stamped: Path
     adw_id = adw_id_of(result)
 
     names = phase_names(stamped, adw_id)
-    assert names == ["request", "build", "verify_1", "fix_1", "verify_2"]
-    assert "commit_build" not in names
+    assert names == ["request", "implement", "verify_1", "fix_1", "verify_2"]
+    assert "commit_implement" not in names
     assert run_state(stamped, adw_id)["status"] == "fail"
     assert "still failed after 2 attempt(s)" in result.stdout
     # Nothing landed, and the worktree was kept for whoever wants to look.
@@ -98,10 +98,10 @@ def test_a_workflow_s_own_task_and_appended_identity_reach_the_agent(stamped: Pa
         "description": "quick, with this repo's own words for the builder",
         "agents": {"builder": {"from": "builder", "system_append": ["agents/builder.md"],
                                "writes": ["app.py"]}},
-        "stages": [{"build": {"agent": "builder"}},
+        "stages": [{"implement": {"agent": "builder"}},
                    {"verify": {"blocks": ["test"], "max_fix_loops": 1}},
-                   {"commit": {"of": "build"}}],
-    }, tasks={"build": task_text("Build, our way", "TASK-MARKER-7", BUILD_REPORT)},
+                   {"commit": {"of": "implement"}}],
+    }, tasks={"implement": task_text("Implement, our way", "TASK-MARKER-7", BUILD_REPORT)},
        appends={"builder.md": "IDENTITY-MARKER-9: never touch the Makefile.\n"})
     commit_all(stamped)
 
@@ -122,8 +122,8 @@ def test_a_stage_s_hitl_option_stops_an_unattended_run_at_the_gate(stamped: Path
     write_workflow(stamped, "gated", {
         "description": "sdlc with a person between the plan and the build",
         "stages": [{"plan": {"agent": "planner", "hitl": True}},
-                   {"build": {"agent": "builder"}},
-                   {"commit": {"of": "build"}}],
+                   {"implement": {"agent": "builder"}},
+                   {"commit": {"of": "implement"}}],
     })
     commit_all(stamped)
 

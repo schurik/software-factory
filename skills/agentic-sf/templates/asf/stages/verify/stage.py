@@ -1,7 +1,7 @@
 """verify — run the repository's own checks, and send failures back to the
 builder a bounded number of times.
 
-A code stage that owns a loop. Which blocks run is `blocks:` — names from
+A code stage that owns a loop. It follows `implement`. It follows `implement`. Which blocks run is `blocks:` — names from
 `asf/engine/quality.py`, where the commands are written down, so no agent
 spends a context window rediscovering `bun test`. A red block does not fail
 the phase: the runner did its job, the code is what failed. The output travels

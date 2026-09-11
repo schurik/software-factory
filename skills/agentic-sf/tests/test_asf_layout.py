@@ -16,9 +16,9 @@ from engine.data_types import BuildOutput
 
 from .asf_helpers import BUILD_REPORT, fake_roster, task_text, write_workflow
 
-QUICK = [{"build": {"agent": "builder"}},
+QUICK = [{"implement": {"agent": "builder"}},
          {"verify": {"blocks": ["test"]}},
-         {"commit": {"of": "build"}}]
+         {"commit": {"of": "implement"}}]
 
 
 @pytest.fixture
@@ -37,7 +37,7 @@ def refused(name: str) -> str:
 
 def test_the_shipped_workflows_load_and_name_their_agents(factory_repo):
     sdlc = workflow.load("sdlc")
-    assert [s.stage.name for s in sdlc.steps] == ["plan", "build", "verify", "commit"]
+    assert [s.stage.name for s in sdlc.steps] == ["plan", "implement", "verify", "commit"]
     assert sdlc.required_agents == ["builder", "planner"]
     assert sdlc.steps[0].tasks["plan"].endswith("asf/stages/plan/task.md")
     quick = workflow.load("quick")
@@ -65,31 +65,31 @@ def test_a_stage_outside_the_vocabulary_is_refused_with_the_vocabulary(factory_r
                                          "stages": [{"deploy": {}}]})
     message = refused("bad")
     assert "'deploy' is not a stage" in message
-    assert "build, commit, plan, verify" in message
+    assert "commit, implement, plan, verify" in message
 
 
 def test_an_option_no_stage_takes_is_refused(factory_repo):
     write_workflow(factory_repo, "bad", {"description": "x",
-                                         "stages": [{"build": {"agent": "builder", "loops": 3}}]})
+                                         "stages": [{"implement": {"agent": "builder", "loops": 3}}]})
     assert "loops" in refused("bad")
 
 
 def test_a_verify_with_nothing_to_verify_is_refused(factory_repo):
     write_workflow(factory_repo, "bad", {"description": "x",
-                                         "stages": [{"verify": {}}, {"build": {}}]})
+                                         "stages": [{"verify": {}}, {"implement": {}}]})
     message = refused("bad")
     assert "verify: needs a BuildOutput" in message and "hands on nothing" in message
 
 
 def test_a_commit_of_a_stage_that_wrote_no_message_is_refused(factory_repo):
     write_workflow(factory_repo, "bad", {"description": "x",
-                                         "stages": [{"build": {}}, {"commit": {"of": "review"}}]})
+                                         "stages": [{"implement": {}}, {"commit": {"of": "review"}}]})
     assert "of: 'review' is not a stage before this one" in refused("bad")
 
 
 def test_an_agent_the_roster_lacks_is_refused(factory_repo):
     write_workflow(factory_repo, "bad", {"description": "x",
-                                         "stages": [{"build": {"agent": "coder"}}]})
+                                         "stages": [{"implement": {"agent": "coder"}}]})
     assert "agent 'coder' is neither in the roster nor bound" in refused("bad")
 
 
@@ -97,15 +97,15 @@ def test_a_task_whose_report_drifted_from_the_type_is_refused(factory_repo):
     drifted = {**BUILD_REPORT, "changed": ["app.py"]}
     del drifted["changed_files"]
     write_workflow(factory_repo, "bad", {"description": "x", "stages": QUICK},
-                   tasks={"build": task_text("Build", "m", drifted)})
+                   tasks={"implement": task_text("Implement", "m", drifted)})
     message = refused("bad")
     assert "['changed']" in message and "BuildOutput has no field" in message
 
 
 def test_a_task_that_omits_a_placeholder_is_refused(factory_repo):
-    text = task_text("Build", "m", BUILD_REPORT).replace("{{context_handoff_dir}}", "")
+    text = task_text("Implement", "m", BUILD_REPORT).replace("{{context_handoff_dir}}", "")
     write_workflow(factory_repo, "bad", {"description": "x", "stages": QUICK},
-                   tasks={"build": text})
+                   tasks={"implement": text})
     assert "does not mention {{context_handoff_dir}}" in refused("bad")
 
 
@@ -142,9 +142,9 @@ def test_an_alias_binds_a_roster_agent_under_a_new_name(factory_repo):
     write_workflow(factory_repo, "aliased", {
         "description": "x",
         "agents": {"fixer": {"from": "builder", "thinking": "high"}},
-        "stages": [{"build": {"agent": "builder"}},
+        "stages": [{"implement": {"agent": "builder"}},
                    {"verify": {"fix": {"agent": "fixer"}}},
-                   {"commit": {"of": "build"}}]})
+                   {"commit": {"of": "implement"}}]})
     loaded = workflow.load("aliased")
     assert loaded.required_agents == ["builder", "fixer"]
     fixer = next(a for a in loaded.cfg.agents if a.name == "fixer")
@@ -160,7 +160,7 @@ def test_an_alias_binds_a_roster_agent_under_a_new_name(factory_repo):
 def test_a_stage_s_hitl_option_lands_in_the_gate_policy(factory_repo):
     write_workflow(factory_repo, "gated", {
         "description": "x",
-        "stages": [{"plan": {"hitl": True}}, {"build": {}}, {"commit": {"of": "build"}}]})
+        "stages": [{"plan": {"hitl": True}}, {"implement": {}}, {"commit": {"of": "implement"}}]})
     assert workflow.load("gated").cfg.hitl.gates == {"plan": "on"}
     assert workflow.load("sdlc").cfg.hitl.gates == {}           # no opinion: factory.yaml's
 
