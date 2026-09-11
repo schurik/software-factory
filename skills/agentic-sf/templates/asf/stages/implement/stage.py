@@ -20,7 +20,7 @@ NAME = "implement"
 KIND = "agent"
 OUTPUT = BuildOutput
 NEEDS = ()
-TASKS = {"implement": "task.md"}
+TASKS = {"implement": ("task.md", BuildOutput)}
 
 
 class Options(BaseModel):

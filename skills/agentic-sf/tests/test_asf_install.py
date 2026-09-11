@@ -9,7 +9,9 @@ from .asf_helpers import asf, git, install
 STAMPED = ["asf/asf.py", "asf/factory.yaml", "asf/engine/session.py", "asf/engine/workflow.py",
            "asf/stages/plan/stage.py", "asf/stages/plan/task.md", "asf/stages/verify/fix.md",
            "asf/agents/planner/agent.yaml", "asf/agents/planner/system.md",
-           "asf/workflows/sdlc/workflow.yaml", ".env.sample", ".env"]
+           "asf/workflows/sdlc/workflow.yaml", "asf/workflows/ship/workflow.yaml",
+           "asf/stages/review/revise.md", "asf/agents/reviewer/system.md",
+           ".env.sample", ".env", "justfile"]
 
 
 def test_a_fresh_repo_is_stamped_and_its_workflows_check(repo: Path):
@@ -59,3 +61,12 @@ def test_an_unknown_or_unstampable_harness_is_refused(repo: Path):
     assert "unknown harness 'codex'" in install(repo, "--harness", "codex").stderr
     assert "unknown harness 'fake'" in install(repo, "--harness", "fake").stderr
     assert "pass --harness" in install(repo).stderr          # no terminal to ask on
+
+
+def test_a_foreign_justfile_is_left_alone_and_ours_lands_beside_it(repo: Path):
+    (repo / "justfile").write_text("# sssf starter recipes\ndefault:\n    @just --list\n")
+    result = install(repo, "--harness", "claude_code")
+    assert result.returncode == 0
+    assert (repo / "justfile").read_text().startswith("# sssf starter recipes")
+    assert (repo / "asf.justfile").read_text().startswith("# agentic-sf recipes.")
+    assert "just -f asf.justfile" in result.stdout

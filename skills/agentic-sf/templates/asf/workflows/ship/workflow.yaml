@@ -1,0 +1,22 @@
+# ship — the full chain. `asf run ship "<prompt>"`.
+#
+# Three commits, three work products, three authors: the plan, the code and
+# the write-up each land in their own commit, in the words of the agent that
+# produced it. The code commit lands only after the checks came back green
+# AND the reviewer approved, and the branch lands on the base branch only
+# after the integrate gate, when it is on. Turn the gates on per stage
+# (`hitl: true`) or for one run (`--hitl plan,integrate`).
+name: ship
+description: plan, implement, verify, review, document, integrate — three commits, for work whose shape is not obvious
+input: prompt
+
+stages:
+  - plan:      {agent: planner}                    # hitl: true stops here for a person
+  - commit:    {of: plan}                          # the spec on record before code blurs it
+  - implement: {agent: builder}
+  - verify:    {blocks: [test], max_fix_loops: 3, fix: {agent: builder}}
+  - review:    {agent: reviewer, max_rounds: 2, revise: {agent: builder}, retest: [test]}
+  - commit:    {of: implement}                     # green suite, approved review, only now
+  - document:  {agent: documenter}
+  - commit:    {of: document}
+  - integrate: {}                                  # hitl: true shows the whole diff first

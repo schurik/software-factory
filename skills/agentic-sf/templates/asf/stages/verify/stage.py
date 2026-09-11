@@ -25,7 +25,7 @@ NAME = "verify"
 KIND = "code"
 OUTPUT = BuildOutput                # the build as it stands after the last fix
 NEEDS = (BuildOutput,)
-TASKS = {"fix": "fix.md"}
+TASKS = {"fix": ("fix.md", BuildOutput)}
 
 
 class Fix(BaseModel):

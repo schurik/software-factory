@@ -20,7 +20,7 @@ NAME = "plan"
 KIND = "agent"
 OUTPUT = PlanOutput
 NEEDS = ()
-TASKS = {"plan": "task.md"}
+TASKS = {"plan": ("task.md", PlanOutput)}
 
 
 class Options(BaseModel):

@@ -33,7 +33,7 @@ from typing import Any, Literal, Optional
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import agents, factory, session, tasks
+from . import agents, factory, git_helper, session, tasks
 from .data_types import AgentConfig, EnvelopeBase, PhaseParams, SSSFConfig
 from .stage import StageContext, StageModule, StageStop, Step, load_registry
 
@@ -213,12 +213,11 @@ def _steps(spec: Spec, registry: dict[str, StageModule], cfg: SSSFConfig,
                             f"stage, but what precedes it hands on {got}")
         problems += [f"stages[{index}] {stage_name}: {p}" for p in stage.check(opts, earlier)]
         step = Step(stage=stage, opts=opts)
-        for key, filename in stage.tasks.items():
+        for key, (filename, answer_type) in stage.tasks.items():
             path = tasks.resolve(key, stage.directory / filename, directory)
             step.tasks[key] = str(path)
-            if stage.output is not None:
-                problems += [f"stages[{index}] {stage_name}: {p}"
-                             for p in tasks.check(path, stage.output)]
+            problems += [f"stages[{index}] {stage_name}: {p}"
+                         for p in tasks.check(path, answer_type)]
         _merge_hitl(cfg, stage, opts)
         steps.append(step)
         earlier[stage_name] = stage.output
@@ -269,6 +268,7 @@ def run(workflow: Workflow, prompt: str, adw_id: Optional[str] = None,
         ph.log(input=prompt, workflow=workflow.name,
                stages=" -> ".join(step.stage.name for step in workflow.steps))
     ctx = StageContext(run, workflow, prompt)
+    ctx.baseline = run.pin("baseline", lambda: git_helper.rev(run.repo_root, "HEAD"))
     accepted, reason = True, ""
     try:
         for step in workflow.steps:

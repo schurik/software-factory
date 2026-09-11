@@ -10,8 +10,8 @@ The same idea as sssf — deterministic code owns sequencing, retries and
 acceptance; coding agents work inside bounded phases; typed envelopes cross
 the seams; everything streams into SQLite — with a different surface:
 
-- **One entry point.** `uv run asf/asf.py run <workflow> "<prompt>"`. `list` and
-  `check` beside it.
+- **One entry point.** `just do "<prompt>"`, or `uv run asf/asf.py run <workflow>
+  "<prompt>"`. `list`, `check`, `doctor` and the gate verbs beside it.
 - **A workflow is a directory**, not a script you copy. `workflow.yaml` names
   stages from a closed vocabulary and gives each its options. Loops and
   conditions live in the stages; the YAML gets numbers.
@@ -30,8 +30,8 @@ Two steps. Then stop.
 
 1. If `asf/factory.yaml` does not exist, say in one line that the factory is
    not installed here and offer the install cookbook. Otherwise:
-2. Run `uv run asf/asf.py list` and print it — one line per workflow, name and
-   description — and **wait for the engineer's request.**
+2. Run `just list` (or `uv run asf/asf.py list`) and print it — one line per
+   workflow, name and description — and **wait for the engineer's request.**
 
 Nothing else. No trace-db queries, no reading the config, no reading stages
 or engine code, no "current state" summary. Everything below is lazy-loaded
@@ -70,8 +70,9 @@ turns on with `hitl: true` stops the run with exit 75 and the session reading
 
 | Request | Do |
 |---|---|
-| install / set up the factory here | `uv run <skill>/scripts/install.py --harness claude_code\|pi`, then `uv run asf/asf.py check` |
-| run a workflow | `uv run asf/asf.py run <name> "<prompt or path>" [--hitl all\|none\|plan]` |
+| install / set up the factory here | `uv run <skill>/scripts/install.py --harness claude_code\|pi`, then `just doctor` |
+| "is this repo ready to run?" / something failed before the first phase | `just doctor` — every check with its fix, then every workflow checked; spawns nothing |
+| run a workflow | `just do "<prompt>"` (sdlc), `just quick`, `just ship`, or `just run <name> "<prompt>" [--hitl all\|none\|plan]` |
 | which workflows exist / what does X do | `uv run asf/asf.py list`; read `asf/workflows/<name>/workflow.yaml` |
 | is this workflow runnable | `uv run asf/asf.py check <name>` — spawns nothing, names every problem |
 | create a workflow | copy the closest directory under `asf/workflows/`, edit `workflow.yaml`, run `check`. Read [references/design.md](references/design.md#workflows) first |
@@ -79,8 +80,9 @@ turns on with `hitl: true` stops the run with exit 75 and the session reading
 | tailor an agent's IDENTITY for one workflow | bind it in `workflow.yaml` under `agents:` with `system_append: [agents/<x>.md]` — append, never replace |
 | change an agent for every workflow | edit `asf/agents/<name>/agent.yaml` or `system.md` |
 | add a stage to the vocabulary | a directory under `asf/stages/` meeting the contract in `asf/engine/stage.py`; [references/design.md](references/design.md#stages) |
-| pick a failed run back up | re-run with `--adw-id <id> --resume` |
-| a run is waiting at a gate | read `asf/data/sessions/<id>/run.json` `waiting_for`; answering needs `engine.hitl.answer(...)` until the gate CLI lands |
+| pick a failed run back up | `just resume <id>` — replays recorded agent phases, re-runs what code owns |
+| a run is waiting at a gate / "why is this run waiting?" | `just pending`, `just show <id>`, then `just approve <id> [-m]`, `just reject <id> -m "..."` or `just abort <id>`. Never approve on the engineer's behalf |
+| watch a run | `just sessions`, `just phases <id>`, `just tail <id>`; `just obs` boots sssf's visualizer over the shared db |
 
 ## Hard rules
 
@@ -103,7 +105,9 @@ turns on with `hitl: true` stops the run with exit 75 and the session reading
 
 ## What is not here yet
 
-This is slice one: plan, implement, verify, commit; two workflows; the loader and
-runner; the installer. Not yet ported from sssf: review, document, integrate
-stages; issue and pull-request inputs; the gate-answering CLI; doctor; the
-justfile. The visualizer needs no port — same db, same schema.
+Slices one and two: plan, implement, verify, review, document, commit,
+integrate; `sdlc`, `quick` and `ship`; the loader and runner; the gate CLI;
+doctor; the justfile. Not yet ported from sssf: issue and pull-request inputs
+and their watchers, `up`/`status`, kill, worktree pruning, uninstall. The
+visualizer needs no port — same db, same schema; `just obs` needs `SSSF_SKILL`
+in `.env` pointing at the sssf skill.
