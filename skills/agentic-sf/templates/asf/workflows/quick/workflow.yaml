@@ -1,0 +1,12 @@
+# quick — no plan. `asf run quick "<prompt>"`.
+#
+# For a change you could describe to a colleague in one sentence: the builder
+# works from the prompt alone, the checks decide, the commit lands what held.
+name: quick
+description: implement straight from the prompt, verify, commit — for a change one sentence describes
+input: prompt
+
+stages:
+  - implement: {agent: builder}
+  - verify: {blocks: [test], max_fix_loops: 2, fix: {agent: builder}}
+  - commit: {of: implement}

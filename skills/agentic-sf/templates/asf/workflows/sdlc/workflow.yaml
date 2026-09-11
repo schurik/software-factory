@@ -1,0 +1,24 @@
+# sdlc — the default. `asf run sdlc "<prompt>"`.
+#
+# A workflow is a list of stages from the vocabulary in asf/stages/, each with
+# the options that stage takes and nothing else. Loops and conditions live in
+# the stages (verify owns its fix loop), so what you can change here is policy:
+# how many attempts, which checks, which agent plays which part, which gate
+# stops for a human. Copy this directory to make a new one; the name is the
+# directory's.
+name: sdlc
+description: plan, implement, verify, commit — for work whose shape is clear enough to plan in one pass
+input: prompt
+
+# Optional. Bind a roster agent under an alias with narrower writes or tools, a
+# different model, or text appended to its system prompt (a path relative to
+# this directory). A binding may narrow the roster's boundary, never widen it,
+# and may append to an identity, never replace it.
+# agents:
+#   planner: {from: planner, model: opus, system_append: agents/planner.md}
+
+stages:
+  - plan:   {agent: planner}              # hitl: true stops here for a person
+  - implement: {agent: builder}
+  - verify: {blocks: [test], max_fix_loops: 3, fix: {agent: builder}}
+  - commit: {of: implement}               # only reached if verify held

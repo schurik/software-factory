@@ -1,0 +1,43 @@
+# asf/factory.yaml — the manifest of this repository's factory.
+#
+# GENERATED at install time for the **claude_code** harness. It is yours the
+# moment it is stamped — edit it here, never back inside the skill.
+#
+# `harness: claude_code` runs `claude -p`. `model` is an alias (opus | sonnet |
+# haiku) or a full id, and the CLI brings its own auth: a Claude subscription
+# runs this factory with no API key at all. An agent may name another harness
+# in its own agent.yaml; one workflow may mix them.
+defaults:
+  harness: claude_code
+  model: sonnet                    # alias or full id; a pi `provider/id` is rejected
+  thinking: medium                 # off | minimal | low | medium | high | xhigh | max
+  timeout_seconds: 1800            # wall clock per agent TURN; 0 disables
+  harness_engineering: []          # `mcp:<file.json>`, `agents:<json-or-file>`, `plugin:<dir>`
+  # Roster-wide tool allowlist; an agent.yaml may narrow it with its own list.
+  tools:
+    - Read
+    - Bash
+    - Edit
+    - Write
+    - Grep
+    - Glob
+  harness_options:
+    claude_code:
+      safe_mode: true              # no CLAUDE.md, skills, plugins, hooks or MCP servers:
+                                   # a run must not depend on whose machine ran it
+      bare: false
+      setting_sources: []
+      strict_mcp_config: true
+      permission_mode: bypassPermissions   # root? use acceptEdits
+      add_dirs: []
+      max_budget_usd: 0
+  # Off-limits to every agent that does not name them in its own `writes`. An
+  # agent must not be able to edit the machinery that judges its own work.
+  protected_files:
+    - asf/engine/
+    - asf/stages/
+    - asf/workflows/
+    - asf/agents/
+    - asf/factory.yaml
+    - asf/asf.py
+  data_dir: asf/data               # runtime home: {data_dir}/sessions/{adw_id}/

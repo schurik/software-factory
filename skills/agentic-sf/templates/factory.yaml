@@ -1,0 +1,49 @@
+
+# ── the harness-agnostic rest ────────────────────────────────────────────────
+#
+# Everything a run needs that is not the roster. Agents are NOT here: an agent
+# is a directory under asf/agents/ (agent.yaml + system.md), and a workflow is
+# a directory under asf/workflows/. This file is the manifest they plug into.
+
+# What one SESSION may spend, across every process that joins it. Both off by
+# default (0 = no ceiling); set them where nobody is watching. A ceiling stops
+# the NEXT agent turn, never the one in flight.
+budget:
+  max_cost_usd: 0
+  max_tokens: 0
+
+# Where a human may stop a run. A stage names its gate (`plan` in the plan
+# stage); a workflow turns it on with `hitl: true` on that stage; this block is
+# the default underneath, and `--hitl` on the command line beats both.
+# A gate that fires stops the run with exit 75 and the session reading
+# `waiting`; nothing spends while it waits.
+hitl:
+  default: off                     # off | on — for gates no workflow names
+  gates: {}                        # by gate name: {plan: on}
+  wait_seconds: 900                # attended: prompt this long, then suspend
+  max_rounds: 0                    # 0 = until you approve or abort
+  when_unattended: suspend         # suspend | auto
+  notify_command: []               # run on suspend, subject on stdin
+
+# The trace. SHARED WITH SSSF ON PURPOSE: both factories write the same
+# schema, so one db and one visualizer show every run side by side. Point it
+# elsewhere if sssf is not installed and you would rather keep it under asf/.
+observability:
+  db: adws/adw_data/sssf.db
+  poll_ms: 500
+
+# Every run gets its own git worktree on its own branch, cut from a base ref
+# pinned at run start. The engineer's working tree is never touched.
+worktree:
+  enabled: true
+  dir: .asf-worktrees              # relative to the main checkout; gitignored
+  branch_prefix: "asf/"            # the run's branch is <prefix><adw_id>
+  base_ref: ""                     # "" = whatever the main checkout has checked out
+  keep_on_success: false
+  integration:
+    mode: merge                    # none | merge | pr
+    merge_flags: ["--no-ff"]
+    remote: origin
+    open_pr: false
+    pr_command: ["gh", "pr", "create", "--fill"]
+    pr_body_template: ""

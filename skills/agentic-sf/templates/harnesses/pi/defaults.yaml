@@ -1,0 +1,35 @@
+# asf/factory.yaml — the manifest of this repository's factory.
+#
+# GENERATED at install time for the **pi** harness. It is yours the moment it
+# is stamped — edit it here, never back inside the skill.
+#
+# `harness: pi` runs `pi -p --mode json`. `model` is `provider/model-id`,
+# resolved against `pi --list-models`, and the provider half decides which key
+# must be in `.env`. An agent may name another harness in its own agent.yaml.
+defaults:
+  harness: pi
+  model: google/gemini-3.6-flash   # provider/id — a bare id is ambiguous and refused
+  thinking: medium                 # off | minimal | low | medium | high | xhigh | max
+  timeout_seconds: 1800            # wall clock per agent TURN; 0 disables
+  harness_engineering: []          # extension file paths, loaded with `pi -e <file.ts>`
+  # Roster-wide tool allowlist; an agent.yaml may narrow it with its own list.
+  tools:
+    - read
+    - bash
+    - edit
+    - write
+    - grep
+    - find
+    - ls
+  harness_options:
+    pi: {}
+  # Off-limits to every agent that does not name them in its own `writes`. An
+  # agent must not be able to edit the machinery that judges its own work.
+  protected_files:
+    - asf/engine/
+    - asf/stages/
+    - asf/workflows/
+    - asf/agents/
+    - asf/factory.yaml
+    - asf/asf.py
+  data_dir: asf/data               # runtime home: {data_dir}/sessions/{adw_id}/
