@@ -6,7 +6,7 @@
 # in CI, with no arguments to remember.
 
 [tool.pytest.ini_options]
-testpaths = ["skills/sssf/tests"]
+testpaths = ["skills/sssf/tests", "skills/agentic-sf/tests"]
 # Failures print the assertion and stop at the tenth — a suite that scrolls off
 # the top of a CI log is one nobody reads.
 addopts = "-q --maxfail=10"

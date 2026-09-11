@@ -1,0 +1,61 @@
+"""The installer, as a subprocess, into a fresh repository."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from .asf_helpers import asf, git, install
+
+STAMPED = ["asf/asf.py", "asf/factory.yaml", "asf/engine/session.py", "asf/engine/workflow.py",
+           "asf/stages/plan/stage.py", "asf/stages/plan/task.md", "asf/stages/verify/fix.md",
+           "asf/agents/planner/agent.yaml", "asf/agents/planner/system.md",
+           "asf/workflows/sdlc/workflow.yaml", ".env.sample", ".env"]
+
+
+def test_a_fresh_repo_is_stamped_and_its_workflows_check(repo: Path):
+    result = install(repo, "--harness", "claude_code")
+    assert result.returncode == 0, result.stdout + result.stderr
+    for relative in STAMPED:
+        assert (repo / relative).is_file(), relative
+    assert "harness: claude_code" in (repo / "asf" / "factory.yaml").read_text()
+    assert "ASF_SKILL=" in (repo / ".env").read_text()
+    # Detected from the fixture's pyproject, written into the stamped quality.py.
+    assert '"pytest"' in (repo / "asf" / "engine" / "quality.py").read_text()
+
+    listed = asf(repo, "list")
+    assert listed.returncode == 0 and "sdlc" in listed.stdout and "quick" in listed.stdout
+    checked = asf(repo, "check")
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "✓ sdlc: plan -> build -> verify -> commit" in checked.stdout
+
+
+def test_the_runtime_and_the_worktrees_are_gitignored(repo: Path):
+    install(repo, "--harness", "pi")
+    ignored = (repo / ".gitignore").read_text().splitlines()
+    for entry in ("asf/data/", "adws/adw_data/sssf.db*", ".asf-worktrees/", ".env"):
+        assert entry in ignored
+    git(repo, "add", "-A")
+    staged = git(repo, "diff", "--cached", "--name-only").splitlines()
+    assert not [p for p in staged if p.startswith("asf/data/") or p == ".env"]
+
+
+def test_a_second_install_skips_and_force_keeps_the_operator_s_config(repo: Path):
+    install(repo, "--harness", "claude_code")
+    again = install(repo, "--harness", "claude_code")
+    assert "skipped" in again.stdout and "stamped: 0 file" in again.stdout
+
+    config = repo / "asf" / "factory.yaml"
+    config.write_text(config.read_text() + "\n# mine\n")
+    engine = repo / "asf" / "engine" / "utils.py"
+    engine.write_text("# clobbered\n")
+    forced = install(repo, "--harness", "claude_code", "--force")
+    assert forced.returncode == 0
+    assert "# clobbered" not in engine.read_text()          # skill code is replaced
+    assert config.read_text().endswith("# mine\n")          # the operator's file is not
+    assert (repo / "asf" / "factory.yaml.new").is_file()    # the fresh render sits beside it
+
+
+def test_an_unknown_or_unstampable_harness_is_refused(repo: Path):
+    assert "unknown harness 'codex'" in install(repo, "--harness", "codex").stderr
+    assert "unknown harness 'fake'" in install(repo, "--harness", "fake").stderr
+    assert "pass --harness" in install(repo).stderr          # no terminal to ask on

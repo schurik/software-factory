@@ -1,6 +1,6 @@
 name: CI
 
-# The factory stamps ~26k lines of Python into other people's repositories.
+# Two factories (skills/sssf, skills/agentic-sf) stamp Python into other people's repositories.
 # Everything below runs without an agent, without a network call and without a
 # token: the `fake` harness answers from a script, so a whole ADW chain — phases,
 # gates, retries, envelopes, permissions, budgets, the trace — is exercised here
@@ -124,6 +124,54 @@ jobs:
           # A chain's commit phase runs `git add -A`; anything staged here that
           # belongs to the runtime would be committed into the user's repo.
           if git diff --cached --name-only | grep -E '^adws/adw_data/sessions/|\.pyc$|^\.sssf-worktrees/'; then
+            echo "::error::the install staged its own runtime — check GITIGNORE_ENTRIES"
+            exit 1
+          fi
+
+  smoke-asf:
+    name: agentic-sf install into a scratch repo
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        harness: [claude_code, pi]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Configure git
+        run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "asf ci"
+          git config --global init.defaultBranch main
+
+      # The second factory, stamped the way a user stamps it — through uv, so
+      # the PEP-723 headers on install.py and asf.py are what gets proved.
+      - name: Stamp agentic-sf into a fresh repository
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/asf-scratch"
+          cd "$RUNNER_TEMP/asf-scratch"
+          git init -q .
+          printf '# scratch\n' > README.md
+          printf '[tool.pytest.ini_options]\n' > pyproject.toml
+          git add -A && git commit -qm init
+          uv run "$GITHUB_WORKSPACE/skills/agentic-sf/scripts/install.py" \
+            --harness "${{ matrix.harness }}"
+
+      # `check` loads every workflow — roster, stages, bindings, task files
+      # against their types — and spawns nothing. A stamped repo whose own
+      # workflows do not check is a broken install that looks like a working one.
+      - name: Every stamped workflow checks
+        run: |
+          set -euxo pipefail
+          cd "$RUNNER_TEMP/asf-scratch"
+          uv run asf/asf.py list
+          uv run asf/asf.py check
+          git add -A
+          if git diff --cached --name-only | grep -E '^asf/data/|\.pyc$|^\.asf-worktrees/|^\.env$'; then
             echo "::error::the install staged its own runtime — check GITIGNORE_ENTRIES"
             exit 1
           fi
