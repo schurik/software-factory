@@ -16,8 +16,11 @@ A stage module exposes, at module level:
                previous one through unchanged (a commit changes nothing)
     NEEDS      envelope types an earlier stage must have produced, as a tuple;
                () when the stage can start from the prompt alone
-    TASKS      {key: filename} — the task files this stage renders for agents,
-               each resolvable by a workflow-local override `tasks/<key>.md`
+    TASKS      {key: (filename, EnvelopeType)} — the task files this stage
+               renders for agents, each with the envelope type the agent is
+               asked to answer with (a review stage asks for a ReviewOutput
+               and hands on a BuildOutput), each resolvable by a
+               workflow-local override `tasks/<key>.md`
     Options    a pydantic model of the options workflow.yaml may pass, with
                extra="forbid" so a misspelt key is refused before anything runs
     run        run(ctx: StageContext, opts: Options) -> EnvelopeBase | None
@@ -66,7 +69,7 @@ class StageModule:
     kind: str
     output: Optional[type[EnvelopeBase]]
     needs: tuple[type[EnvelopeBase], ...]
-    tasks: dict[str, str]
+    tasks: dict[str, tuple[str, type[EnvelopeBase]]]
     options: type[BaseModel]
 
     def run(self, ctx: "StageContext", opts: BaseModel) -> Optional[EnvelopeBase]:
@@ -98,6 +101,11 @@ class StageContext:
         self.results: dict[str, EnvelopeBase] = {}          # by stage name: what it produced
         self.latest: dict[type, EnvelopeBase] = {}          # by type: the work product as it stands
         self.step: Optional[Step] = None
+        # The commit the run started from, pinned before any stage commits:
+        # what `document` and `integrate` diff against. `run.pin` hands a
+        # resumed run the value the first run derived, so a resume whose HEAD
+        # now carries the first run's commits does not measure from after them.
+        self.baseline: str = ""
 
     def begin(self, step: Step) -> None:
         self.step = step
@@ -173,11 +181,15 @@ def _load_one(directory: Path, source: Path) -> StageModule:
         if not isinstance(module.NEEDS, tuple) or not all(_is_envelope(t) for t in module.NEEDS):
             problems.append("NEEDS must be a tuple of EnvelopeBase subclasses")
         if not isinstance(module.TASKS, dict):
-            problems.append("TASKS must be a dict of task key -> file name")
+            problems.append("TASKS must be a dict of task key -> (file name, envelope type)")
         else:
-            for key, filename in module.TASKS.items():
-                if not (directory / filename).is_file():
-                    problems.append(f"TASKS[{key!r}] names {filename}, which is not "
+            for key, entry in module.TASKS.items():
+                if (not isinstance(entry, tuple) or len(entry) != 2
+                        or not isinstance(entry[0], str) or not _is_envelope(entry[1])):
+                    problems.append(f"TASKS[{key!r}] must be (file name, EnvelopeBase subclass)")
+                    continue
+                if not (directory / entry[0]).is_file():
+                    problems.append(f"TASKS[{key!r}] names {entry[0]}, which is not "
                                     f"beside stage.py")
         if not (isinstance(module.Options, type) and issubclass(module.Options, BaseModel)):
             problems.append("Options must be a pydantic model")

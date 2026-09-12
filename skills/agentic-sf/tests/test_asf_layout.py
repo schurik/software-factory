@@ -40,17 +40,31 @@ def test_the_shipped_workflows_load_and_name_their_agents(factory_repo):
     assert [s.stage.name for s in sdlc.steps] == ["plan", "implement", "verify", "commit"]
     assert sdlc.required_agents == ["builder", "planner"]
     assert sdlc.steps[0].tasks["plan"].endswith("asf/stages/plan/task.md")
+    assert sdlc.steps[0].stage.tasks["plan"][1].__name__ == "PlanOutput"
     quick = workflow.load("quick")
     assert quick.required_agents == ["builder"]
+    ship = workflow.load("ship")
+    assert [s.stage.name for s in ship.steps] == ["scout", "plan", "commit", "implement", "verify",
+                                                  "review", "commit", "document", "commit", "integrate"]
+    assert ship.required_agents == ["builder", "documenter", "planner", "reviewer", "scout"]
+    scout = ship.steps[0].stage
+    assert scout.needs == () and scout.output.__name__ == "ScoutOutput"
+    assert ship.steps[1].stage.needs == ()                            # plan takes recon or nothing
+    review = ship.steps[5].stage
+    assert review.tasks["review"][1].__name__ == "ReviewOutput"      # what it asks for
+    assert review.tasks["revise"][1].__name__ == "BuildOutput"
+    assert review.output.__name__ == "BuildOutput"                    # what it hands on
 
 
 def test_the_roster_is_directories_and_factory_yaml_may_not_carry_agents(factory_repo):
     cfg = factory.load()
-    assert sorted(a.name for a in cfg.agents) == ["builder", "planner"]
+    assert sorted(a.name for a in cfg.agents) == ["builder", "documenter", "planner", "reviewer", "scout"]
+    scout = next(a for a in cfg.agents if a.name == "scout")
+    assert scout.writes == [] and scout.thinking == "low"             # read-only recon, cheap
     planner = next(a for a in cfg.agents if a.name == "planner")
     assert planner.writes == ["specs/"]
     assert planner.prompt_engineering.user == ""          # tasks belong to stages
-    assert planner.prompt_engineering.system.endswith("asf/agents/planner/system.md")
+    assert planner.prompt_engineering.system.endswith("asf/agents/planner/agent.md")
 
     config = factory_repo / "asf" / "factory.yaml"
     raw = yaml.safe_load(config.read_text())
@@ -60,12 +74,44 @@ def test_the_roster_is_directories_and_factory_yaml_may_not_carry_agents(factory
         factory.load()
 
 
+def test_an_agent_is_one_file_whose_frontmatter_the_model_never_sees(factory_repo):
+    from engine import prompts
+    planner = next(a for a in factory.load().agents if a.name == "planner")
+    rendered = prompts.render(planner.prompt_engineering.system, {})
+    assert rendered.startswith("# Planner") and "writes:" not in rendered
+
+    agent = factory_repo / "asf" / "agents" / "half"
+    agent.mkdir()
+    (agent / "agent.md").write_text("# Half\n\nNo frontmatter here.\n")
+    with pytest.raises(SystemExit, match="has no frontmatter"):
+        factory.load()
+    (agent / "agent.md").write_text("---\npurpose: x\n---\n\n\n")
+    with pytest.raises(SystemExit, match="says nothing below the frontmatter"):
+        factory.load()
+    (agent / "agent.md").write_text("---\npurpose: x\nname: other\n---\n\nWho.\n")
+    with pytest.raises(SystemExit, match="the name is the directory's"):
+        factory.load()
+    (agent / "agent.md").write_text("---\npurpose: x\n\nWho.\n")
+    with pytest.raises(SystemExit, match="never closes it"):
+        factory.load()
+
+    # A harness-specific identity is prose only; the boundary stays in agent.md.
+    (agent / "agent.md").write_text("---\npurpose: x\nwrites: []\n---\n\n# Neutral\n")
+    (agent / "agent.fake.md").write_text("# For the fake harness\n")
+    half = next(a for a in factory.load().agents if a.name == "half")
+    assert half.writes == [] and half.prompt_engineering.system.endswith("agent.fake.md")
+    assert prompts.render(half.prompt_engineering.system, {}).startswith("# For the fake")
+    (agent / "agent.fake.md").write_text("---\nwrites: [src/]\n---\n# Wider\n")
+    with pytest.raises(SystemExit, match="carries frontmatter"):
+        factory.load()
+
+
 def test_a_stage_outside_the_vocabulary_is_refused_with_the_vocabulary(factory_repo):
     write_workflow(factory_repo, "bad", {"description": "x",
                                          "stages": [{"deploy": {}}]})
     message = refused("bad")
     assert "'deploy' is not a stage" in message
-    assert "commit, implement, plan, verify" in message
+    assert "commit, document, implement, integrate, plan, review, scout, verify" in message
 
 
 def test_an_option_no_stage_takes_is_refused(factory_repo):
@@ -79,6 +125,24 @@ def test_a_verify_with_nothing_to_verify_is_refused(factory_repo):
                                          "stages": [{"verify": {}}, {"implement": {}}]})
     message = refused("bad")
     assert "verify: needs a BuildOutput" in message and "hands on nothing" in message
+
+
+def test_review_and_document_need_a_build_to_work_on(factory_repo):
+    write_workflow(factory_repo, "bad", {"description": "x",
+                                         "stages": [{"plan": {}}, {"review": {}}]})
+    assert "review: needs a BuildOutput" in refused("bad")
+    write_workflow(factory_repo, "bad2", {"description": "x",
+                                          "stages": [{"document": {}}]})
+    assert "document: needs a BuildOutput" in refused("bad2")
+    write_workflow(factory_repo, "ok", {"description": "x",
+                                        "stages": [{"implement": {}}, {"document": {}},
+                                                   {"commit": {"of": "document"}},
+                                                   {"integrate": {"mode": "none"}}]})
+    assert [s.stage.name for s in workflow.load("ok").steps] == ["implement", "document",
+                                                                 "commit", "integrate"]
+    write_workflow(factory_repo, "bad3", {"description": "x",
+                                          "stages": [{"integrate": {"mode": "rebase"}}]})
+    assert "mode" in refused("bad3")
 
 
 def test_a_commit_of_a_stage_that_wrote_no_message_is_refused(factory_repo):

@@ -10,7 +10,7 @@ Usage:
 
 Stamps `asf/` — the engine, the stage vocabulary, the starter agents and
 workflows, the runner — plus a factory.yaml assembled for the chosen harness,
-that harness's `.env.sample`, and the .gitignore entries. Existing files are
+that harness's `.env.sample`, the justfile, and the .gitignore entries. Existing files are
 skipped unless --force. ONE FILE IS NEVER OVERWRITTEN even then: factory.yaml
 is the operator's; under --force a changed render lands beside it as `.new`.
 
@@ -120,6 +120,22 @@ def write_config(harness: str, dest: Path, force: bool,
     notes.append((str(dest), str(proposed)))
 
 
+JUSTFILE_MARK = "# agentic-sf recipes."
+
+
+def stamp_justfile(root: Path, force: bool, stamped: list, skipped: list) -> str:
+    """`justfile` when the repo has none or ours; `asf.justfile` beside a
+    foreign one (sssf stamps a justfile too, and its recipe names collide)."""
+    target = root / "justfile"
+    if target.exists() and not target.read_text().startswith(JUSTFILE_MARK):
+        target = root / "asf.justfile"
+        stamp(TEMPLATES / "justfile", target, force, stamped, skipped)
+        return (f"this repo already has a justfile, so the recipes went to {target.name}: "
+                f"`just -f {target.name} <recipe>`, or import it from the other one")
+    stamp(TEMPLATES / "justfile", target, force, stamped, skipped)
+    return ""
+
+
 def ensure_gitignore(root: Path, stamped: list) -> None:
     gitignore = root / ".gitignore"
     existing = gitignore.read_text().splitlines() if gitignore.exists() else []
@@ -172,6 +188,7 @@ def main() -> int:
     write_config(harness, root / "asf" / "factory.yaml", args.force, stamped, skipped,
                  config_notes)
     stamp(HARNESSES / harness / "env.sample", root / ".env.sample", args.force, stamped, skipped)
+    justfile_note = stamp_justfile(root, args.force, stamped, skipped)
     ensure_gitignore(root, stamped)
     ensure_env(root, root / ".env.sample", stamped, notes)
 
@@ -191,6 +208,8 @@ def main() -> int:
     print(f"\nthe skill is here: {SKILL_ROOT}")
     for note in notes:
         print(f"  {note}")
+    if justfile_note:
+        print(f"  {justfile_note}")
     _, steps = about(harness)
     if steps:
         print(f"\nbefore the first run ({harness}):\n\n{steps}")
@@ -204,7 +223,7 @@ def main() -> int:
             print(f"\nstill unwired: {', '.join(unwired)} — a verify stage that names one "
                   f"of these FAILS rather than passing.\n    write the real argv into "
                   f"asf/engine/quality.py")
-    print("\nnext:  uv run asf/asf.py list        then  uv run asf/asf.py check")
+    print("\nnext:  just doctor        then  just do \"<prompt>\"   (or: uv run asf/asf.py …)")
     return 0
 
 

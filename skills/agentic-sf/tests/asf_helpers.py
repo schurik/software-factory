@@ -14,6 +14,8 @@ from pathlib import Path
 
 import yaml
 
+from engine import frontmatter      # conftest puts templates/asf on the path first
+
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 INSTALL = SKILL_ROOT / "scripts" / "install.py"
 DB = "adws/adw_data/sssf.db"
@@ -57,13 +59,13 @@ def fake_roster(repo: Path, **agents: list[dict]) -> None:
     for name, replies in agents.items():
         directory = repo / "asf" / "agents" / name
         directory.mkdir(parents=True, exist_ok=True)
-        spec = directory / "agent.yaml"
-        entry = yaml.safe_load(spec.read_text()) if spec.is_file() else {"purpose": f"{name}, scripted"}
+        spec = directory / "agent.md"
+        if spec.is_file():
+            entry, identity = frontmatter.split(spec.read_text())
+        else:
+            entry, identity = {"purpose": f"{name}, scripted"}, f"# {name.title()}\n\nYou are {name}.\n"
         entry.update({"harness": "fake", "harness_options": {"replies": replies}})
-        spec.write_text(yaml.safe_dump(entry))
-        identity = directory / "system.md"
-        if not identity.is_file():
-            identity.write_text(f"You are {name}.\n")
+        spec.write_text(f"---\n{yaml.safe_dump(entry)}---\n\n{identity}")
 
 
 def wire(repo: Path, block: str, argv: list[str]) -> None:

@@ -1,0 +1,102 @@
+# agentic-sf recipes. Stamped by install.py, then yours to edit.
+#
+# Every recipe is one line over `asf/asf.py`; `just --list` is the menu. A
+# repository that also carries sssf's justfile got this file as
+# `asf.justfile` instead — run it with `just -f asf.justfile <recipe>`, or
+# add `import 'asf.justfile'` to the other one (recipe names collide, so
+# rename on import if you do).
+
+# `.env` reaches every run through this, so keys work without exporting them.
+set dotenv-load
+set positional-arguments
+
+# `ASF_CONFIG=other.yaml just do "..."` swaps the whole factory for one run.
+config := env_var_or_default("ASF_CONFIG", "asf/factory.yaml")
+db     := "adws/adw_data/sssf.db"
+asf    := "uv run asf/asf.py --config " + config
+
+# list every recipe
+default:
+    @just --list
+
+# ── first run ───────────────────────────────────────────────────────────────
+
+# is this repo ready to run anything? checks + fixes, no agents, no cost
+doctor:
+    @{{asf}} doctor
+
+# every workflow, one line each
+list:
+    @{{asf}} list
+
+# load and validate every workflow — spawns nothing: just check [name]
+check *ARGS:
+    @{{asf}} check "$@"
+
+# ── run a workflow ──────────────────────────────────────────────────────────
+# Args pass straight through: "<prompt or path/to/prompt.md>" [--adw-id X] [--hitl plan]
+
+# the default: plan, implement, verify, commit — just do "add a /health endpoint"
+do *ARGS:
+    {{asf}} run sdlc "$@"
+
+# no plan: implement, verify, commit — just quick "rename the flag"
+quick *ARGS:
+    {{asf}} run quick "$@"
+
+# the full chain, three commits, landed — just ship "add a /health endpoint"
+ship *ARGS:
+    {{asf}} run ship "$@"
+
+# any workflow by name: just run <workflow> "<prompt>"
+run WORKFLOW *ARGS:
+    {{asf}} run {{WORKFLOW}} "${@:2}"
+
+# ── pick a run back up ──────────────────────────────────────────────────────
+
+# re-run a failed run from where it stopped: just resume <adw_id>
+resume ADW_ID *ARGS:
+    {{asf}} resume {{ADW_ID}} "${@:2}"
+
+# ── answer a gate ───────────────────────────────────────────────────────────
+# A stage with `hitl: true` (or `--hitl` on the run) stops the run with exit
+# 75 and the session reading `waiting`; nothing spends while it waits.
+
+# runs stopped at a gate, waiting for you
+pending:
+    @{{asf}} pending
+
+# what a waiting run wants you to read: just show <adw_id>
+show ADW_ID:
+    @{{asf}} show {{ADW_ID}}
+
+# approve the artifact and continue the run: just approve <adw_id> [-m "remarks"]
+approve ADW_ID *ARGS:
+    {{asf}} approve {{ADW_ID}} "${@:2}"
+
+# send it back with notes; the agent revises, then asks again: just reject <adw_id> -m "..."
+reject ADW_ID *ARGS:
+    {{asf}} reject {{ADW_ID}} "${@:2}"
+
+# end the run at the gate, not accepted: just abort <adw_id> [-m "why"]
+abort ADW_ID *ARGS:
+    {{asf}} abort {{ADW_ID}} "${@:2}"
+
+# ── watch it ────────────────────────────────────────────────────────────────
+# The trace db is shared with sssf; reads never block a run.
+
+# the last 10 runs
+sessions:
+    @sqlite3 {{db}} "select adw_id, adw_name, status, substr(request,1,40), total_tokens, round(total_cost,4) from sessions order by started_at desc limit 10;"
+
+# phase status in sequence: just phases <adw_id>
+phases ADW_ID:
+    @sqlite3 {{db}} "select seq, name, kind, owner, status, attempt from phases where adw_id='{{ADW_ID}}' order by seq;"
+
+# the live event tail: just tail <adw_id>
+tail ADW_ID:
+    @sqlite3 {{db}} "select rowid, type, name, started_at from events where adw_id='{{ADW_ID}}' order by rowid desc limit 25;"
+
+# the trace UI — sssf's visualizer over the shared db; needs SSSF_SKILL in .env
+obs:
+    uv run "${SSSF_SKILL:?set SSSF_SKILL in .env to the sssf skill directory — the visualizer ships there}/scripts/up.py" --only obs

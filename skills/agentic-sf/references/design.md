@@ -34,23 +34,31 @@ person or the orchestrator session. Agent proposes, code disposes.
 
 ```
 asf/agents/planner/
-  agent.yaml      purpose, thinking, color, tools, writes   (name = directory)
-  system.md       who the agent is
-  system.pi.md    optional: the identity for one harness, when it must differ
+  agent.md        frontmatter: purpose, thinking, color, tools, writes   (name = directory)
+                  body: who the agent is
+  agent.pi.md     optional: the identity for one harness, when it must differ — prose only
 ```
 
-No `user.md`. The task belongs to the stage.
+One file, two readers. `engine.factory` parses the frontmatter and enforces
+it; `engine.prompts` strips it and hands the model the body. The same shape
+as a Claude Code subagent file. No `user.md`: the task belongs to the stage.
 
 ### Stages
 
 A stage module declares `NAME, KIND, OUTPUT, NEEDS, TASKS, Options, run` and
 optionally `check`. `Options` is a pydantic model with `extra="forbid"`.
 `NEEDS` is what must precede it; `OUTPUT` is what it hands on, or `None` to
-pass the previous envelope through. `TASKS` maps a key to the default task
-file beside `stage.py`; a workflow overrides it with `tasks/<key>.md`.
+pass the previous envelope through. `TASKS` maps a key to `(default file,
+envelope type the agent answers with)`; the two can differ from `OUTPUT` —
+`review` asks its reviewer for a `ReviewOutput` and hands on the
+`BuildOutput` as revised. A workflow overrides a task with `tasks/<key>.md`,
+and the report check runs against the task's own type.
 
 The loader walks the stage list with a "current envelope type" and refuses a
-stage whose `NEEDS` the chain does not satisfy. `check(opts, earlier)` lets a
+stage whose `NEEDS` the chain does not satisfy. `NEEDS = ()` means "anything
+or nothing": `plan` takes a `ScoutOutput` as its `previous` when a `scout`
+runs first, and its task tells the planner to read the findings as recon,
+not as a plan. `check(opts, earlier)` lets a
 stage add its own static rule: `commit` requires `of:` to name an earlier
 stage whose output carries `commit_message`.
 
@@ -124,7 +132,9 @@ the visualizer needs no port: the db and schema are shared with sssf, and
 
 1. **Done:** plan, implement, verify, commit; `sdlc` and `quick`; loader, runner,
    installer; fake-harness e2e and layout tests.
-2. review, document, integrate stages; the gate-answering CLI; `just`
-   recipes; `doctor`.
-3. issue and pull-request inputs (`input: issue`, `input: pr`), the watchers;
-   the `workflow.py` escape hatch for pr-review.
+2. **Done:** review (with revise and retest), document, integrate stages;
+   scout, ahead of the planner in `ship`; the gate CLI (`pending`, `show`, `approve`, `reject`, `abort`,
+   `resume`) in `engine/operate.py`; `doctor`; the justfile.
+3. issue and pull-request inputs (`input: issue`, `input: pr`), the watchers,
+   `up`/`status`, kill, worktree pruning, uninstall; the `workflow.py` escape
+   hatch for pr-review.

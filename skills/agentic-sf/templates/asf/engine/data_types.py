@@ -501,7 +501,7 @@ class PromptEngineering(BaseModel):
     own. It stays as a fallback for a call that names no task.
     """
 
-    system: str                     # path to system.md
+    system: str                     # path to agent.md (its body is the identity)
     system_append: list[str] = Field(default_factory=list)   # workflow-local additions
     user: str = ""                  # optional fallback task, if a call names none
 

@@ -4,9 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from . import frontmatter
+
 
 def render(template_path: str | Path, variables: dict[str, str]) -> str:
-    text = Path(template_path).read_text()
+    """The file's prose with its placeholders filled. A leading YAML
+    frontmatter block (an agent.md's config half) is not prose: it is
+    stripped, so the model never reads the engine's settings."""
+    text = frontmatter.body(Path(template_path).read_text(), str(template_path))
     for key, value in variables.items():
         text = text.replace("{{" + key + "}}", value)
     return text

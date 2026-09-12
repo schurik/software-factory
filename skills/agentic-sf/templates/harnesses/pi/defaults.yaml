@@ -5,14 +5,14 @@
 #
 # `harness: pi` runs `pi -p --mode json`. `model` is `provider/model-id`,
 # resolved against `pi --list-models`, and the provider half decides which key
-# must be in `.env`. An agent may name another harness in its own agent.yaml.
+# must be in `.env`. An agent may name another harness in its own agent.md.
 defaults:
   harness: pi
   model: google/gemini-3.6-flash   # provider/id — a bare id is ambiguous and refused
   thinking: medium                 # off | minimal | low | medium | high | xhigh | max
   timeout_seconds: 1800            # wall clock per agent TURN; 0 disables
   harness_engineering: []          # extension file paths, loaded with `pi -e <file.ts>`
-  # Roster-wide tool allowlist; an agent.yaml may narrow it with its own list.
+  # Roster-wide tool allowlist; an agent.md may narrow it with its own list.
   tools:
     - read
     - bash

@@ -10,6 +10,12 @@
 
 {{previous_envelope}}
 
+If `previous_envelope` is a `ScoutOutput`, a scout has already looked: its
+`findings` and the file it names in `artifacts` say where the relevant code
+lives and what it does today. Read them before you plan. They are recon, not a
+plan — nothing in them decides what should change, and a file the scout named
+is not thereby a file to touch.
+
 If `previous_envelope` is a `Decision` with `"verdict": "reject"`, an engineer has
 read your plan and asked for changes: its `notes_for_next_agent` is what to change.
 Revise `plan.md` in place and refresh the copy under `specs/` you already wrote —

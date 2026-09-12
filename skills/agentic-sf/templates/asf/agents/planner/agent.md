@@ -1,3 +1,18 @@
+---
+# planner — the name is this directory's. The frontmatter is what the
+# machinery needs; the prose below it is who the agent IS. WHAT it does in a
+# given stage is that stage's task file. Anything not set here is inherited
+# from `defaults:` in factory.yaml.
+purpose: Turn a request into a plan the builder can implement without asking questions.
+thinking: high
+color: "#a78bfa"                   # its lane in the visualizer
+# The boundary, enforced in code after every call: the plan is the only thing
+# the planner may leave in the repo. Its handoff files under data_dir are
+# always writable — read-only with respect to the REPO, never mute.
+writes:
+  - specs/
+---
+
 # Planner
 
 ## Purpose

@@ -292,10 +292,9 @@ def forge(cfg: SSSFConfig) -> list[Finding]:
 # ── the skill, and the UI that ships with it ─────────────────────────────────
 
 def skill() -> list[Finding]:
-    """Whether ASF_SKILL still points at a skill directory.
+    """Whether ASF_SKILL still points at the agentic-sf skill directory.
 
-    The justfile's operational recipes (`up`, `status`, `issues`, `prs`, `kill`,
-    `worktrees`) are read from there, and a `.env` that travelled to another
+    install.py writes it into .env, and a `.env` that travelled to another
     machine with the repo is the way this goes wrong — the path is real on
     somebody's laptop and absent here.
     """
@@ -303,15 +302,15 @@ def skill() -> list[Finding]:
     if not raw:
         return [Finding(
             check="ASF_SKILL", level="warn",
-            detail="unset — `just up`, `just status`, `just issues`, `just prs`, "
-                   "`just kill` and `just worktrees` cannot resolve their scripts",
+            detail="unset — re-installing or upgrading the factory needs to know "
+                   "where the skill is",
             fix="re-run install.py from the target repo root; it writes the path "
                 "into .env")]
     root = Path(raw).expanduser()
-    if not (root / "scripts" / "up.py").is_file():
+    if not (root / "scripts" / "install.py").is_file():
         return [Finding(
             check="ASF_SKILL", level="warn",
-            detail=f"{raw} does not look like an sssf skill (no scripts/up.py) — "
+            detail=f"{raw} does not look like the agentic-sf skill (no scripts/install.py) — "
                    f"a .env from another machine does exactly this",
             fix="set ASF_SKILL in .env to this machine's skill directory, or "
                 "re-run install.py from the target repo root")]
@@ -329,16 +328,15 @@ def port_free(port: int) -> bool:
 
 
 def trace_ui() -> list[Finding]:
-    """Whether `just up` would be able to start the visualizer."""
+    """Whether `just obs` could start sssf's visualizer over the shared db."""
     if not shutil.which("bun"):
         return [Finding(check="trace UI", level="warn",
-                        detail="bun is not on PATH — `just up` starts the watchers "
-                               "without the UI",
+                        detail="bun is not on PATH — `just obs` cannot start the trace UI",
                         fix="install bun (https://bun.sh), or run without the UI")]
     if not port_free(API_PORT):
         return [Finding(
             check="trace UI", level="warn",
-            detail=f"something already listens on :{API_PORT} — another `just up`, or "
+            detail=f"something already listens on :{API_PORT} — another trace UI, or "
                    f"an api server orphaned by an older `just obs`",
             fix=f"lsof -ti :{API_PORT} | xargs kill")]
     return [Finding(check="trace UI", detail=f"bun present, :{API_PORT} free")]
