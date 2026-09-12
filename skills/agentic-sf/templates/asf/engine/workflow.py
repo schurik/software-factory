@@ -3,7 +3,7 @@
     asf/workflows/<name>/
         workflow.yaml     which stages, with which options, played by which agents
         tasks/<key>.md    optional: a task file that overrides the stage's default
-        agents/<x>.md     optional: text a binding appends to an agent's system.md
+        agents/<x>.md     optional: text a binding appends to an agent's identity
 
 Everything a workflow.yaml can get wrong is found here, before a session
 exists: a stage that is not in the vocabulary, an option no stage takes, a

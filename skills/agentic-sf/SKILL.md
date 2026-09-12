@@ -15,7 +15,8 @@ the seams; everything streams into SQLite — with a different surface:
 - **A workflow is a directory**, not a script you copy. `workflow.yaml` names
   stages from a closed vocabulary and gives each its options. Loops and
   conditions live in the stages; the YAML gets numbers.
-- **An agent is a directory** (`agent.yaml` + `system.md`). Its task is not
+- **An agent is one file**, `agent.md`: YAML frontmatter for the engine, prose
+  for the model. Its task is not
   there: a task belongs to the stage that calls the agent, and a workflow may
   override it with its own file.
 
@@ -54,7 +55,7 @@ yours to query when observing is the task, never to volunteer a status board.
 asf/
   factory.yaml            the manifest: defaults, budget, gates, trace, worktree. No agents in it.
   asf.py                  the runner: list | check | run
-  agents/<name>/          agent.yaml (model, thinking, tools, writes, purpose) + system.md (identity)
+  agents/<name>/          agent.md: frontmatter (model, thinking, tools, writes, purpose) + identity below it
   workflows/<name>/       workflow.yaml, optional tasks/<key>.md, optional agents/<x>.md
   stages/<name>/          stage.py (the contract) + its default task files
   engine/                 the machinery: session, worktree, gates, permissions, hitl, tracer, …
@@ -78,7 +79,7 @@ turns on with `hitl: true` stops the run with exit 75 and the session reading
 | create a workflow | copy the closest directory under `asf/workflows/`, edit `workflow.yaml`, run `check`. Read [references/design.md](references/design.md#workflows) first |
 | tailor an agent's TASK for one workflow | add `asf/workflows/<name>/tasks/<key>.md` — keys are the stage's TASKS (scout, plan, implement, fix, review, revise, document). Keep the `## Report` block matching the type; `check` verifies it |
 | tailor an agent's IDENTITY for one workflow | bind it in `workflow.yaml` under `agents:` with `system_append: [agents/<x>.md]` — append, never replace |
-| change an agent for every workflow | edit `asf/agents/<name>/agent.yaml` or `system.md` |
+| change an agent for every workflow | edit `asf/agents/<name>/agent.md` — the frontmatter is the boundary, the prose is the voice |
 | add a stage to the vocabulary | a directory under `asf/stages/` meeting the contract in `asf/engine/stage.py`; [references/design.md](references/design.md#stages) |
 | pick a failed run back up | `just resume <id>` — replays recorded agent phases, re-runs what code owns |
 | a run is waiting at a gate / "why is this run waiting?" | `just pending`, `just show <id>`, then `just approve <id> [-m]`, `just reject <id> -m "..."` or `just abort <id>`. Never approve on the engineer's behalf |

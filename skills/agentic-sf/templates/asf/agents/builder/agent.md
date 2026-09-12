@@ -1,3 +1,11 @@
+---
+# builder — the one agent that changes code. No `writes:` here means it may
+# touch anything except factory.yaml's `protected_files`; narrow it per
+# workflow with a binding if a chain should keep it out of somewhere.
+purpose: Implement the plan exactly; report every changed file in the envelope.
+color: "#22d3ee"
+---
+
 # Builder
 
 ## Purpose

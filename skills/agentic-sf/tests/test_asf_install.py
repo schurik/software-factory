@@ -8,10 +8,10 @@ from .asf_helpers import asf, git, install
 
 STAMPED = ["asf/asf.py", "asf/factory.yaml", "asf/engine/session.py", "asf/engine/workflow.py",
            "asf/stages/plan/stage.py", "asf/stages/plan/task.md", "asf/stages/verify/fix.md",
-           "asf/agents/planner/agent.yaml", "asf/agents/planner/system.md",
+           "asf/agents/planner/agent.md", "asf/engine/frontmatter.py",
            "asf/workflows/sdlc/workflow.yaml", "asf/workflows/ship/workflow.yaml",
-           "asf/stages/review/revise.md", "asf/agents/reviewer/system.md",
-           "asf/stages/scout/stage.py", "asf/stages/scout/task.md", "asf/agents/scout/system.md",
+           "asf/stages/review/revise.md", "asf/agents/reviewer/agent.md",
+           "asf/stages/scout/stage.py", "asf/stages/scout/task.md", "asf/agents/scout/agent.md",
            ".env.sample", ".env", "justfile"]
 
 

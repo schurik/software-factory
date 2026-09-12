@@ -64,13 +64,45 @@ def test_the_roster_is_directories_and_factory_yaml_may_not_carry_agents(factory
     planner = next(a for a in cfg.agents if a.name == "planner")
     assert planner.writes == ["specs/"]
     assert planner.prompt_engineering.user == ""          # tasks belong to stages
-    assert planner.prompt_engineering.system.endswith("asf/agents/planner/system.md")
+    assert planner.prompt_engineering.system.endswith("asf/agents/planner/agent.md")
 
     config = factory_repo / "asf" / "factory.yaml"
     raw = yaml.safe_load(config.read_text())
     raw["agents"] = [{"name": "x"}]
     config.write_text(yaml.safe_dump(raw))
     with pytest.raises(SystemExit, match="does not belong in factory.yaml"):
+        factory.load()
+
+
+def test_an_agent_is_one_file_whose_frontmatter_the_model_never_sees(factory_repo):
+    from engine import prompts
+    planner = next(a for a in factory.load().agents if a.name == "planner")
+    rendered = prompts.render(planner.prompt_engineering.system, {})
+    assert rendered.startswith("# Planner") and "writes:" not in rendered
+
+    agent = factory_repo / "asf" / "agents" / "half"
+    agent.mkdir()
+    (agent / "agent.md").write_text("# Half\n\nNo frontmatter here.\n")
+    with pytest.raises(SystemExit, match="has no frontmatter"):
+        factory.load()
+    (agent / "agent.md").write_text("---\npurpose: x\n---\n\n\n")
+    with pytest.raises(SystemExit, match="says nothing below the frontmatter"):
+        factory.load()
+    (agent / "agent.md").write_text("---\npurpose: x\nname: other\n---\n\nWho.\n")
+    with pytest.raises(SystemExit, match="the name is the directory's"):
+        factory.load()
+    (agent / "agent.md").write_text("---\npurpose: x\n\nWho.\n")
+    with pytest.raises(SystemExit, match="never closes it"):
+        factory.load()
+
+    # A harness-specific identity is prose only; the boundary stays in agent.md.
+    (agent / "agent.md").write_text("---\npurpose: x\nwrites: []\n---\n\n# Neutral\n")
+    (agent / "agent.fake.md").write_text("# For the fake harness\n")
+    half = next(a for a in factory.load().agents if a.name == "half")
+    assert half.writes == [] and half.prompt_engineering.system.endswith("agent.fake.md")
+    assert prompts.render(half.prompt_engineering.system, {}).startswith("# For the fake")
+    (agent / "agent.fake.md").write_text("---\nwrites: [src/]\n---\n# Wider\n")
+    with pytest.raises(SystemExit, match="carries frontmatter"):
         factory.load()
 
 

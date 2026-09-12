@@ -34,12 +34,14 @@ person or the orchestrator session. Agent proposes, code disposes.
 
 ```
 asf/agents/planner/
-  agent.yaml      purpose, thinking, color, tools, writes   (name = directory)
-  system.md       who the agent is
-  system.pi.md    optional: the identity for one harness, when it must differ
+  agent.md        frontmatter: purpose, thinking, color, tools, writes   (name = directory)
+                  body: who the agent is
+  agent.pi.md     optional: the identity for one harness, when it must differ — prose only
 ```
 
-No `user.md`. The task belongs to the stage.
+One file, two readers. `engine.factory` parses the frontmatter and enforces
+it; `engine.prompts` strips it and hands the model the body. The same shape
+as a Claude Code subagent file. No `user.md`: the task belongs to the stage.
 
 ### Stages
 

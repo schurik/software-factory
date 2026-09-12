@@ -2,7 +2,7 @@
 # ── the harness-agnostic rest ────────────────────────────────────────────────
 #
 # Everything a run needs that is not the roster. Agents are NOT here: an agent
-# is a directory under asf/agents/ (agent.yaml + system.md), and a workflow is
+# is a directory under asf/agents/ holding one agent.md, and a workflow is
 # a directory under asf/workflows/. This file is the manifest they plug into.
 
 # What one SESSION may spend, across every process that joins it. Both off by
