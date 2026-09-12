@@ -7,10 +7,11 @@
 # after the integrate gate, when it is on. Turn the gates on per stage
 # (`hitl: true`) or for one run (`--hitl plan,integrate`).
 name: ship
-description: plan, implement, verify, review, document, integrate — three commits, for work whose shape is not obvious
+description: scout, plan, implement, verify, review, document, integrate — three commits, for work whose shape is not obvious
 input: prompt
 
 stages:
+  - scout:     {agent: scout}                      # where does this live? recon before the plan
   - plan:      {agent: planner}                    # hitl: true stops here for a person
   - commit:    {of: plan}                          # the spec on record before code blurs it
   - implement: {agent: builder}

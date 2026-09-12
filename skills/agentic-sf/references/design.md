@@ -53,7 +53,10 @@ envelope type the agent answers with)`; the two can differ from `OUTPUT` —
 and the report check runs against the task's own type.
 
 The loader walks the stage list with a "current envelope type" and refuses a
-stage whose `NEEDS` the chain does not satisfy. `check(opts, earlier)` lets a
+stage whose `NEEDS` the chain does not satisfy. `NEEDS = ()` means "anything
+or nothing": `plan` takes a `ScoutOutput` as its `previous` when a `scout`
+runs first, and its task tells the planner to read the findings as recon,
+not as a plan. `check(opts, earlier)` lets a
 stage add its own static rule: `commit` requires `of:` to name an earlier
 stage whose output carries `commit_message`.
 
@@ -128,7 +131,7 @@ the visualizer needs no port: the db and schema are shared with sssf, and
 1. **Done:** plan, implement, verify, commit; `sdlc` and `quick`; loader, runner,
    installer; fake-harness e2e and layout tests.
 2. **Done:** review (with revise and retest), document, integrate stages;
-   `ship`; the gate CLI (`pending`, `show`, `approve`, `reject`, `abort`,
+   scout, ahead of the planner in `ship`; the gate CLI (`pending`, `show`, `approve`, `reject`, `abort`,
    `resume`) in `engine/operate.py`; `doctor`; the justfile.
 3. issue and pull-request inputs (`input: issue`, `input: pr`), the watchers,
    `up`/`status`, kill, worktree pruning, uninstall; the `workflow.py` escape

@@ -76,7 +76,7 @@ turns on with `hitl: true` stops the run with exit 75 and the session reading
 | which workflows exist / what does X do | `uv run asf/asf.py list`; read `asf/workflows/<name>/workflow.yaml` |
 | is this workflow runnable | `uv run asf/asf.py check <name>` — spawns nothing, names every problem |
 | create a workflow | copy the closest directory under `asf/workflows/`, edit `workflow.yaml`, run `check`. Read [references/design.md](references/design.md#workflows) first |
-| tailor an agent's TASK for one workflow | add `asf/workflows/<name>/tasks/<key>.md` — keys are the stage's TASKS (plan, implement, fix). Keep the `## Report` block matching the type; `check` verifies it |
+| tailor an agent's TASK for one workflow | add `asf/workflows/<name>/tasks/<key>.md` — keys are the stage's TASKS (scout, plan, implement, fix, review, revise, document). Keep the `## Report` block matching the type; `check` verifies it |
 | tailor an agent's IDENTITY for one workflow | bind it in `workflow.yaml` under `agents:` with `system_append: [agents/<x>.md]` — append, never replace |
 | change an agent for every workflow | edit `asf/agents/<name>/agent.yaml` or `system.md` |
 | add a stage to the vocabulary | a directory under `asf/stages/` meeting the contract in `asf/engine/stage.py`; [references/design.md](references/design.md#stages) |
@@ -105,8 +105,8 @@ turns on with `hitl: true` stops the run with exit 75 and the session reading
 
 ## What is not here yet
 
-Slices one and two: plan, implement, verify, review, document, commit,
-integrate; `sdlc`, `quick` and `ship`; the loader and runner; the gate CLI;
+Slices one and two: scout, plan, implement, verify, review, document,
+commit, integrate; `sdlc`, `quick` and `ship`; the loader and runner; the gate CLI;
 doctor; the justfile. Not yet ported from sssf: issue and pull-request inputs
 and their watchers, `up`/`status`, kill, worktree pruning, uninstall. The
 visualizer needs no port — same db, same schema; `just obs` needs `SSSF_SKILL`

@@ -10,6 +10,17 @@ from .asf_helpers import (PY_CHECK, adw_id_of, asf, commit_all, envelope, fake_r
                           phase_names, run_state, session_dir, wire, write_workflow)
 
 
+SHIP_ID = "5c0075aa"       # pinned, so the scout's scripted write can name the handoff dir
+
+
+def scout_reply(repo: Path) -> dict:
+    findings = session_dir(repo, SHIP_ID) / "context_handoff" / "scout_findings.md"
+    return {"writes": {str(findings): "# Findings\n\n- app.py: not there yet.\n"},
+            "envelope": envelope(findings=[{"file": "app.py", "note": "does not exist yet"}],
+                                 artifacts=[str(findings)],
+                                 notes_for_next_agent="nothing to read: app.py is new")}
+
+
 def plan_reply(text: str = "# Plan\n") -> dict:
     return {"writes": {"specs/plan.md": text},
             "envelope": envelope(artifacts=["specs/plan.md"], commit_message="docs: plan")}
@@ -36,6 +47,7 @@ def document_reply() -> dict:
 def test_ship_reviews_revises_retests_documents_and_lands_three_commits(stamped: Path):
     fake_roster(
         stamped,
+        scout=[scout_reply(stamped)],
         planner=[plan_reply()],
         builder=[build_reply("ok = 1\n", "feat: app"),
                  build_reply("ok = 2\n", "feat: app, ok is 2 as reviewed")],
@@ -45,12 +57,13 @@ def test_ship_reviews_revises_retests_documents_and_lands_three_commits(stamped:
     commit_all(stamped)
     before = git(stamped, "rev-parse", "main")
 
-    result = asf(stamped, "run", "ship", "add app.py")
+    result = asf(stamped, "run", "ship", "add app.py", "--adw-id", SHIP_ID)
     assert result.returncode == 0, result.stdout + result.stderr
     adw_id = adw_id_of(result)
+    assert adw_id == SHIP_ID
 
     assert phase_names(stamped, adw_id) == [
-        "request", "plan", "commit_plan", "implement", "verify_1",
+        "request", "scout", "plan", "commit_plan", "implement", "verify_1",
         "review_1", "revise_1", "review_2", "retest",
         "commit_implement", "changes", "document", "commit_document", "integrate"]
     # Three work products, three commits, each in its author's words — and the
@@ -65,6 +78,10 @@ def test_ship_reviews_revises_retests_documents_and_lands_three_commits(stamped:
     prompts = session_dir(stamped, adw_id)
     assert (prompts / "reviewer" / "prompts" / "user.md").read_text().startswith("# Review")
     assert (prompts / "builder" / "prompts" / "user.md").read_text().startswith("# Revise")
+    # The scout went first and changed nothing; the planner was handed its findings.
+    assert (prompts / "scout" / "prompts" / "user.md").read_text().startswith("# Scout")
+    planner_brief = (prompts / "planner" / "prompts" / "user.md").read_text()
+    assert '"file": "app.py"' in planner_brief and "scout_findings.md" in planner_brief
 
 
 def test_a_reviewer_that_never_approves_stops_the_run_before_the_code_lands(stamped: Path):
