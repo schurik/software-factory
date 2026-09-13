@@ -33,8 +33,8 @@ from typing import Any, Literal, Optional
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import agents, factory, git_helper, session, tasks
-from .data_types import AgentConfig, EnvelopeBase, PhaseParams, SSSFConfig
+from . import agents, factory, git_helper, inputs, session, tasks
+from .data_types import AgentConfig, BuildOutput, EnvelopeBase, PhaseParams, SSSFConfig
 from .stage import StageContext, StageModule, StageStop, Step, load_registry
 
 
@@ -59,7 +59,7 @@ class Spec(BaseModel):
 
     name: str
     description: str
-    input: Literal["prompt"] = "prompt"
+    input: Literal["prompt", "issue", "pr"] = "prompt"
     agents: dict[str, Binding] = Field(default_factory=dict)
     stages: list[dict[str, Any]]
 
@@ -72,6 +72,7 @@ class Workflow:
     cfg: SSSFConfig
     steps: list[Step]
     required_agents: list[str] = field(default_factory=list)
+    input: str = "prompt"                  # prompt | issue | pr — see engine.inputs
 
 
 def workflows_dir(config_path: str | Path) -> Path:
@@ -119,7 +120,7 @@ def load(name: str, config_path: str | Path = factory.DEFAULT_CONFIG) -> Workflo
                          + "\n- ".join(problems))
     required = sorted({a for step in steps for a in _agent_fields(step.opts)})
     return Workflow(name=name, description=spec.description.strip(), directory=directory,
-                    cfg=cfg, steps=steps, required_agents=required)
+                    cfg=cfg, steps=steps, required_agents=required, input=spec.input)
 
 
 # ── agents ───────────────────────────────────────────────────────────────────
@@ -256,18 +257,42 @@ def _flat(error: ValidationError) -> str:
 
 # ── running ──────────────────────────────────────────────────────────────────
 
-def run(workflow: Workflow, prompt: str, adw_id: Optional[str] = None,
+def run(workflow: Workflow, request: str, adw_id: Optional[str] = None,
         resume: bool = False, hitl: str = "") -> int:
     """Play the workflow's stages in order against one session. Returns the
-    exit code `run.finish` decided."""
+    exit code `run.finish` decided.
+
+    `request` is what `input:` says it is: the prompt, or an issue or pull
+    request number. The input is opened before the first stage and reported
+    to after the last; the stages see only `ctx.prompt` and `ctx.previous`.
+    """
     agents.validate(workflow.cfg, workflow.required_agents)
-    run = session.ensure(workflow.cfg, adw_id, resume, hitl, name=workflow.name)
-    with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
-                               description="Capture the incoming ask, and which workflow "
-                                           "was asked to carry it")) as ph:
-        ph.log(input=prompt, workflow=workflow.name,
-               stages=" -> ".join(step.stage.name for step in workflow.steps))
-    ctx = StageContext(run, workflow, prompt)
+    cfg = workflow.cfg
+    context, number = None, 0
+    if workflow.input != "prompt":
+        number = inputs.number_of(request, workflow.input)      # before a session exists
+    if workflow.input == "pr":
+        # The pull request names its own session, and that is decided before
+        # one exists: a refusal costs one forge call and leaves nothing behind.
+        adw_id, context = inputs.locate_pr(cfg, number, adw_id)
+    run = session.ensure(cfg, adw_id, resume, hitl, name=workflow.name)
+
+    if workflow.input == "issue":
+        opened = inputs.open_issue(run, cfg, number)
+    elif workflow.input == "pr":
+        opened = inputs.open_pr(run, cfg, context)
+        if opened.nothing_to_do:
+            return run.finish(accepted=True)      # "already handled" is the common case
+    else:
+        with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
+                                   description="Capture the incoming ask, and which "
+                                               "workflow was asked to carry it")) as ph:
+            ph.log(input=request, workflow=workflow.name,
+                   stages=" -> ".join(step.stage.name for step in workflow.steps))
+        opened = inputs.Opened(prompt=request)
+
+    ctx = StageContext(run, workflow, opened.prompt)
+    ctx.previous = opened.previous
     ctx.baseline = run.pin("baseline", lambda: git_helper.rev(run.repo_root, "HEAD"))
     accepted, reason = True, ""
     try:
@@ -277,4 +302,12 @@ def run(workflow: Workflow, prompt: str, adw_id: Optional[str] = None,
             ctx.end(step, output)
     except StageStop as stop:
         accepted, reason = False, str(stop)
+
+    # The tracker hears about the run either way: a run that could not finish
+    # is exactly the one whose reporter most needs to know where it stopped.
+    if workflow.input == "issue":
+        inputs.report_issue(run, cfg, opened, accepted)
+    elif workflow.input == "pr":
+        build = ctx.latest.get(BuildOutput)
+        inputs.report_pr(run, cfg, opened, accepted, build.summary if build else "")
     return run.finish(accepted=accepted, reason=reason)

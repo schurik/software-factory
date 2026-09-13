@@ -795,6 +795,10 @@ class PullRequestsConfig(BaseModel):
     # Bots whose comments are never work: coverage reporters, changelog nags.
     # The factory's own comments are skipped regardless — see pull_requests.py.
     ignore_authors: list[str] = Field(default_factory=list)
+    # Which workflow the review watcher launches per pull request with open
+    # threads. It must declare `input: pr`; `asf check` and the watcher refuse
+    # one that does not.
+    workflow: str = "pr-review"
     reply_to_threads: bool = True
     resolve_threads: bool = True
     # Bounds the prompt, not the pull request. A review with eighty threads is a
