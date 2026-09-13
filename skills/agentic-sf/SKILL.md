@@ -11,7 +11,8 @@ acceptance; coding agents work inside bounded phases; typed envelopes cross
 the seams; everything streams into SQLite — with a different surface:
 
 - **One entry point.** `just do "<prompt>"`, or `uv run asf/asf.py run <workflow>
-  "<prompt>"`. `list`, `check`, `doctor` and the gate verbs beside it.
+  "<prompt>"`. `list`, `check`, `doctor`, the gate verbs, the watchers, `up`,
+  `status`, `kill` and `worktrees` beside it.
 - **A workflow is a directory**, not a script you copy. `workflow.yaml` names
   stages from a closed vocabulary and gives each its options. Loops and
   conditions live in the stages; the YAML gets numbers.
@@ -56,7 +57,7 @@ asf/
   factory.yaml            the manifest: defaults, budget, gates, trace, worktree. No agents in it.
   asf.py                  the runner: list | check | run
   agents/<name>/          agent.md: frontmatter (model, thinking, tools, writes, purpose) + identity below it
-  workflows/<name>/       workflow.yaml, optional tasks/<key>.md, optional agents/<x>.md
+  workflows/<name>/       workflow.yaml (input, agents, stages), optional tasks/<key>.md, optional agents/<x>.md
   stages/<name>/          stage.py (the contract) + its default task files
   engine/                 the machinery: session, worktree, gates, permissions, hitl, tracer, …
   data/                   runtime: sessions/<adw_id>/ — never edit
@@ -65,7 +66,8 @@ asf/
 Every run works in its own worktree on branch `asf/<adw_id>`; the checkout is
 never touched. A run that is not accepted keeps its worktree. A gate a stage
 turns on with `hitl: true` stops the run with exit 75 and the session reading
-`waiting`.
+`waiting`. An issue- or review-triggered run can never merge: `integration`
+downgrades a configured merge to a pull request on those inputs, in code.
 
 ## Request routing
 
@@ -74,10 +76,15 @@ turns on with `hitl: true` stops the run with exit 75 and the session reading
 | install / set up the factory here | `uv run <skill>/scripts/install.py --harness claude_code\|pi`, then `just doctor` |
 | "is this repo ready to run?" / something failed before the first phase | `just doctor` — every check with its fix, then every workflow checked; spawns nothing |
 | run a workflow | `just do "<prompt>"` (sdlc), `just quick`, `just ship`, or `just run <name> "<prompt>" [--hitl all\|none\|plan]` |
+| work a tracked issue / answer a review | `just issue 42`, `just pr-review 17` — the number, never a prompt; the run reports back on the issue or in the threads |
+| start the watchers / "is anything polling?" | `just up` (both watchers + trace UI, ctrl-c stops all), `just status`; one poll: `just issues`, `just prs`; cron form: `just issues-watch`, `just prs-watch`. Turn them on in `factory.yaml` (`issues.enabled`, `issues.route`, `pull_requests.enabled`) |
+| stop a run | `just kill <id>` — agents first, then the workflow; `--force` SIGKILLs |
+| tidy up | `just worktrees`, `just worktrees-prune [--force]`, `just worktrees-remove <id>`; branches are never deleted |
+| remove the factory from this repo | `just uninstall [--dry-run]` — the skill is untouched; the shared trace db stays if sssf is stamped too |
 | which workflows exist / what does X do | `uv run asf/asf.py list`; read `asf/workflows/<name>/workflow.yaml` |
 | is this workflow runnable | `uv run asf/asf.py check <name>` — spawns nothing, names every problem |
 | create a workflow | copy the closest directory under `asf/workflows/`, edit `workflow.yaml`, run `check`. Read [references/design.md](references/design.md#workflows) first |
-| tailor an agent's TASK for one workflow | add `asf/workflows/<name>/tasks/<key>.md` — keys are the stage's TASKS (scout, plan, implement, fix, review, revise, document). Keep the `## Report` block matching the type; `check` verifies it |
+| tailor an agent's TASK for one workflow | add `asf/workflows/<name>/tasks/<key>.md` — keys are the stage's TASKS (scout, plan, implement, fix, review, revise, document). Keep the `## Report` block matching the type; `check` verifies it. `pr-review/tasks/implement.md` is the shipped example |
 | tailor an agent's IDENTITY for one workflow | bind it in `workflow.yaml` under `agents:` with `system_append: [agents/<x>.md]` — append, never replace |
 | change an agent for every workflow | edit `asf/agents/<name>/agent.md` — the frontmatter is the boundary, the prose is the voice |
 | add a stage to the vocabulary | a directory under `asf/stages/` meeting the contract in `asf/engine/stage.py`; [references/design.md](references/design.md#stages) |
@@ -93,7 +100,7 @@ turns on with `hitl: true` stops the run with exit 75 and the session reading
    drifted from the envelope type, a binding that widens `writes` or `tools`.
 2. **The vocabulary is closed.** No `loop:` or `if:` in workflow.yaml, ever. A
    shape the vocabulary cannot express is a new stage in Python, or a
-   `workflow.py` escape hatch (not yet stamped).
+   `workflow.py` escape hatch (not built — nothing has needed one).
 3. **Bindings narrow, never widen.** The roster is the security boundary; a
    workflow is edited often.
 4. **Identity is appended, never replaced.** Five workflows must not become
@@ -104,11 +111,12 @@ turns on with `hitl: true` stops the run with exit 75 and the session reading
    `protected_files`, phase descriptions and `run.finish(accepted=)` holds
    unchanged — it is the same engine.
 
-## What is not here yet
+## What is here, and what is not
 
-Slices one and two: scout, plan, implement, verify, review, document,
-commit, integrate; `sdlc`, `quick` and `ship`; the loader and runner; the gate CLI;
-doctor; the justfile. Not yet ported from sssf: issue and pull-request inputs
-and their watchers, `up`/`status`, kill, worktree pruning, uninstall. The
-visualizer needs no port — same db, same schema; `just obs` needs `SSSF_SKILL`
-in `.env` pointing at the sssf skill.
+Three slices: the eight stages; `sdlc`, `quick`, `ship`, `issue` and
+`pr-review`; the loader and runner with the three inputs; the gate CLI;
+doctor; both watchers, `up`, `status`, `kill`, the worktree verbs; the
+justfile; uninstall. Not ported: a `workflow.py` escape hatch — nothing has
+needed one yet, `pr-review` fit the vocabulary with one option. The
+visualizer needs no port — same db, same schema; `just up` and `just obs`
+need `SSSF_SKILL` in `.env` pointing at the sssf skill.

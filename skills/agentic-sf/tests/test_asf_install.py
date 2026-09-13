@@ -12,6 +12,8 @@ STAMPED = ["asf/asf.py", "asf/factory.yaml", "asf/engine/session.py", "asf/engin
            "asf/workflows/sdlc/workflow.yaml", "asf/workflows/ship/workflow.yaml",
            "asf/stages/review/revise.md", "asf/agents/reviewer/agent.md",
            "asf/stages/scout/stage.py", "asf/stages/scout/task.md", "asf/agents/scout/agent.md",
+           "asf/workflows/issue/workflow.yaml", "asf/workflows/pr-review/tasks/implement.md",
+           "asf/engine/inputs.py", "asf/engine/watch.py", "asf/engine/supervise.py",
            ".env.sample", ".env", "justfile"]
 
 
@@ -30,6 +32,7 @@ def test_a_fresh_repo_is_stamped_and_its_workflows_check(repo: Path):
     checked = asf(repo, "check")
     assert checked.returncode == 0, checked.stdout + checked.stderr
     assert "✓ sdlc: plan -> implement -> verify -> commit" in checked.stdout
+    assert "✓ pr-review: implement -> verify -> commit" in checked.stdout
 
 
 def test_the_runtime_and_the_worktrees_are_gitignored(repo: Path):

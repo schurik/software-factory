@@ -87,6 +87,20 @@ stages:
   - commit: {of: implement}
 ```
 
+`input:` is where the request comes from, and it is the runner's business,
+not a stage's: `prompt` (the default) records the text; `issue` reads the
+work item before the first stage and comments the outcome after the last;
+`pr` reads the pull request BEFORE a session exists — its branch names the
+session to join — and answers the threads after the last stage. The
+stranger's text reaches the first stage as `ctx.previous`, an envelope whose
+artifact is the text with its framing, and the operator's instruction is
+`ctx.prompt`. So `issue` is `ship` with `input: issue`, and `pr-review` is
+implement → verify → commit with a task override and `allow_clean: true` on
+the commit — the option that gives a review run its third outcome
+(`declined`: an accepted run whose tree the builder did not touch, on
+purpose). Nothing in a workflow file can make an issue-triggered run merge;
+`integration` downgrades it to a pull request in code.
+
 Rules, enforced at load:
 
 1. **Vocabulary is closed.** A stage name must be a directory under
@@ -125,7 +139,7 @@ the visualizer needs no port: the db and schema are shared with sssf, and
   plus the stage modules do. The trace shows the sequence either way.
 - The vocabulary will want to grow. A new *stage* is Python with a contract;
   a new *option* is policy on an existing stage; anything else is a
-  `workflow.py` escape hatch (planned, not stamped).
+  `workflow.py` escape hatch (not built — nothing has needed it).
 - No migration. sssf stays as it is; this is a fresh install into `asf/`.
 
 ## Slices
@@ -135,6 +149,9 @@ the visualizer needs no port: the db and schema are shared with sssf, and
 2. **Done:** review (with revise and retest), document, integrate stages;
    scout, ahead of the planner in `ship`; the gate CLI (`pending`, `show`, `approve`, `reject`, `abort`,
    `resume`) in `engine/operate.py`; `doctor`; the justfile.
-3. issue and pull-request inputs (`input: issue`, `input: pr`), the watchers,
-   `up`/`status`, kill, worktree pruning, uninstall; the `workflow.py` escape
-   hatch for pr-review.
+3. **Done:** `input: issue` and `input: pr` (`engine/inputs.py`), the `issue`
+   and `pr-review` workflows, both watchers (`engine/watch.py`), `up` and
+   `status` (`engine/supervise.py`), `kill` and the worktree verbs, the label a
+   re-entered issue run lands on resume, uninstall. The `workflow.py` escape
+   hatch was planned for pr-review and turned out unnecessary: one option on
+   `commit` covered it. It stays unbuilt until a shape actually needs it.
